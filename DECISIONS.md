@@ -6,6 +6,48 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-17 — Build-order step 2a: lexer
+
+`src/lex/` (`token.rs`, `lexer.rs`, `tests.rs`). Grammar spec §1. 14 seed tests
+green; full suite 27; clippy clean.
+
+- **Mandated (§1.4 / §4 desugar):** literals resolved at lex time — `Number`
+  carries an exact `Rational`, `Str` carries UTF-16, escapes processed. Numeric
+  bans implemented: no BigInt `n` suffix, no legacy octal / leading zeros, no
+  trailing-dot. Bases `0x`/`0o`/`0b`, exponents, `_` separators.
+- **Mandated (§1.1):** no newline tokens; each token records its line so the
+  parser can enforce L1/L2. Maximal munch with T1 (`?.` not before a digit — the
+  `a ?.5 : b` seed), T2 (`...` beats `.`), T3 (compound mutation ops are single
+  tokens).
+- **Chosen — leading-dot number disambiguation:** `.5` is a number unless the
+  previous token can end a postfix target (ident/`)`/`]`/`}`/number/string/
+  hole), in which case `.` is member access. Tracks one token of history.
+- **Chosen — trailing-dot ban scope:** `5.` erroring is required; refined so
+  `5.foo` lexes as `5 . foo` (member access) and only a *dangling* dot (before
+  whitespace/operator/EOF) errors. Numbers having no fields is left to the
+  analyzer, not pre-judged by the lexer. Flag if the author wants `5.<ident>` to
+  also be a lexical error.
+- **Chosen — templates:** interpolations are captured as *pre-lexed* token
+  sub-streams (`TemplateElem::Interp(Vec<Token>)`); the parser parses each as an
+  Expression. Brace-depth is handled by reusing the main token loop (nested
+  string/record braces are consumed as whole tokens, so a `}` inside a nested
+  literal never closes the interpolation).
+- **Chosen — string escape set:** the JS-standard set (`\n \t \r \0 \b \f \v \\
+  \" \'`), `\xHH`, `\uXXXX` (one UTF-16 unit, surrogate halves allowed), `\u{…}`
+  (astral → surrogate pair); templates add `` \` `` and `\${`. Matches §1.5's
+  "JS standard set plus `\u{…}`".
+- **Chosen — identifier classes:** std `is_alphabetic`/`is_alphanumeric` as an
+  approximation of Unicode XID_Start/XID_Continue, excluding `_` and `$` per
+  §1.3 (so `_`-holes and `$`-interpolation never collide). A `unicode-ident`
+  dependency would make this exact; deferred as not worth a dep at v0.1. Flag if
+  strict XID conformance is wanted.
+- **Minor — `_0`:** grammar says indexed holes are `_n`, n ≥ 1. `_0` currently
+  lexes as `IndexedHole(0)`; rejecting n = 0 is left to the parser/analyzer.
+- **`// [ask-author]`:** none blocking. The two "flag if…" items above (strict
+  XID; `5.<ident>` strictness) are the only choices worth a confirmation.
+
+---
+
 ## 2026-07-17 — Build-order step 1: repo + value layer
 
 ### Preconditions

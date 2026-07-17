@@ -6,5 +6,6 @@
 
 pub mod ast;
 pub mod interner;
+pub mod lex;
 pub mod rational;
 pub mod value;
