@@ -1,0 +1,15 @@
+[package]
+name = "next"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Must match num-rational's BigRational = Ratio<BigInt> (num-bigint 0.4);
+# a 0.5 direct dep would be a second, incompatible BigInt type in the tree.
+num-bigint = "0.4"
+num-integer = "0.1.46"
+num-rational = "0.4.2"
+num-traits = "0.2.19"
+# Pinned exactly: grapheme string ops (UAX #29) must be reproducible against a
+# fixed Unicode table version — CLAUDE.md build-order step 3 / semantics §3 (E8).
+unicode-segmentation = "=1.13.3"

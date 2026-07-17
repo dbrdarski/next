@@ -1,0 +1,4 @@
+[toolchain]
+# Pinned for reproducible conformance runs (the oracle is the truth source).
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
