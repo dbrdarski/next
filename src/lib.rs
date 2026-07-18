@@ -5,6 +5,7 @@
 //! This crate is currently at the value layer.
 
 pub mod ast;
+pub mod desugar;
 pub mod interner;
 pub mod lex;
 pub mod parse;

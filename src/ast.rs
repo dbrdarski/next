@@ -84,7 +84,16 @@ pub enum Expr {
     Template(Vec<TemplatePart>),
     /// The mutation primitive; legal only inside `mutator`-kind bodies. All
     /// compound/path/slice mutation desugars to `Write` of a functional update.
-    Write { slot: LocationId, value: Box<Expr> },
+    Write { slot: SlotRef, value: Box<Expr> },
+}
+
+/// A mutation target. Pre-canonicalization it is a name (resolving a name to a
+/// slot and confirming the binding is a Box is analyzer work); post-resolution it
+/// is a `LocationId`. Mirrors [`BindingRef`].
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum SlotRef {
+    Name(String),
+    Location(LocationId),
 }
 
 /// The one function form. `params` is a pattern over the complete argument

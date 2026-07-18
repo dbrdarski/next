@@ -6,6 +6,42 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-18 — Build-order step 2c: desugar to kernel AST
+
+`src/desugar/` (`mod.rs`, `hask.rs`, `tests.rs`). Kernel AST spec §4 (the closed
+catalog) + E10. 27 desugar-equivalence seeds green; full suite 83; clippy clean.
+**This completes build-order step 2.**
+
+- **Mandated (§4 rows), all implemented and tested:** pipes → `Apply`;
+  `? :`/`&&`/`||`/`!` → `Match`; `??` → null-arm `Match` (scrutinee once); `~a||b`
+  / `~a&&b` → falsy-set selection matches; `!~x` → falsy Boolean match; hasks →
+  `Lambda` over holes; alternation → arm expansion; pins → equality guard; block
+  bodies → scrutinee-less `Match`; compound/path mutation → `Write` of a
+  functional update; arrows → pure `Lambda` over the argument-tuple pattern (the
+  arity model). The `?? vs ~||` false distinction is verified structurally (2 arms
+  vs 3).
+- **Chosen — output is *pre-canonicalization* kernel AST:** `Ref`s carry
+  `BindingRef::Name` and `Write` carries `SlotRef::Name` (added this step). Name →
+  positional/location/μ resolution and de-Bruijn canonicalization are §5/analyzer
+  work, deliberately not done here — desugar is purely syntactic.
+- **Chosen — synthetic names use a `%` prefix** (e.g. `%h0`, `%pin1`, `%hrest0`),
+  which no surface identifier can contain (identifiers are `_`/`$`-free
+  alphanumerics), so generated bindings never collide with user names.
+- **Chosen — hask holes collected on the fly** via a scope stack rather than a
+  separate rewrite pass: a `#` pushes a scope, holes register synthetic params,
+  popping builds the parameter tuple. Nested `#` opens a fresh scope (E4). v0.1
+  supports all-anon, all-indexed, and single-rest shapes.
+- **Deferred with a clear `DesugarError` (not silently guessed):** mixing plain
+  `_` and indexed `_n` holes; index/slice *mutation* targets (field-path updates
+  are done); nested pins and nested alternation; `@computed`/`@reactive` and
+  anonymous `@` forms (the fenced reactive layer, G1). Each returns a specific
+  error message. These are the honest v0.1 boundaries; none is a semantic
+  invention.
+- **`// [ask-author]`:** none. Every deferral is either a fenced subsystem or a
+  syntactic corner that errors cleanly rather than guessing.
+
+---
+
 ## 2026-07-18 — Build-order step 2b: surface parser
 
 `src/parse/` (`surface.rs`, `parser.rs`, `mod.rs`, `tests.rs`). Grammar §§2–5.
