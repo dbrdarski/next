@@ -291,3 +291,122 @@ fn indeterminate_value_debug_shape() {
     let v = eval("1 / 0");
     assert!(matches!(v.data(), ValueData::Indeterminate(_)));
 }
+
+// ── Mutator staging (B5/B7) ──────────────────────────────────────────────────
+
+#[test]
+fn state_mutation_via_mutator() {
+    let src = "
+        @state count = 0
+        @mutate inc = () => { count := count + 1 }
+        inc()
+        count
+    ";
+    assert_eq!(num(&eval(src)), &Rational::from(1));
+}
+
+#[test]
+fn read_your_writes_within_a_mutator() {
+    // A later read in the same transaction sees the staged value, not σ.
+    let src = "
+        @state x = 0
+        @mutate f = () => { x := 5\n x := x + 1 }
+        f()
+        x
+    ";
+    assert_eq!(num(&eval(src)), &Rational::from(6));
+}
+
+#[test]
+fn nested_mutator_join_publishes_once() {
+    // inner() joins outer's transaction; outer's later read sees inner's write;
+    // publication happens once, at the outermost completion.
+    let src = "
+        @state x = 0
+        @mutate inner = () => { x := 10 }
+        @mutate outer = () => { inner()\n x := x + 1 }
+        outer()
+        x
+    ";
+    assert_eq!(num(&eval(src)), &Rational::from(11));
+}
+
+#[test]
+fn equality_guard_skips_no_op_writes() {
+    // Writing an equal value commits nothing (the interning-exact guard, B7/G1).
+    let noop = "
+        @state x = 5
+        @mutate noop = () => { x := 5 }
+        noop()
+        x
+    ";
+    let (v, commits) = run_program_commits(noop).unwrap();
+    assert_eq!(num(&v), &Rational::from(5));
+    assert_eq!(commits, 0, "an equal write must not commit");
+
+    // A changing write does commit exactly once.
+    let change = "
+        @state x = 5
+        @mutate setX = () => { x := 6 }
+        setX()
+        x
+    ";
+    let (_, commits) = run_program_commits(change).unwrap();
+    assert_eq!(commits, 1);
+}
+
+#[test]
+fn effect_can_call_mutator() {
+    let src = "
+        @state x = 0
+        @mutate setX = (v) => { x := v }
+        @effect run = () => { setX(42) }
+        run()
+        x
+    ";
+    assert_eq!(num(&eval(src)), &Rational::from(42));
+}
+
+#[test]
+fn world_admission_matrix() {
+    // Pure cannot call an effect (containment asymmetry).
+    let effect_from_pure = "
+        @effect boom = () => { }
+        f = () => boom()
+        f()
+    ";
+    assert_eq!(trap_class(effect_from_pure), TrapClass::WorldAdmission);
+
+    // Pure cannot call a mutator either.
+    let mutator_from_pure = "
+        @state x = 0
+        @mutate m = () => { x := 1 }
+        g = () => m()
+        g()
+    ";
+    assert_eq!(trap_class(mutator_from_pure), TrapClass::WorldAdmission);
+
+    // A write at the (effect-world) top level is not in a mutator ⇒ traps.
+    let write_at_top = "
+        @state x = 0
+        x := 1
+    ";
+    assert_eq!(trap_class(write_at_top), TrapClass::WorldAdmission);
+}
+
+// ── Deferred to §5: canonical function identity (see DECISIONS.md) ────────────
+
+#[test]
+#[ignore = "needs §5 canonical function identity (approximate identity is conservative until then)"]
+fn structural_function_identity() {
+    // Same-meaning, different-shape functions should compare equal under the
+    // canonical-body key §5 provides. Today's pointer identity says false.
+    assert!(is_true(&eval("((x) => x) == ((y) => y)")));
+}
+
+#[test]
+#[ignore = "needs §5 canonical function identity + μ-markers (group-identity fork §7)"]
+fn group_identity_seed() {
+    // The §7 provisional-default pair: y and z should intern equal.
+    assert!(is_true(&eval("y = [() => y]\nz = [() => z]\ny == z")));
+}

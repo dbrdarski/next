@@ -6,6 +6,41 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-18 — Build-order step 3 (part 2): worlds + mutator staging
+
+`src/oracle/` (mod.rs, eval.rs). Semantics companion §3 (Apply/Write) + §5
+staging theorems. 6 new mutation seeds green; full suite 118 (+2 ignored);
+clippy clean. Covers task 3c.
+
+- **Mandated (§3), implemented and tested:**
+  - `Write` legal only in mutator world (else `world-admission` trap); stages into
+    the pending set π.
+  - Slot reads use **read-your-writes** (π if staged, else σ).
+  - Mutator application: from mutator world **join** the current transaction (same
+    π, no publish); from effect world **begin** (π := ∅), run, and **publish** at
+    completion. Mutator Apply outcome is `CompletedWithoutValue` (return-nothing
+    law).
+  - **Publish** commits only staged slots whose value differs by pointer (the
+    interning-exact equality guard, B7/G1); a trap publishes nothing (§5).
+  - Effect application runs the body in effect world; the world admission matrix
+    (pure→{pure}; mutator→{pure,mutator}; effect→all) is enforced with
+    `world-admission` traps on violation.
+- **Chosen — commit counter on the store:** the equality guard's "fires nothing"
+  is otherwise unobservable without the (fenced) reactive layer, so `Store` counts
+  *actual* commits and a `run_program_commits` test helper asserts an equal write
+  commits zero times. Test-only observability; no semantic effect.
+- **Chosen — "invisible until outermost completion" is tested via join
+  accumulation:** in the sequential oracle, σ is only inspectable post-transaction,
+  so the nested-join seed asserts the accumulated result (inner write visible to
+  outer read via shared π, single publish) rather than mid-transaction σ.
+- **Deferred to a small follow-on (B6 effect harness):** host effects (test
+  doubles for `println`/`exit`), `Failure` records as plain data, and the
+  `then`/`catch` prelude functions. These need a native-callable value kind; the
+  mutation core (the delicate part) and effect-world mutator invocation are done.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-18 — Build-order step 3 (part 1): pure oracle core + Match
 
 `src/env.rs`, `src/oracle/` (`mod.rs`, `eval.rs`, `mtch.rs`, `tests.rs`).

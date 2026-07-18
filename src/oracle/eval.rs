@@ -1,4 +1,6 @@
-//! Per-node evaluation rules (Semantics Companion §3) — the pure fragment.
+//! Per-node evaluation rules (Semantics Companion §3).
+
+use std::collections::HashMap;
 
 use super::*;
 
@@ -16,6 +18,23 @@ pub fn run_program_value(src: &str) -> Result<ValueRef, Trap> {
 
     let mut oracle = Oracle::new(&mut interner);
     oracle.run_module(&module)
+}
+
+/// Like [`run_program_value`], but also returns the number of *actual* slot
+/// commits — test-observable evidence of the interning-exact equality guard.
+pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
+    use crate::desugar::Desugarer;
+    use crate::lex::lex;
+    use crate::parse::parse_program;
+
+    let mut interner = Interner::new();
+    let toks = lex(src).expect("lex ok");
+    let sprogram = parse_program(toks).expect("parse ok");
+    let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar ok");
+
+    let mut oracle = Oracle::new(&mut interner);
+    let value = oracle.run_module(&module)?;
+    Ok((value, oracle.store.commits))
 }
 
 impl<'a> Oracle<'a> {
@@ -101,10 +120,34 @@ impl<'a> Oracle<'a> {
             Expr::Template(parts) => self.eval_template(parts, env, world),
             Expr::Match(m) => self.eval_match(m, env, world),
             Expr::Apply { callee, args } => self.eval_apply(callee, args, env, world),
-            Expr::Write { .. } => Self::trap(
-                TrapClass::WorldAdmission,
-                "`Write` outside a mutator world (mutator staging arrives in 3c)",
-            ),
+            Expr::Write { slot, value } => self.eval_write(slot, value, env, world),
+        }
+    }
+
+    /// `Write(slot, e)` (§3): legal only in mutator world; evaluate `e` and stage
+    /// it into the pending set. Commitment happens at publication.
+    fn eval_write(&mut self, slot: &SlotRef, value: &Expr, env: &Env, world: World) -> EvalResult {
+        if world != World::Mutator {
+            return Self::trap(TrapClass::WorldAdmission, "`:=` is legal only inside a mutator");
+        }
+        let name = match slot {
+            SlotRef::Name(n) => n,
+            SlotRef::Location(_) => {
+                return Self::trap(TrapClass::UnboundEvaluation, "positional slot refs require §5");
+            }
+        };
+        let slot_id = match env.lookup(name) {
+            Some(Binding::Slot(id)) => id,
+            Some(_) => return Self::trap(TrapClass::OperationSafety, format!("`{name}` is not a mutable slot")),
+            None => return Self::trap(TrapClass::UnboundEvaluation, format!("`{name}` is not bound")),
+        };
+        let v = self.eval_value(value, env, world)?;
+        match &mut self.pending {
+            Some(pending) => {
+                pending.insert(slot_id, v);
+                Ok(Outcome::CompletedWithoutValue)
+            }
+            None => Self::trap(TrapClass::WorldAdmission, "a write occurred outside a transaction"),
         }
     }
 
@@ -112,7 +155,7 @@ impl<'a> Oracle<'a> {
         match r {
             Ref::Immutable(BindingRef::Name(name)) => match env.lookup(name) {
                 Some(Binding::Value(v)) => Ok(Outcome::Produced(v)),
-                Some(Binding::Slot(slot)) => Ok(Outcome::Produced(self.store.read(slot))),
+                Some(Binding::Slot(slot)) => Ok(Outcome::Produced(self.read_slot(slot))),
                 Some(Binding::UnderInit) => Self::trap(
                     TrapClass::UnboundEvaluation,
                     format!("`{name}` is referenced during its own initialization"),
@@ -537,32 +580,63 @@ impl<'a> Oracle<'a> {
             }
         }
 
-        let lambda = &closure.closure().lambda;
-        let callee_kind = lambda.act_kind;
+        let callee_kind = closure.closure().lambda.act_kind;
         if !world.admits(callee_kind) {
             return Self::trap(
                 TrapClass::WorldAdmission,
                 format!("a {callee_kind:?} call is not admitted in {world:?} world"),
             );
         }
-        if callee_kind != ActKind::Pure {
-            return Self::trap(
-                TrapClass::WorldAdmission,
-                "mutator/effect application is not yet evaluated (3c)",
-            );
-        }
 
+        // Bind the complete argument tuple against the parameter pattern (the
+        // arity model); parameter binding is pure and happens before any staging.
         let arg_tuple = self.interner.tuple(arg_vals);
         let call_env = Scope::child(&closure.closure().env);
-        if !self.match_pattern(&lambda.params, &arg_tuple, &call_env)? {
+        if !self.match_pattern(&closure.closure().lambda.params, &arg_tuple, &call_env)? {
             return Self::trap(
                 TrapClass::ArgumentObligation,
                 "arguments do not match the parameter pattern",
             );
         }
-        // A copy of the body avoids borrowing `closure` across the recursive call.
-        let body = lambda.body.clone();
-        self.eval(&body, &call_env, World::Pure)
+        let body = closure.closure().lambda.body.clone();
+
+        match callee_kind {
+            ActKind::Pure => self.eval(&body, &call_env, World::Pure),
+            ActKind::Effect => self.eval(&body, &call_env, World::Effect),
+            ActKind::Mutator => self.apply_mutator(&body, &call_env, world),
+        }
+    }
+
+    /// Apply a mutator callee (semantics §3): from mutator world **join** the
+    /// current transaction; from effect world **begin** one, run the body, and on
+    /// completion **publish**. Either way the Apply's own outcome is
+    /// `CompletedWithoutValue` (current law: mutator returns are discarded).
+    fn apply_mutator(&mut self, body: &Expr, call_env: &Env, world: World) -> EvalResult {
+        match world {
+            World::Mutator => {
+                // Join: same pending set; writes accumulate, no publish here.
+                self.eval(body, call_env, World::Mutator)?;
+                Ok(Outcome::CompletedWithoutValue)
+            }
+            World::Effect => {
+                // Begin a transaction (π := ∅), run, and publish on completion.
+                let saved = self.pending.take();
+                self.pending = Some(HashMap::new());
+                match self.eval(body, call_env, World::Mutator) {
+                    Ok(_) => {
+                        self.publish(); // commit staged-and-changed slots as one event
+                        self.pending = saved;
+                        Ok(Outcome::CompletedWithoutValue)
+                    }
+                    Err(trap) => {
+                        // A trap is a halt, not completion — publish nothing (§5).
+                        self.pending = saved;
+                        Err(trap)
+                    }
+                }
+            }
+            World::Pure => unreachable!("admission matrix rejects mutator-in-pure"),
+        }
     }
 }
 

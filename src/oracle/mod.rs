@@ -13,6 +13,8 @@
 //! node), and pure application. Worlds, mutator staging, and effects arrive next
 //! (build-order step 3c).
 
+use std::collections::HashMap;
+
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
 use unicode_segmentation::UnicodeSegmentation;
@@ -28,7 +30,7 @@ mod mtch;
 #[cfg(test)]
 mod tests;
 
-pub use eval::run_program_value;
+pub use eval::{run_program_commits, run_program_value};
 
 /// An oracle trap: a non-value, non-catchable halt (§6). Its class is the
 /// analyzer obligation it mirrors.
@@ -87,10 +89,13 @@ impl World {
     }
 }
 
-/// The runtime store σ: committed slot contents (mutator staging arrives in 3c).
+/// The runtime store σ: committed slot contents, plus a count of *actual*
+/// commits (the interning-exact equality guard skips no-op writes — B7/G1). The
+/// commit count is test-observable evidence the guard fired.
 #[derive(Default)]
 pub struct Store {
     committed: Vec<ValueRef>,
+    commits: usize,
 }
 
 impl Store {
@@ -105,15 +110,44 @@ impl Store {
     }
 }
 
-/// The oracle: owns the interner and the store while evaluating.
+/// The oracle: owns the interner and the store while evaluating. `pending` is the
+/// pending set π — present only inside a mutation transaction (B5).
 pub struct Oracle<'a> {
     interner: &'a mut Interner,
     store: Store,
+    pending: Option<HashMap<SlotId, ValueRef>>,
 }
 
 impl<'a> Oracle<'a> {
     pub fn new(interner: &'a mut Interner) -> Oracle<'a> {
-        Oracle { interner, store: Store::default() }
+        Oracle { interner, store: Store::default(), pending: None }
+    }
+
+    /// Read a slot with **read-your-writes** (B5): the staged value if the
+    /// current transaction has one, else the committed value.
+    fn read_slot(&self, slot: SlotId) -> ValueRef {
+        if let Some(pending) = &self.pending
+            && let Some(v) = pending.get(&slot)
+        {
+            return v.clone();
+        }
+        self.store.read(slot)
+    }
+
+    /// Publish the current transaction (B5/B7): commit each staged slot whose
+    /// value differs from the committed one (pointer inequality — the
+    /// interning-exact guard); equal writes fire nothing. All commits land here,
+    /// at the outermost mutator's completion.
+    fn publish(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            for (slot, staged) in pending {
+                let committed = self.store.committed[slot.0 as usize].clone();
+                if !staged.ptr_eq(&committed) {
+                    self.store.committed[slot.0 as usize] = staged;
+                    self.store.commits += 1;
+                }
+            }
+        }
     }
 
     fn trap<T>(class: TrapClass, message: impl Into<String>) -> Result<T, Trap> {
