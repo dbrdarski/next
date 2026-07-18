@@ -6,6 +6,54 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-18 — Build-order step 2b: surface parser
+
+`src/parse/` (`surface.rs`, `parser.rs`, `mod.rs`, `tests.rs`). Grammar §§2–5.
+30 seed tests green (E2 worked parses + §10); full suite 56; clippy clean.
+
+- **Chosen — two-stage pipeline (surface AST then desugar):** the parser emits a
+  faithful *surface* AST that keeps all sugar; lowering to the kernel form is a
+  separate pass (2c). The kernel spec calls the desugar catalog "closed and
+  normative", so keeping it a standalone, separately-tested pass is the right
+  seam. The analyzer still never sees sugar.
+- **Mandated (§3 ladder):** full precedence ladder as recursive descent, with the
+  settled associativities — pipes `|>` left / `<|` right with the **unparenthesized
+  mixing ban** (parse error); `**` right-assoc admitting unary on the right
+  (`-x ** 2 ≡ -(x ** 2)`, `2 ** -3` legal); ternary right-assoc; `??`/`||` shared
+  tier; unary `-`/`!`/`~` stacking. Hasks as loose prefix (tier 4) with the
+  grouped `#(...)` primary for below-tier positions.
+- **Mandated (§8):** brace rule (record vs block by first token) applied at arrow
+  bodies, with the `@`-arrow forced-Block exception threaded via a parser flag.
+  `x => {}` is the empty record.
+- **Chosen — statement separation by greedy termination, not line pre-splitting:**
+  the parser consumes each statement as far as the grammar allows (the documented
+  greedy-continuation behavior), then the next statement begins naturally. Strict
+  L1/L2 line *enforcement* (rejecting two statements on one line) is deferred to a
+  later diagnostic pass; token lines are preserved for it.
+- **Chosen — arrow `=>` must be on the same line as its params.** This is the one
+  place L2 is load-bearing for *correctness*, not just diagnostics: without it,
+  `x = n` ⏎ `=> x` inside a block greedily reads `n => x` as an arrow and swallows
+  the else-arm exit. Requiring the `=>` to sit with its params (bare ident, or the
+  matching `)`) resolves it. A `=>` opening a fresh line is a block-body arm.
+  Flag: this rejects the unusual `(a, b)` ⏎ `=> body` split-arrow; confirm that's
+  acceptable.
+- **Chosen — binding/mutation/expression disambiguation** via the statement-only
+  operators `=` and `:=`/compounds (which never appear in the expression grammar):
+  try a bind target then `=`; else a path then a mutation op; else an expression.
+  Save/restore on the token index makes the attempts cheap.
+- **Chosen — contextual keywords** (`module`/`import`/`export`/`from`/`when`/
+  `where`) committed by seat shape; `import` in particular only commits when a `{`
+  or a name follows. A variable literally named after a contextual word in an
+  ambiguous head position is a known unsupported edge — flag if it matters.
+- **Chosen — pattern classification at parse time (§4/§8):** `true`/`false`/`null`
+  → prelude-constant patterns; capitalized identifier → contract pattern; else a
+  fresh binding. Alternation `|` and pins `^` parsed structurally (they desugar in
+  2c).
+- **`// [ask-author]`:** none blocking. The two "flag" items (split-arrow across
+  lines; contextual-word-as-variable in head position) are the only confirmations.
+
+---
+
 ## 2026-07-17 — Build-order step 2a: lexer
 
 `src/lex/` (`token.rs`, `lexer.rs`, `tests.rs`). Grammar spec §1. 14 seed tests
