@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use crate::rational::Rational;
-use crate::value::{FunctionValue, IndetForm, RecordEntry, ValueData, ValueRef};
+use crate::value::{ClosureRef, IndetForm, RecordEntry, ValueData, ValueRef};
 
 /// Owns every interned value for a program. Not `Send`/`Sync` (uses `Rc`); the
 /// oracle is sequential (semantics §3).
@@ -98,8 +98,8 @@ impl Interner {
         self.record(encoded)
     }
 
-    pub fn function(&mut self, f: FunctionValue) -> ValueRef {
-        self.intern(ValueData::Function(f))
+    pub fn function(&mut self, closure: ClosureRef) -> ValueRef {
+        self.intern(ValueData::Function(closure))
     }
 }
 

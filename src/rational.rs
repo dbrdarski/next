@@ -37,6 +37,11 @@ impl Rational {
         Rational(BigRational::from_integer(n))
     }
 
+    /// Wrap an already-reduced `BigRational` (it reduces on construction anyway).
+    pub fn from_ratio(r: BigRational) -> Self {
+        Rational(r)
+    }
+
     /// The underlying `BigRational` (already reduced, positive denominator).
     pub fn as_ratio(&self) -> &BigRational {
         &self.0

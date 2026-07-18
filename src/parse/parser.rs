@@ -152,7 +152,7 @@ impl Parser {
         }
         if self.at_ident_kw(token_kw::WHEN) {
             self.advance();
-            let guard = self.expr()?;
+            let guard = self.match_expr()?; // below the arrow tier (see `arm`)
             self.expect(TokenKind::FatArrow)?;
             let result = self.expr()?;
             return Ok(SStmt::WhenArm { guard, result });
@@ -492,7 +492,9 @@ impl Parser {
         };
         let guard = if self.at_ident_kw(token_kw::WHEN) {
             self.advance();
-            Some(self.expr()?)
+            // Parse below the arrow tier so the arm's own `=>` is not swallowed
+            // as an arrow body (a guard is a Boolean test, never a bare arrow).
+            Some(self.match_expr()?)
         } else {
             None
         };

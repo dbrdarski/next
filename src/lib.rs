@@ -6,8 +6,10 @@
 
 pub mod ast;
 pub mod desugar;
+pub mod env;
 pub mod interner;
 pub mod lex;
+pub mod oracle;
 pub mod parse;
 pub mod rational;
 pub mod value;

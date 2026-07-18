@@ -16,7 +16,8 @@
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use crate::ast::{Lambda, LocationId, MuMarker};
+use crate::ast::Lambda;
+use crate::env::Env;
 use crate::rational::Rational;
 
 /// A canonical, interned value handle. Equality and hashing are by pointer; the
@@ -81,10 +82,11 @@ pub enum ValueData {
     /// resolved at construction). Order is not observable — `{a:1,b:2}` and
     /// `{b:2,a:1}` are the same value.
     Record(Vec<RecordEntry>),
-    /// `(canonical body, capture map, actKind)` — semantics §1. Construction and
-    /// capture resolution belong to the oracle (step 3); the type exists now so
-    /// functions are first-class interned values.
-    Function(FunctionValue),
+    /// A function value: `(body, captured environment, actKind)` (semantics §1).
+    /// Interned by **closure pointer identity** for now — a conservative
+    /// approximation of the canonical-shape identity §5 will provide (see
+    /// DECISIONS.md; the `y=[()=>y]` seed is `#[ignore]`d until then).
+    Function(ClosureRef),
     /// A total-division / indeterminate arithmetic result (semantics §3). A plain
     /// interned value, not a trap.
     Indeterminate(IndetForm),
@@ -98,23 +100,51 @@ pub struct RecordEntry {
     pub value: ValueRef,
 }
 
-/// A function value: canonical body + resolved capture map. `act_kind` lives on
-/// the lambda. Capture resolution is the oracle's job (step 3).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct FunctionValue {
+/// A closure: a lambda body plus the environment it was constructed in
+/// (semantics §1). The environment is captured by reference, so late binding and
+/// mutual recursion resolve at call time (B4).
+#[derive(Debug)]
+pub struct Closure {
     pub lambda: Lambda,
-    /// Free-variable slot → its resolved capture (semantics §1: values for
-    /// immutable names, μ-markers for under-init self/group refs, location
-    /// markers for slots). Empty until the oracle constructs functions.
-    pub captures: Vec<(u32, Capture)>,
+    pub env: Env,
 }
 
-/// What a captured free variable resolves to (semantics §1 / C§12.3 layer 1).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Capture {
-    Value(ValueRef),
-    Mu(MuMarker),
-    Location(LocationId),
+/// A pointer-identity handle to a [`Closure`]. Function-value identity is closure
+/// pointer identity for now (the conservative, §5-deferred approximation): two
+/// closures are equal iff they are the *same* allocation. This can only fail to
+/// merge equal functions, never merge distinct ones (see DECISIONS.md).
+#[derive(Clone)]
+pub struct ClosureRef(Rc<Closure>);
+
+impl ClosureRef {
+    pub fn new(closure: Closure) -> ClosureRef {
+        ClosureRef(Rc::new(closure))
+    }
+
+    pub fn closure(&self) -> &Closure {
+        &self.0
+    }
+}
+
+impl PartialEq for ClosureRef {
+    fn eq(&self, other: &ClosureRef) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for ClosureRef {}
+
+impl Hash for ClosureRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Rc::as_ptr(&self.0) as *const ()).hash(state);
+    }
+}
+
+impl std::fmt::Debug for ClosureRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Do not recurse into the captured environment (it may transitively hold
+        // this very function).
+        write!(f, "<function {:?}>", Rc::as_ptr(&self.0))
+    }
 }
 
 /// The form label of an Indeterminate value (semantics §3).
@@ -179,6 +209,20 @@ impl ValueRef {
     pub fn as_record(&self) -> Option<&[RecordEntry]> {
         match self.data() {
             ValueData::Record(fields) => Some(fields),
+            _ => None,
+        }
+    }
+
+    pub fn as_closure(&self) -> Option<&ClosureRef> {
+        match self.data() {
+            ValueData::Function(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_indeterminate(&self) -> Option<IndetForm> {
+        match self.data() {
+            ValueData::Indeterminate(f) => Some(*f),
             _ => None,
         }
     }

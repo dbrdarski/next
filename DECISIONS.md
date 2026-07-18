@@ -6,6 +6,79 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-18 — Build-order step 3 (part 1): pure oracle core + Match
+
+`src/env.rs`, `src/oracle/` (`mod.rs`, `eval.rs`, `mtch.rs`, `tests.rs`).
+Semantics companion §3, the pure fragment. 29 oracle seeds green; full suite 112;
+clippy clean. Covers tasks 3a + 3b.
+
+- **Mandated (§3), implemented and tested:** exact rational arithmetic; total
+  division (`x/0` ⇒ Indeterminate) with left-most Indeterminate propagation
+  through arithmetic; `==`/`!=` as pointer equality (Indeterminate is an ordinary
+  value); ordering comparisons trap `undischarged-Indeterminate`; late binding via
+  a runtime environment (direct + mutual recursion work); `Match` as the sole
+  control node with the completion triple; construction (tuple/record, later-wins,
+  spreads); access (field/index/slice, demand vs `?.` totals, from-end,
+  clamped-total slices); grapheme string index/slice (pinned `unicode-segmentation`);
+  template stringification by B2 rules. Nine trap classes fire end-to-end.
+- **Chosen — runtime environment (not §5 resolution):** `Scope` chain with names;
+  a binding is marked `UnderInit` while its RHS evaluates, so `x = x` traps
+  `unbound-evaluation` while a self/mutually-recursive lambda is fine (its body
+  isn't evaluated at bind time). This is the agreed approach (see the §5 deferral
+  entry below).
+- **Chosen — closures capture the environment by reference** (`Rc<Scope>`), which
+  is what makes late binding / mutual recursion fall out. Function identity is
+  `ClosureRef` pointer identity (the conservative approximation already signed
+  off).
+- **Chosen, spec-faithful clarifications:**
+  - `tested-seat` trap is **guard-only** (companion §3). A non-Boolean *ternary
+    condition* desugars to a Boolean-exhaustive match, matches no arm at runtime,
+    and surfaces as `expecting-seat` (the analyzer rejects it up front). Both are
+    tested.
+  - Contract-as-pattern: the runtime-decidable **Kind** checks (`Number`,
+    `String`, `Boolean`, `Null`, `Tuple`, `Record`, `Function`) and
+    `Indeterminate` are implemented; user-defined contract patterns trap (they
+    need the contract engine — analyzer phase).
+  - `%` on rationals is the truncation-toward-zero remainder; `**` supports
+    **integer exponents only** (irrational-producing ops are omitted from the PoC,
+    B2) — a non-integer exponent traps `operation-safety`.
+  - Entry-file top level evaluates in **effect world** (the one derivation the
+    companion makes, §2).
+- **Deferred to step 3c (part 2):** mutator/effect *application* (worlds admission
+  is checked, but a mutator/effect call currently traps a placeholder), `Write`
+  evaluation, the pending-set/read-your-writes/publish staging, host effects, and
+  Failure records. `DidNotComplete` (divergence) is genuine non-termination, not a
+  represented value.
+- **`// [ask-author]`:** none.
+
+---
+
+## 2026-07-18 — Decision [user-approved]: defer §5 canonicalization; approximate function identity
+
+Sign-off recorded before starting the oracle (step 3). **What the oracle does:**
+evaluates kernel AST by resolving names against a runtime environment (late
+binding, B4 / semantics §1 `ρ`) — no de-Bruijn/§5 canonicalization pass is built
+yet. **What that costs, in full (nothing else):**
+
+- Function-value identity is *approximate*. Same-meaning functions with different
+  written shape (α-equivalent, or equivalent-but-differently-written bodies) may
+  intern distinct instead of equal. This propagates to values that *contain*
+  functions; pure data (numbers/strings/tuples/records of data) stays exact.
+- Observably, only `==` on functions (and function-containing structures) is
+  affected. The approximation is **conservative**: it can only *fail to merge two
+  equal functions*, never merge two different ones — so no wrong `true`, and no
+  effect on any produced non-function value, control flow, world/mutation
+  semantics, trap, or completion outcome. Soundness is untouched.
+- The `y = [() => y]` / `z = [() => z]` interning seed and the §7 group-identity
+  pair stay `#[ignore]`d with a note pointing here, until §5 lands.
+- Function-value interning is confined to one place (a `ClosureRef` pointer
+  identity for now); swapping in §5's canonical-body key later is a localized
+  change and does not touch the oracle's evaluation logic.
+
+**User: "consider it settled."**
+
+---
+
 ## 2026-07-18 — Build-order step 2c: desugar to kernel AST
 
 `src/desugar/` (`mod.rs`, `hask.rs`, `tests.rs`). Kernel AST spec §4 (the closed
