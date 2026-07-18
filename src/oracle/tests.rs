@@ -247,6 +247,19 @@ fn operation_safety_trap_on_kind_mismatch() {
 #[test]
 fn spread_kind_trap() {
     assert_eq!(trap_class("[...5]"), TrapClass::SpreadKind);
+    assert_eq!(trap_class("{ ...5 }"), TrapClass::SpreadKind);
+}
+
+#[test]
+fn refuted_binding_trap() {
+    // A destructuring binding whose pattern doesn't match its value (E9).
+    assert_eq!(trap_class("[a, b] = [1]\na"), TrapClass::RefutedBinding);
+}
+
+#[test]
+fn computed_key_trap() {
+    // A computed record key that isn't a String (E5).
+    assert_eq!(trap_class("{ [5]: 1 }"), TrapClass::ComputedKey);
 }
 
 // ── Strings (graphemes) and templates ────────────────────────────────────────
