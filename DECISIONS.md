@@ -6,6 +6,42 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-19 — Build-order step 3 (part 3): B6 effect harness — **oracle complete**
+
+`src/value.rs`, `src/interner.rs`, `src/oracle/` (harness.rs new; eval.rs,
+mtch.rs). Semantics companion §4 + B6. 6 effect seeds green; full suite 126
+(+2 ignored); clippy clean. **This completes build-order step 3 — the oracle.**
+
+- **Mandated (§4/B6), implemented and tested:**
+  - New value kind `ValueData::Native` (pointer-identity `NativeRef`): a
+    host-callable that runs Rust when applied — the only way host effects (which
+    aren't expressible in NEXT) can exist. `eval_apply` dispatches native-vs-
+    closure; natives honour the world admission matrix (effect-kind ⇒ effect world
+    only).
+  - Host-effect doubles injected by the harness: `println`/`exit` (record into an
+    observable `HostIo` buffer) and a fallible `readFile` (returns a Failure).
+  - `Failure` is the one prelude Record shape (`path` + `reason`); the `Failure`
+    contract pattern matches it structurally (E9 — Failure discharge dissolves
+    into contract-as-pattern). A failed effect returns a Failure that flows as
+    ordinary data — nothing unwinds.
+  - **`then`/`catch` proven to be NEXT library code:** the seed defines them in
+    NEXT source (over `Match`) and shows a success flowing through `then` while a
+    Failure short-circuits it and is recovered by `catch` — no interpreter
+    builtins.
+- **Chosen — entry programs need not end in a value:** `run_module_in` now returns
+  null when the last statement completes without a value (an entry may end in an
+  effect statement), rather than trapping. The expecting-seat demand still fires
+  in genuine value positions (bindings, operands, …), which the seeds check.
+- **Chosen — line-leading `[`/`(` starts a new statement** (parser): a postfix
+  index/call only attaches on the same line as its target; a `[`/`(` opening a
+  fresh line begins a new statement (the greedy-continuation hazard, §1.1). `.` /
+  `?.` still continue across lines (unambiguous). This is the same class of fix as
+  the arrow `=>` line rule.
+- **`// [ask-author]`:** none. `exit` as a double records the code and returns
+  rather than terminating (the real host limit is outside the semantics, §4).
+
+---
+
 ## 2026-07-18 — Build-order step 3 (part 2): worlds + mutator staging
 
 `src/oracle/` (mod.rs, eval.rs). Semantics companion §3 (Apply/Write) + §5

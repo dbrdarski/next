@@ -41,18 +41,19 @@ impl<'a> Oracle<'a> {
     /// Evaluate a module's items in order under **effect world** (the entry-file
     /// reading — semantics §2), returning the last statement's produced value.
     pub fn run_module(&mut self, module: &Module) -> Result<ValueRef, Trap> {
-        let env = Scope::root();
+        self.run_module_in(module, &Scope::root())
+    }
+
+    /// As [`run_module`], but in a caller-supplied environment (so the harness can
+    /// pre-install host effects / prelude bindings).
+    pub fn run_module_in(&mut self, module: &Module, env: &Env) -> Result<ValueRef, Trap> {
         let mut last = None;
         for item in &module.items {
-            last = self.eval_item(item, &env, World::Effect)?;
+            last = self.eval_item(item, env, World::Effect)?;
         }
-        match last {
-            Some(v) => Ok(v),
-            None => Self::trap(
-                TrapClass::ExpectingSeat,
-                "the program produced no final value",
-            ),
-        }
+        // An entry program need not end in a value (it may end in an effect
+        // statement); report null in that case.
+        Ok(last.unwrap_or_else(|| self.interner.null()))
     }
 
     fn eval_item(&mut self, item: &Item, env: &Env, world: World) -> Result<Option<ValueRef>, Trap> {
@@ -559,13 +560,9 @@ impl<'a> Oracle<'a> {
 
     // ── Application (pure fragment; worlds/staging in 3c) ─────────────────────
 
-    fn eval_apply(&mut self, callee: &Expr, args: &[Arg], env: &Env, world: World) -> EvalResult {
-        let callee_v = self.eval_value(callee, env, world)?;
-        let closure = match callee_v.as_closure() {
-            Some(c) => c.clone(),
-            None => return Self::trap(TrapClass::OperationSafety, "callee is not a function"),
-        };
-
+    /// Evaluate call arguments left-to-right, splicing spreads (E3). A spread of
+    /// a non-Tuple traps `spread-kind`.
+    fn eval_args(&mut self, args: &[Arg], env: &Env, world: World) -> Result<Vec<ValueRef>, Trap> {
         let mut arg_vals = Vec::new();
         for a in args {
             match a {
@@ -579,6 +576,33 @@ impl<'a> Oracle<'a> {
                 }
             }
         }
+        Ok(arg_vals)
+    }
+
+    fn eval_apply(&mut self, callee: &Expr, args: &[Arg], env: &Env, world: World) -> EvalResult {
+        let callee_v = self.eval_value(callee, env, world)?;
+        let arg_vals = self.eval_args(args, env, world)?;
+
+        // A host effect: run its native (Rust) body directly (semantics §4).
+        if let Some(native) = callee_v.as_native() {
+            let native = native.clone();
+            let kind = native.get().act_kind;
+            if !world.admits(kind) {
+                return Self::trap(
+                    TrapClass::WorldAdmission,
+                    format!("a {kind:?} host effect is not admitted in {world:?} world"),
+                );
+            }
+            return match (native.get().imp)(self.interner, &arg_vals) {
+                Ok(v) => Ok(Outcome::Produced(v)),
+                Err(msg) => Self::trap(TrapClass::OperationSafety, msg),
+            };
+        }
+
+        let closure = match callee_v.as_closure() {
+            Some(c) => c.clone(),
+            None => return Self::trap(TrapClass::OperationSafety, "callee is not a function"),
+        };
 
         let callee_kind = closure.closure().lambda.act_kind;
         if !world.admits(callee_kind) {

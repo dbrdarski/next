@@ -85,9 +85,11 @@ fn tested_seats_are_strict_boolean() {
     let guard = "f = (v) => v :: { _ when v => 1 }\nf(5)";
     assert_eq!(trap_class(guard), TrapClass::TestedSeat);
     // A non-Boolean ternary condition instead desugars to a Boolean-exhaustive
-    // match; at runtime it matches no arm ⇒ completes-without-value ⇒ the demand
-    // surfaces at the expecting seat (the analyzer rejects it up front).
-    assert_eq!(trap_class("5 ? 1 : 2"), TrapClass::ExpectingSeat);
+    // match; at runtime it matches no arm ⇒ completes-without-value. In a value
+    // position (here a binding) the demand surfaces at the expecting seat (the
+    // analyzer rejects it up front). As a bare statement it would simply go
+    // nowhere.
+    assert_eq!(trap_class("y = 5 ? 1 : 2\ny"), TrapClass::ExpectingSeat);
 }
 
 // ── Functions, recursion, late binding ───────────────────────────────────────
@@ -405,6 +407,77 @@ fn world_admission_matrix() {
         x := 1
     ";
     assert_eq!(trap_class(write_at_top), TrapClass::WorldAdmission);
+}
+
+// ── Host effects, Failure, then/catch (B6 / §4) ──────────────────────────────
+
+#[test]
+fn host_effect_println_records_output() {
+    let src = "
+        @effect main = () => { println(\"hello\") }
+        main()
+    ";
+    let (_v, io) = run_with_io(src).unwrap();
+    assert_eq!(io.output, vec!["hello".to_string()]);
+}
+
+#[test]
+fn host_effect_at_top_level() {
+    // The entry-file top level is effect world; a host effect is a normal call.
+    let (_v, io) = run_with_io("println(`x = ${1 / 2}`)").unwrap();
+    assert_eq!(io.output, vec!["x = 0.5".to_string()]);
+}
+
+#[test]
+fn host_effect_exit_records_code() {
+    let (_v, io) = run_with_io("exit(2)").unwrap();
+    assert_eq!(io.exit_code, Some(2));
+}
+
+#[test]
+fn host_effect_not_admitted_in_pure() {
+    // A pure function cannot call a host effect (containment asymmetry).
+    let src = "
+        f = () => { println(\"x\") }
+        f()
+    ";
+    let trap = run_with_io(src).unwrap_err();
+    assert_eq!(trap.class, TrapClass::WorldAdmission);
+}
+
+#[test]
+fn failure_flows_as_plain_data() {
+    // A failed host effect returns a Failure record; nothing unwinds — it is an
+    // ordinary value with `path` and `reason` fields (B6).
+    let (v, _io) = run_with_io("readFile(\"missing.txt\")").unwrap();
+    let entries = v.as_record().expect("Failure is a record");
+    let key = |k: &str| -> Vec<u16> { k.encode_utf16().collect() };
+    let reason = entries.iter().find(|e| e.key == key("reason")).unwrap();
+    assert_eq!(reason.value.as_string_lossy().unwrap(), "not found");
+}
+
+#[test]
+fn then_catch_are_next_library_code() {
+    // then/catch are ordinary NEXT functions over Match — not interpreter
+    // builtins. A success flows through `then` and skips `catch`; a Failure skips
+    // `then` and is recovered by `catch`.
+    let src = "
+        then  = (f) => (r) => r :: {
+            Failure => r
+            _ => f(r)
+        }
+        catch = (h) => (r) => r :: {
+            Failure => h(r)
+            _ => r
+        }
+        success = 5 |> then((x) => x + 1) |> catch((e) => 0)
+        recovered = readFile(\"x\") |> then((c) => 1) |> catch((e) => 99)
+        [success, recovered]
+    ";
+    let (v, _io) = run_with_io(src).unwrap();
+    let t = v.as_tuple().unwrap();
+    assert_eq!(t[0].as_number().unwrap(), &Rational::from(6), "success flows through then");
+    assert_eq!(t[1].as_number().unwrap(), &Rational::from(99), "failure recovered by catch");
 }
 
 // ── Deferred to §5: canonical function identity (see DECISIONS.md) ────────────

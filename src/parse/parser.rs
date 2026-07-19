@@ -74,6 +74,15 @@ impl Parser {
         self.kind() == k
     }
 
+    /// Whether the current token sits on the same source line as the previous
+    /// one — used to keep a line-leading `[`/`(` from attaching as a postfix.
+    fn adjacent_to_prev(&self) -> bool {
+        match (self.pos.checked_sub(1).and_then(|i| self.toks.get(i)), self.toks.get(self.pos)) {
+            (Some(prev), Some(cur)) => prev.line == cur.line,
+            _ => true,
+        }
+    }
+
     fn eat(&mut self, k: &TokenKind) -> bool {
         if self.at(k) {
             self.advance();
@@ -717,13 +726,17 @@ impl Parser {
                         };
                     }
                 }
-                TokenKind::LBracket => {
+                // Index and call only attach when the bracket is on the same line
+                // as the target: a `[`/`(` opening a fresh line begins a new
+                // statement (the greedy-continuation hazard, §1.1). Leading `.` /
+                // `?.` are unambiguous and may continue across lines.
+                TokenKind::LBracket if self.adjacent_to_prev() => {
                     self.advance();
                     let form = self.index_or_slice()?;
                     self.expect(TokenKind::RBracket)?;
                     node = SExpr::Access { target: Box::new(node), form, total: false };
                 }
-                TokenKind::LParen => {
+                TokenKind::LParen if self.adjacent_to_prev() => {
                     self.advance();
                     let args = self.arg_list()?;
                     self.expect(TokenKind::RParen)?;

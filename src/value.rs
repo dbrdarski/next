@@ -16,8 +16,9 @@
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use crate::ast::Lambda;
+use crate::ast::{ActKind, Lambda};
 use crate::env::Env;
+use crate::interner::Interner;
 use crate::rational::Rational;
 
 /// A canonical, interned value handle. Equality and hashing are by pointer; the
@@ -90,6 +91,10 @@ pub enum ValueData {
     /// A total-division / indeterminate arithmetic result (semantics §3). A plain
     /// interned value, not a trap.
     Indeterminate(IndetForm),
+    /// A **host effect** — a native (Rust) callable injected by the harness
+    /// (semantics §4): a `println`/`exit` double, "from another dimension" (E13).
+    /// Not expressible in NEXT; runs Rust when applied.
+    Native(NativeRef),
 }
 
 /// A canonical record field. `key` is raw UTF-16 (record keys are always
@@ -144,6 +149,50 @@ impl std::fmt::Debug for ClosureRef {
         // Do not recurse into the captured environment (it may transitively hold
         // this very function).
         write!(f, "<function {:?}>", Rc::as_ptr(&self.0))
+    }
+}
+
+/// A native host callable (semantics §4). `imp` runs Rust against the argument
+/// values, using the interner to build its result; it returns an ordinary value
+/// (a success, or a `Failure` record — B6), or an `Err(msg)` that the oracle
+/// turns into an `operation-safety` trap.
+pub struct NativeFn {
+    pub name: String,
+    pub act_kind: ActKind,
+    #[allow(clippy::type_complexity)]
+    pub imp: Rc<dyn Fn(&mut Interner, &[ValueRef]) -> Result<ValueRef, String>>,
+}
+
+/// A pointer-identity handle to a [`NativeFn`] (host effects are unique).
+#[derive(Clone)]
+pub struct NativeRef(Rc<NativeFn>);
+
+impl NativeRef {
+    pub fn new(native: NativeFn) -> NativeRef {
+        NativeRef(Rc::new(native))
+    }
+
+    pub fn get(&self) -> &NativeFn {
+        &self.0
+    }
+}
+
+impl PartialEq for NativeRef {
+    fn eq(&self, other: &NativeRef) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for NativeRef {}
+
+impl Hash for NativeRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Rc::as_ptr(&self.0) as *const ()).hash(state);
+    }
+}
+
+impl std::fmt::Debug for NativeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<native {}>", self.0.name)
     }
 }
 
@@ -223,6 +272,13 @@ impl ValueRef {
     pub fn as_indeterminate(&self) -> Option<IndetForm> {
         match self.data() {
             ValueData::Indeterminate(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    pub fn as_native(&self) -> Option<&NativeRef> {
+        match self.data() {
+            ValueData::Native(n) => Some(n),
             _ => None,
         }
     }

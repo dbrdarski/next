@@ -26,11 +26,13 @@ use crate::rational::Rational;
 use crate::value::{Closure, ClosureRef, IndetForm, ValueData, ValueRef};
 
 mod eval;
+pub mod harness;
 mod mtch;
 #[cfg(test)]
 mod tests;
 
 pub use eval::{run_program_commits, run_program_value};
+pub use harness::{HostIo, run_with_io};
 
 /// An oracle trap: a non-value, non-catchable halt (§6). Its class is the
 /// analyzer obligation it mirrors.

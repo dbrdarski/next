@@ -297,6 +297,19 @@ fn two_statements_separate_greedily() {
 }
 
 #[test]
+fn line_leading_bracket_or_paren_starts_a_new_statement() {
+    // `f(x)` ⏎ `[a, b]` is two statements, not `f(x)[a, b]` (the greedy hazard).
+    let prog = program("r = f(x)\n[a, b]");
+    assert_eq!(prog.statements.len(), 2);
+    assert!(matches!(prog.statements[1], SStmt::Expr(SExpr::Tuple(_))));
+    // Same line still attaches as index/call.
+    match expr("f(x)[0]") {
+        SExpr::Access { .. } => {}
+        other => panic!("expected same-line index to attach, got {other:?}"),
+    }
+}
+
+#[test]
 fn import_and_module_header() {
     let prog = program("module App.Main\nimport { a, b } from Foo.Bar");
     assert_eq!(prog.header, Some(vec!["App".into(), "Main".into()]));

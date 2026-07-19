@@ -181,6 +181,15 @@ impl<'a> Oracle<'a> {
             "Record" => value.as_record().is_some(),
             "Function" => value.as_closure().is_some(),
             "Indeterminate" => value.as_indeterminate().is_some(),
+            // The one prelude Failure shape (B6): a Record carrying `path` and
+            // `reason`. Failure discharge dissolves into contract-as-pattern (E9).
+            "Failure" => value.as_record().is_some_and(|entries| {
+                let has = |k: &str| {
+                    let ku: Vec<u16> = k.encode_utf16().collect();
+                    entries.iter().any(|e| e.key == ku)
+                };
+                has("path") && has("reason")
+            }),
             other => {
                 return Self::trap(
                     TrapClass::OperationSafety,
