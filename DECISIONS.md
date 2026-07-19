@@ -6,6 +6,45 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-19 — Algorithm A: eager code canonicalization of binding groups (μ spec §4A)
+
+`src/oracle/mu.rs` + `src/oracle/mu/tests.rs` (new). μ-Canonicalization Spec
+§2/§3/§4A. 6 MU conformance tests; full suite 153, 0 ignored, clippy clean.
+
+- **What it is:** canonicalizes a set of (mutually) recursive bindings into
+  **canonical code** — mutual references become positional μ-refs `⟨d,i⟩`,
+  recursion is grouped by SCC, each group serialized in a canonical slot order.
+  This is the **layer-2 shape** for C§13.4 cache keys and recursive contracts
+  (C§9). **No runtime consumer yet** (layer-1 `==` is algorithm B); `mu.rs` is
+  `#![allow(dead_code)]` and exercised only by the MU tests until the analyzer
+  lands.
+- **Delivered (the testable core):**
+  - Tarjan **SCC** over a scope-respecting free-reference graph (binder-aware, so
+    a shadowed group name is not an edge).
+  - **Laws 1 + 3:** only genuine cycles (a self-loop or ≥2 SCC) become μ-groups;
+    acyclic neighbours split out and reference the group by canonical key.
+  - **Positional encoding:** intra-group refs → μ-refs, λ/match-bound vars →
+    de-Bruijn, cross-SCC refs → canonical key, free names → by name.
+  - **Law 5 / canonical slot order:** the lexicographically-least serialization
+    over all slot permutations (brute-forced — groups are tiny; O(k!) with k
+    small, avoiding a full Paige–Tarjan implementation).
+  - **Content-based constant serialization** (not pointer) so canonical codes are
+    stable across interners — the cross-program rename/permutation invariant.
+  - Conformance: **MU-01** (vacuous-μ erasure — non-recursive binding gets no μ),
+    **MU-03** (minimal-group split — acyclic neighbour not bound in), **MU-06**
+    (invariance under member renaming and permutation), plus self-recursion → a
+    1-slot μ and a distinctness sanity.
+- **Deferred (flagged):** **law 2** (adjacent/nested-binder merge — only arises
+  with nested groups), **law 4** (bisimulation collapse of truly-symmetric slots
+  — law 5 gives permutation-invariance but not slot *merging*; needs partition
+  refinement), and **MU-02/MU-05** (the former needs nested groups, the latter
+  needs contracts). These are precision refinements for the analyzer, not
+  correctness gaps for what exists.
+- **`// [ask-author]`:** none. The build-ahead nature was raised with the user and
+  accepted before implementation.
+
+---
+
 ## 2026-07-19 — Polynomial NF over arithmetic bodies (frozen ==-set, H-05)
 
 `src/oracle/poly.rs` (new), `src/oracle/{canon.rs,eval.rs,mod.rs}`, `src/value.rs`.

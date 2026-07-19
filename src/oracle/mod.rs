@@ -30,6 +30,7 @@ mod equal;
 mod eval;
 pub mod harness;
 mod mtch;
+mod mu;
 mod poly;
 #[cfg(test)]
 mod tests;
