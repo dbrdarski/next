@@ -6,6 +6,42 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-19 — Build-order step 4: normalization + property harness — **BUILD ORDER COMPLETE (the gate)**
+
+`src/normalize/` (mod.rs, tests.rs). Kernel AST §5 + Part I harness laws. 5
+normalize tests green (incl. the property harness over a 22-program corpus); full
+suite 132 (+2 ignored); clippy clean.
+
+- **Mandated (Part I), the deliverable:** the property harness enforces, against
+  the oracle, `eval ∘ normalize = eval` and idempotence
+  (`normalize(normalize(m)) == normalize(m)`) over a corpus spanning every node
+  kind. This is the machine-checked link between the normalizer and the truth
+  source.
+- **Chosen — active rule set (small, spec-named, clearly eval-preserving):**
+  - Template **adjacent-segment folding** (§4).
+  - **Literal template → constant**: a template with no interpolations is the
+    string it denotes.
+  Everything else is a structure-preserving recursive map, so further rules bolt
+  on in one place.
+- **Deferred (consistent with the §5 sign-off):** the heavy §5 canonicalization —
+  de-Bruijn free-variable ordering and μ-binder canonicalization — is *not* built
+  here; it lands with canonical function identity. The harness is designed so
+  those rules, once added, are checked by the same `eval ∘ normalize = eval` law.
+- **Chosen — outcome comparison:** the harness runs original and normalized forms
+  in the *same interner*, so produced values compare by pointer and traps by
+  class (`Result<ValueRef, TrapClass>`), giving an exact "same outcome" check.
+- **`// [ask-author]`:** none.
+
+### Build-order status: **gate reached.**
+Steps 1–4 (value layer → lexer/parser/desugar → oracle → normalization + harness)
+are complete and green. Per Part I we **stop here**: contracts / the three-valued
+checker / demand core / recursion analysis are the explicitly-gated later phase,
+not to be started until the author opens it. Outstanding within the completed
+scope: the two `#[ignore]`d §5 function-identity seeds, and the small B6 tail
+already noted (all logged).
+
+---
+
 ## 2026-07-19 — Build-order step 3 (part 3): B6 effect harness — **oracle complete**
 
 `src/value.rs`, `src/interner.rs`, `src/oracle/` (harness.rs new; eval.rs,
