@@ -1,6 +1,6 @@
 # CLAUDE.md — NEXT Language Implementation
 
-You are implementing **NEXT**, a language whose design is complete and recorded in four normative documents in this repository. Your job is implementation, not design.
+You are implementing **NEXT**, a language whose design is complete and recorded in five normative documents in this repository. Your job is implementation, not design.
 
 ## Normative documents (read in this order)
 
@@ -8,6 +8,7 @@ You are implementing **NEXT**, a language whose design is complete and recorded 
 2. `next-grammar-specification-v0-1.md` — what parses. Final; no throwaway notation.
 3. `next-kernel-ast-specification-v0-1.md` — what exists after parsing: node inventory + the **closed desugaring catalog** (§4). The analyzer-facing form.
 4. `next-semantics-companion-v0-1.md` — what running means: per-node evaluation rules, **oracle traps**, the trap↔compile-error concordance (§6).
+5. `next-mu-canonicalization-specification-v0-1.md` — value/function identity: canonical code shape (algorithm A) + runtime `==` as bisimulation over value graphs (algorithm B). The `==`-determining rule set is **frozen** per §6.
 
 Status vocabulary matters: [decided]/[owed]/[open]/[parked]/[leaning]/[fenced]. Nothing is [verified]. Fenced subsystems (reactive layer, concurrency, UI) are **not** in scope.
 

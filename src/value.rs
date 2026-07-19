@@ -84,9 +84,9 @@ pub enum ValueData {
     /// `{b:2,a:1}` are the same value.
     Record(Vec<RecordEntry>),
     /// A function value: `(body, captured environment, actKind)` (semantics §1).
-    /// Identity is the canonical key in [`FnValue`] (§5): α-equivalent functions
-    /// with equal captures are equal; recursive closures fall back to opaque
-    /// distinctness (the deferred μ case — DECISIONS.md).
+    /// A plain allocation (never hash-consed); value equality is a bisimulation
+    /// over the rational tree `node(shape, captures)` — see [`FnValue`] and the
+    /// μ-Canonicalization Spec (algorithm B).
     Function(FnValue),
     /// A total-division / indeterminate arithmetic result (semantics §3). A plain
     /// interned value, not a trap.
@@ -114,29 +114,41 @@ pub struct Closure {
     pub env: Env,
 }
 
-/// The **identity** key of a function value (§5). A closure whose free variables
-/// all resolve at construction gets a `Canonical` key: its body α-normalized
-/// (bound variables renamed positionally) with captured values inlined as
-/// constants, so structurally-identical functions with equal captures are equal.
-/// A closure with an unresolvable free variable (recursion / forward reference —
-/// the deferred μ case) gets a unique `Opaque` key, falling back to distinctness.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum FnKey {
-    Canonical(Lambda),
-    Opaque(u64),
-}
-
-/// A function value: the closure (for evaluation) plus its identity key (for
-/// `==` / interning). Equality and hashing are **by key only**.
+/// A function value (μ-Canonicalization Spec, the interning amendment): a **plain
+/// allocation**, never hash-consed. Its identity is its rational tree
+/// `node(shape, captures)` — compared lazily by bisimulation (algorithm B), *not*
+/// by the interner's pointer test. It carries:
+///
+/// - `shape` — the canonical code (α/capture-normalized; finite), the node label
+///   for equality and the layer-2 cache key;
+/// - `free_vars` — the ordered names of the capture slots in `shape`, resolved
+///   against `closure.env` at comparison time to get the capture children;
+/// - `closure` — lambda + captured environment, for evaluation.
+///
+/// `Hash`/`Eq` are **pointer identity** so the interner treats functions (and any
+/// structure transitively containing one) as distinct allocations; value equality
+/// goes through algorithm B instead.
 #[derive(Clone)]
 pub struct FnValue {
+    shape: Rc<Lambda>,
+    free_vars: Rc<Vec<String>>,
     closure: Rc<Closure>,
-    key: FnKey,
 }
 
 impl FnValue {
-    pub fn new(closure: Closure, key: FnKey) -> FnValue {
-        FnValue { closure: Rc::new(closure), key }
+    pub fn new(shape: Lambda, free_vars: Vec<String>, closure: Closure) -> FnValue {
+        FnValue { shape: Rc::new(shape), free_vars: Rc::new(free_vars), closure: Rc::new(closure) }
+    }
+
+    /// The canonical code (shape) — the function's node label for equality.
+    pub fn shape(&self) -> &Lambda {
+        &self.shape
+    }
+
+    /// The ordered capture-slot names (`shape`'s `@cap`i corresponds to
+    /// `free_vars[i]`).
+    pub fn free_vars(&self) -> &[String] {
+        &self.free_vars
     }
 
     pub fn closure(&self) -> &Closure {
@@ -146,24 +158,27 @@ impl FnValue {
     pub fn closure_rc(&self) -> Rc<Closure> {
         self.closure.clone()
     }
+
+    fn ptr(&self) -> *const Closure {
+        Rc::as_ptr(&self.closure)
+    }
 }
 
 impl PartialEq for FnValue {
     fn eq(&self, other: &FnValue) -> bool {
-        self.key == other.key
+        std::ptr::eq(self.ptr(), other.ptr())
     }
 }
 impl Eq for FnValue {}
 
 impl Hash for FnValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.key.hash(state);
+        (self.ptr() as *const ()).hash(state);
     }
 }
 
 impl std::fmt::Debug for FnValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Do not recurse into the captured environment.
         write!(f, "<function>")
     }
 }

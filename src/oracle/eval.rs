@@ -177,17 +177,11 @@ impl<'a> Oracle<'a> {
     }
 
     fn make_closure(&mut self, lambda: &Lambda, env: &Env) -> ValueRef {
-        // The identity key: the canonical form if every free variable resolves
-        // now, else a unique opaque id (the deferred μ case — see canon.rs).
-        let key = match canon::canonicalize(lambda, env) {
-            Some(canonical) => FnKey::Canonical(canonical),
-            None => {
-                self.opaque_counter += 1;
-                FnKey::Opaque(self.opaque_counter)
-            }
-        };
+        // Compute the canonical shape (α + capture slots); captures are resolved
+        // lazily at comparison time (algorithm B). Closures are plain allocations.
+        let shape = canon::canonicalize(lambda);
         let closure = Closure { lambda: lambda.clone(), env: env.clone() };
-        self.interner.function(FnValue::new(closure, key))
+        self.interner.function(FnValue::new(shape.code, shape.free_vars, closure))
     }
 
     // ── Primitive operations (§3) ────────────────────────────────────────────
@@ -226,11 +220,11 @@ impl<'a> Oracle<'a> {
                 return self.eval_compare(op, &vals[0], &vals[1]).map(Outcome::Produced);
             }
             PrimOp::Eq => {
-                let b = vals[0].ptr_eq(&vals[1]);
+                let b = super::equal::values_equal(&vals[0], &vals[1]);
                 self.interner.boolean(b)
             }
             PrimOp::Ne => {
-                let b = !vals[0].ptr_eq(&vals[1]);
+                let b = !super::equal::values_equal(&vals[0], &vals[1]);
                 self.interner.boolean(b)
             }
         };

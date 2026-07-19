@@ -516,12 +516,80 @@ fn same_function_value_is_equal_to_itself() {
     assert!(is_true(&eval("f = (n) => n == 0 ? 0 : f(n - 1)\nf == f")));
 }
 
-// ── Still deferred to the μ half of §5 (group-identity fork §7) ───────────────
+// ── μ-canonicalization: recursive value identity (algorithm B) ───────────────
 
 #[test]
-#[ignore = "needs μ-markers for self/recursive values (group-identity fork §7 / DECISIONS.md)"]
-fn group_identity_seed() {
-    // The §7 provisional-default pair: y and z should intern equal. Their bodies
-    // self-reference, so canonicalization currently bails to opaque (distinct).
+fn self_referential_values_intern_equal() {
+    // FE-04 / the §7 seed: `y = [() => y]` and `z = [() => z]` are equal — their
+    // rational trees coincide (bisimulation with the coinductive step).
     assert!(is_true(&eval("y = [() => y]\nz = [() => z]\ny == z")));
+}
+
+#[test]
+fn symmetric_group_collapses_to_self_loop() {
+    // Law 4 at the value level: the two-slot symmetric group has the same
+    // unfolding as the single self-loop, so `a == b == y`.
+    let src = "
+        a = [() => b]
+        b = [() => a]
+        y = [() => y]
+        [a == y, a == b, b == y]
+    ";
+    let t = eval(src);
+    let parts = t.as_tuple().unwrap();
+    assert!(parts.iter().all(|p| p.as_boolean() == Some(true)), "a == b == y");
+}
+
+#[test]
+fn mutual_recursion_equal_when_structurally_identical() {
+    // Two independent isEven/isOdd groups with identical bodies are equal
+    // (group bisimulation across captures).
+    let src = "
+        isEvenA = (n) => n == 0 ? true : isOddA(n - 1)
+        isOddA  = (n) => n == 0 ? false : isEvenA(n - 1)
+        isEvenB = (n) => n == 0 ? true : isOddB(n - 1)
+        isOddB  = (n) => n == 0 ? false : isEvenB(n - 1)
+        isEvenA == isEvenB
+    ";
+    assert!(is_true(&eval(src)));
+}
+
+#[test]
+fn mu08_iseven_isodd_distinct_bodies_are_unequal() {
+    // MU-08: distinct bodies (true vs false), two slots, no collapse.
+    let src = "
+        isEven = (n) => n == 0 ? true : isOdd(n - 1)
+        isOdd  = (n) => n == 0 ? false : isEven(n - 1)
+        isEven == isOdd
+    ";
+    assert_eq!(eval(src).as_boolean(), Some(false));
+}
+
+#[test]
+fn mu04_location_captures_are_nominal() {
+    // MU-04: same body over distinct @state locations ⇒ distinct; over the same
+    // location ⇒ equal (the fork-13 split rule; locations never merge).
+    let src = "
+        @state p = 0
+        @state q = 0
+        fp  = () => p
+        fq  = () => q
+        fp2 = () => p
+        [fp == fq, fp == fp2]
+    ";
+    let t = eval(src);
+    let parts = t.as_tuple().unwrap();
+    assert_eq!(parts[0].as_boolean(), Some(false), "distinct locations distinct");
+    assert_eq!(parts[1].as_boolean(), Some(true), "same location equal");
+}
+
+#[test]
+fn recursive_self_function_equal_by_shape() {
+    // Two independent self-recursive functions with the same body are equal.
+    let src = "
+        f = (n) => n == 0 ? 0 : f(n - 1)
+        g = (n) => n == 0 ? 0 : g(n - 1)
+        f == g
+    ";
+    assert!(is_true(&eval(src)));
 }

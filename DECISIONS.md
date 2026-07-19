@@ -6,7 +6,51 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
-## 2026-07-19 — §5 canonical function identity (de-Bruijn half)
+## 2026-07-19 — μ-canonicalization: value identity via bisimulation (the spec landed)
+
+`next-mu-canonicalization-specification-v0-1.md` (new normative doc, author-
+provided), `src/oracle/{canon.rs,equal.rs}`, `src/value.rs`, `src/oracle/{mod.rs,
+eval.rs}`. **All ignored seeds now green — 144 tests, 0 ignored, clippy clean.**
+This closes the μ half deferred earlier and *re-architects* the previous entry.
+
+- **The ruling (author):** open-value identity = **shape**, via strict openness;
+  bisimulation collapse embraced; locations nominal (fork-13 split). The prior
+  three open questions are all answered by the spec.
+- **Architecture correction:** the previous "de-Bruijn half" interned functions by
+  a canonical *key with captures inlined*, bailing to opaque on recursion. The
+  spec's arrangement (interning amendment) is different and is what I now
+  implement:
+  - **Closures are plain allocations, never hash-consed** — `FnValue` has pointer
+    identity, so the interner treats functions (and structures containing them) as
+    distinct allocations.
+  - **Code shape is canonicalized (algorithm A, α + capture-slot layer, `canon.rs`):**
+    bound vars → positional `$k`, free vars → capture slots `@cap`i (names kept in
+    `free_vars`, resolved lazily). Captures are *not* inlined; the shape is finite,
+    so shape identity is structural.
+  - **Runtime `==` is algorithm B (`equal.rs`):** bisimulation over value graphs
+    with a visited-pair set; a revisited pair is assumed equal (the coinductive
+    step). Data `==` stays a pointer test (fast path); only function-containing
+    comparisons walk. Locations compare nominally (same slot ⇒ equal); the
+    open-value edge (§4C) compares an unresolved capture by name.
+- **Seeds flipped:** `y=[()=>y] == z=[()=>z]` (self-ref), `a==b==y` (law-4 collapse
+  at the value level, via the memo — no code μ-minimization needed for layer 1),
+  mutual-recursion group equality, MU-04 (location nominality), MU-08
+  (isEven/isOdd distinct), plus α-equivalence and capture-by-value. MU-07 ships:
+  algorithm B is cross-checked against a bounded naive unfolding.
+- **Deferred (layer 2 / analyzer, gated):** algorithm A's *full* μ-binder
+  minimization — SCC grouping, Paige–Tarjan partition refinement, laws 1–5,
+  canonical slot order — produces the interned canonical *code* used by C§13.4
+  cache keys and recursive contracts (C§9). Layer-1 `==` does not need it (B's
+  coinductive bisimulation already collapses symmetric recursion), so it lands
+  with the contract phase. Also deferred: **polynomial NF** over arithmetic bodies
+  (the frozen set's H-05 item, `x => x + x == x => 2 * x`) — a distinct shape
+  normalization, not yet implemented.
+- **Frozen `==` set (spec §6) noted:** amending it is a semantics-version event.
+- **`// [ask-author]`:** none.
+
+---
+
+## 2026-07-19 — §5 canonical function identity (de-Bruijn half) [superseded by the μ-canonicalization entry above]
 
 `src/oracle/canon.rs` (new), `src/value.rs`, `src/oracle/` (mod.rs, eval.rs).
 Kernel AST §5. 5 new identity seeds green; the `((x)=>x)==((y)=>y)` seed

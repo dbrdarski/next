@@ -23,15 +23,17 @@ use crate::ast::*;
 use crate::env::{Binding, Env, Scope, SlotId};
 use crate::interner::Interner;
 use crate::rational::Rational;
-use crate::value::{Closure, FnKey, FnValue, IndetForm, ValueData, ValueRef};
+use crate::value::{Closure, FnValue, IndetForm, ValueData, ValueRef};
 
 mod canon;
+mod equal;
 mod eval;
 pub mod harness;
 mod mtch;
 #[cfg(test)]
 mod tests;
 
+pub use equal::values_equal;
 pub use eval::{run_program_commits, run_program_value};
 pub use harness::{HostIo, RunError, run_source, run_with_io};
 
@@ -119,14 +121,11 @@ pub struct Oracle<'a> {
     interner: &'a mut Interner,
     store: Store,
     pending: Option<HashMap<SlotId, ValueRef>>,
-    /// Monotonic counter for opaque (non-canonicalizable) function identities.
-    /// Reset per oracle so a program and its normalization assign matching ids.
-    opaque_counter: u64,
 }
 
 impl<'a> Oracle<'a> {
     pub fn new(interner: &'a mut Interner) -> Oracle<'a> {
-        Oracle { interner, store: Store::default(), pending: None, opaque_counter: 0 }
+        Oracle { interner, store: Store::default(), pending: None }
     }
 
     /// Read a slot with **read-your-writes** (B5): the staged value if the
