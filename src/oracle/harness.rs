@@ -19,6 +19,9 @@ use crate::value::{NativeFn, NativeRef, ValueRef};
 
 use super::{Oracle, Trap};
 use crate::ast::ActKind;
+use crate::desugar::DesugarError;
+use crate::lex::LexError;
+use crate::parse::ParseError;
 
 /// What the harness captured from a run.
 #[derive(Default, Debug)]
@@ -93,7 +96,9 @@ fn install_host_effects(interner: &mut Interner, env: &Env, io: &Rc<RefCell<Host
 }
 
 /// Lex → parse → desugar → run an entry program with host effects installed,
-/// returning the final value and the captured IO.
+/// returning the final value and the captured IO. Panics on a front-end error
+/// (for tests, where the source is known-good); use [`run_source`] for a
+/// non-panicking driver.
 pub fn run_with_io(src: &str) -> Result<(ValueRef, HostIo), Trap> {
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
@@ -108,6 +113,46 @@ pub fn run_with_io(src: &str) -> Result<(ValueRef, HostIo), Trap> {
     let value = oracle.run_module_in(&module, &env)?;
     // The host-effect closures still hold clones of `io`, so take the contents
     // out of the shared cell rather than unwrapping the `Rc`.
+    let captured = std::mem::take(&mut *io.borrow_mut());
+    Ok((value, captured))
+}
+
+/// A failure at any stage of running a program (for the CLI / user-facing use).
+#[derive(Debug)]
+pub enum RunError {
+    Lex(LexError),
+    Parse(ParseError),
+    Desugar(DesugarError),
+    Trap(Trap),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunError::Lex(e) => write!(f, "lex error (line {}): {}", e.line, e.message),
+            RunError::Parse(e) => write!(f, "parse error (line {}): {}", e.line, e.message),
+            RunError::Desugar(e) => write!(f, "desugar error: {}", e.message),
+            RunError::Trap(t) => write!(f, "trap [{:?}]: {}", t.class, t.message),
+        }
+    }
+}
+
+/// The non-panicking driver: run a program, surfacing every stage's error.
+pub fn run_source(src: &str) -> Result<(ValueRef, HostIo), RunError> {
+    let toks = lex(src).map_err(RunError::Lex)?;
+    let sprogram = parse_program(toks).map_err(RunError::Parse)?;
+    let mut interner = Interner::new();
+    let module = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .map_err(RunError::Desugar)?;
+
+    let io = Rc::new(RefCell::new(HostIo::default()));
+    let env = Scope::root();
+    install_host_effects(&mut interner, &env, &io);
+
+    let value = Oracle::new(&mut interner)
+        .run_module_in(&module, &env)
+        .map_err(RunError::Trap)?;
     let captured = std::mem::take(&mut *io.borrow_mut());
     Ok((value, captured))
 }

@@ -1,0 +1,9 @@
+// Pattern matching with the `::` control node: literal, guarded, and wildcard
+// arms. `~` and `!` are absent — every branch is explicit.
+classify = (n) => n :: {
+    0 => "zero"
+    n when n > 0 => "positive"
+    _ => "negative"
+}
+
+[classify(-5), classify(0), classify(7)]

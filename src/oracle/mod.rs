@@ -32,7 +32,7 @@ mod mtch;
 mod tests;
 
 pub use eval::{run_program_commits, run_program_value};
-pub use harness::{HostIo, run_with_io};
+pub use harness::{HostIo, RunError, run_source, run_with_io};
 
 /// An oracle trap: a non-value, non-catchable halt (§6). Its class is the
 /// analyzer obligation it mirrors.

@@ -1,0 +1,16 @@
+// Errors are values, not exceptions. A failed host effect returns a Failure
+// record that flows as plain data; `then`/`catch` are ordinary NEXT functions
+// (defined here) that route around it — no try/catch in the language.
+then  = (f) => (r) => r :: {
+    Failure => r
+    _ => f(r)
+}
+
+catch = (h) => (r) => r :: {
+    Failure => h(r)
+    _ => r
+}
+
+readFile("missing.txt")
+  |> then((contents) => contents)
+  |> catch((err) => "used a default")

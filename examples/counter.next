@@ -1,0 +1,10 @@
+// Mutable state through a mutator. Each inc() begins/joins a transaction and
+// publishes at completion; the final read sees the committed value.
+@state count = 0
+
+@mutate inc = () => { count := count + 1 }
+
+inc()
+inc()
+inc()
+count
