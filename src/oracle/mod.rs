@@ -131,9 +131,7 @@ impl<'a> Oracle<'a> {
     /// Read a slot with **read-your-writes** (B5): the staged value if the
     /// current transaction has one, else the committed value.
     fn read_slot(&self, slot: SlotId) -> ValueRef {
-        if let Some(pending) = &self.pending
-            && let Some(v) = pending.get(&slot)
-        {
+        if let Some(v) = self.pending.as_ref().and_then(|p| p.get(&slot)) {
             return v.clone();
         }
         self.store.read(slot)

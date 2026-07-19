@@ -199,9 +199,9 @@ impl<'a> Oracle<'a> {
             op,
             PrimOp::Add | PrimOp::Sub | PrimOp::Mul | PrimOp::Div | PrimOp::Rem | PrimOp::Pow | PrimOp::Neg
         );
-        if is_arith
-            && let Some(ind) = vals.iter().find(|v| v.as_indeterminate().is_some())
-        {
+        let arith_indeterminate =
+            is_arith.then(|| vals.iter().find(|v| v.as_indeterminate().is_some())).flatten();
+        if let Some(ind) = arith_indeterminate {
             return Ok(Outcome::Produced(ind.clone()));
         }
 
@@ -429,9 +429,7 @@ impl<'a> Oracle<'a> {
             };
         }
         let key: Vec<u16> = name.encode_utf16().collect();
-        if let Some(entries) = recv.as_record()
-            && let Some(entry) = entries.iter().find(|e| e.key == key)
-        {
+        if let Some(entry) = recv.as_record().and_then(|entries| entries.iter().find(|e| e.key == key)) {
             return Ok(Outcome::Produced(entry.value.clone()));
         }
         if total {
