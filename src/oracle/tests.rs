@@ -480,19 +480,48 @@ fn then_catch_are_next_library_code() {
     assert_eq!(t[1].as_number().unwrap(), &Rational::from(99), "failure recovered by catch");
 }
 
-// ── Deferred to §5: canonical function identity (see DECISIONS.md) ────────────
+// ── Canonical function identity (§5, de-Bruijn half) ─────────────────────────
 
 #[test]
-#[ignore = "needs §5 canonical function identity (approximate identity is conservative until then)"]
-fn structural_function_identity() {
-    // Same-meaning, different-shape functions should compare equal under the
-    // canonical-body key §5 provides. Today's pointer identity says false.
+fn alpha_equivalent_functions_are_equal() {
+    // Same shape, different bound-variable names ⇒ equal (α-equivalence).
     assert!(is_true(&eval("((x) => x) == ((y) => y)")));
+    assert!(is_true(&eval("((a, b) => a + b) == ((p, q) => p + q)")));
+    // Nested lambdas too.
+    assert!(is_true(&eval("((x) => (y) => x + y) == ((a) => (b) => a + b)")));
 }
 
 #[test]
-#[ignore = "needs §5 canonical function identity + μ-markers (group-identity fork §7)"]
+fn functions_with_equal_captures_are_equal() {
+    // Free variables are captured by value: same captured value ⇒ equal.
+    assert!(is_true(&eval("k = 5\n((x) => x + k) == ((y) => y + k)")));
+}
+
+#[test]
+fn functions_differing_in_body_or_capture_differ() {
+    assert_eq!(eval("((x) => x + 1) == ((x) => x + 2)").as_boolean(), Some(false));
+    // Different captured values ⇒ different functions.
+    assert_eq!(eval("a = 1\nb = 2\n((x) => x + a) == ((y) => y + b)").as_boolean(), Some(false));
+}
+
+#[test]
+fn function_identity_propagates_through_structures() {
+    // A tuple/record holding α-equivalent functions is equal.
+    assert!(is_true(&eval("[(x) => x] == [(y) => y]")));
+}
+
+#[test]
+fn same_function_value_is_equal_to_itself() {
+    // Reading one binding twice is the same value (incl. recursive/opaque ones).
+    assert!(is_true(&eval("f = (n) => n == 0 ? 0 : f(n - 1)\nf == f")));
+}
+
+// ── Still deferred to the μ half of §5 (group-identity fork §7) ───────────────
+
+#[test]
+#[ignore = "needs μ-markers for self/recursive values (group-identity fork §7 / DECISIONS.md)"]
 fn group_identity_seed() {
-    // The §7 provisional-default pair: y and z should intern equal.
+    // The §7 provisional-default pair: y and z should intern equal. Their bodies
+    // self-reference, so canonicalization currently bails to opaque (distinct).
     assert!(is_true(&eval("y = [() => y]\nz = [() => z]\ny == z")));
 }

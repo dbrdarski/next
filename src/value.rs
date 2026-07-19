@@ -84,10 +84,10 @@ pub enum ValueData {
     /// `{b:2,a:1}` are the same value.
     Record(Vec<RecordEntry>),
     /// A function value: `(body, captured environment, actKind)` (semantics §1).
-    /// Interned by **closure pointer identity** for now — a conservative
-    /// approximation of the canonical-shape identity §5 will provide (see
-    /// DECISIONS.md; the `y=[()=>y]` seed is `#[ignore]`d until then).
-    Function(ClosureRef),
+    /// Identity is the canonical key in [`FnValue`] (§5): α-equivalent functions
+    /// with equal captures are equal; recursive closures fall back to opaque
+    /// distinctness (the deferred μ case — DECISIONS.md).
+    Function(FnValue),
     /// A total-division / indeterminate arithmetic result (semantics §3). A plain
     /// interned value, not a trap.
     Indeterminate(IndetForm),
@@ -107,48 +107,64 @@ pub struct RecordEntry {
 
 /// A closure: a lambda body plus the environment it was constructed in
 /// (semantics §1). The environment is captured by reference, so late binding and
-/// mutual recursion resolve at call time (B4).
+/// mutual recursion resolve at call time (B4). Used for **evaluation**.
 #[derive(Debug)]
 pub struct Closure {
     pub lambda: Lambda,
     pub env: Env,
 }
 
-/// A pointer-identity handle to a [`Closure`]. Function-value identity is closure
-/// pointer identity for now (the conservative, §5-deferred approximation): two
-/// closures are equal iff they are the *same* allocation. This can only fail to
-/// merge equal functions, never merge distinct ones (see DECISIONS.md).
-#[derive(Clone)]
-pub struct ClosureRef(Rc<Closure>);
+/// The **identity** key of a function value (§5). A closure whose free variables
+/// all resolve at construction gets a `Canonical` key: its body α-normalized
+/// (bound variables renamed positionally) with captured values inlined as
+/// constants, so structurally-identical functions with equal captures are equal.
+/// A closure with an unresolvable free variable (recursion / forward reference —
+/// the deferred μ case) gets a unique `Opaque` key, falling back to distinctness.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum FnKey {
+    Canonical(Lambda),
+    Opaque(u64),
+}
 
-impl ClosureRef {
-    pub fn new(closure: Closure) -> ClosureRef {
-        ClosureRef(Rc::new(closure))
+/// A function value: the closure (for evaluation) plus its identity key (for
+/// `==` / interning). Equality and hashing are **by key only**.
+#[derive(Clone)]
+pub struct FnValue {
+    closure: Rc<Closure>,
+    key: FnKey,
+}
+
+impl FnValue {
+    pub fn new(closure: Closure, key: FnKey) -> FnValue {
+        FnValue { closure: Rc::new(closure), key }
     }
 
     pub fn closure(&self) -> &Closure {
-        &self.0
+        &self.closure
+    }
+
+    pub fn closure_rc(&self) -> Rc<Closure> {
+        self.closure.clone()
     }
 }
 
-impl PartialEq for ClosureRef {
-    fn eq(&self, other: &ClosureRef) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+impl PartialEq for FnValue {
+    fn eq(&self, other: &FnValue) -> bool {
+        self.key == other.key
     }
 }
-impl Eq for ClosureRef {}
+impl Eq for FnValue {}
 
-impl Hash for ClosureRef {
+impl Hash for FnValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (Rc::as_ptr(&self.0) as *const ()).hash(state);
+        self.key.hash(state);
     }
 }
 
-impl std::fmt::Debug for ClosureRef {
+impl std::fmt::Debug for FnValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Do not recurse into the captured environment (it may transitively hold
-        // this very function).
-        write!(f, "<function {:?}>", Rc::as_ptr(&self.0))
+        // Do not recurse into the captured environment.
+        write!(f, "<function>")
     }
 }
 
@@ -262,9 +278,11 @@ impl ValueRef {
         }
     }
 
-    pub fn as_closure(&self) -> Option<&ClosureRef> {
+    /// The closure to evaluate when this function value is applied. Returns a
+    /// cloned `Rc<Closure>` so callers can borrow `self` freely afterward.
+    pub fn as_closure(&self) -> Option<Rc<Closure>> {
         match self.data() {
-            ValueData::Function(c) => Some(c),
+            ValueData::Function(f) => Some(f.closure_rc()),
             _ => None,
         }
     }

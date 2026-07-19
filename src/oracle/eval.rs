@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use super::canon;
 use super::*;
 
 /// Convenience: lex → parse → desugar → evaluate a whole program, returning the
@@ -176,8 +177,17 @@ impl<'a> Oracle<'a> {
     }
 
     fn make_closure(&mut self, lambda: &Lambda, env: &Env) -> ValueRef {
+        // The identity key: the canonical form if every free variable resolves
+        // now, else a unique opaque id (the deferred μ case — see canon.rs).
+        let key = match canon::canonicalize(lambda, env) {
+            Some(canonical) => FnKey::Canonical(canonical),
+            None => {
+                self.opaque_counter += 1;
+                FnKey::Opaque(self.opaque_counter)
+            }
+        };
         let closure = Closure { lambda: lambda.clone(), env: env.clone() };
-        self.interner.function(ClosureRef::new(closure))
+        self.interner.function(FnValue::new(closure, key))
     }
 
     // ── Primitive operations (§3) ────────────────────────────────────────────
@@ -600,11 +610,11 @@ impl<'a> Oracle<'a> {
         }
 
         let closure = match callee_v.as_closure() {
-            Some(c) => c.clone(),
+            Some(c) => c,
             None => return Self::trap(TrapClass::OperationSafety, "callee is not a function"),
         };
 
-        let callee_kind = closure.closure().lambda.act_kind;
+        let callee_kind = closure.lambda.act_kind;
         if !world.admits(callee_kind) {
             return Self::trap(
                 TrapClass::WorldAdmission,
@@ -615,14 +625,14 @@ impl<'a> Oracle<'a> {
         // Bind the complete argument tuple against the parameter pattern (the
         // arity model); parameter binding is pure and happens before any staging.
         let arg_tuple = self.interner.tuple(arg_vals);
-        let call_env = Scope::child(&closure.closure().env);
-        if !self.match_pattern(&closure.closure().lambda.params, &arg_tuple, &call_env)? {
+        let call_env = Scope::child(&closure.env);
+        if !self.match_pattern(&closure.lambda.params, &arg_tuple, &call_env)? {
             return Self::trap(
                 TrapClass::ArgumentObligation,
                 "arguments do not match the parameter pattern",
             );
         }
-        let body = closure.closure().lambda.body.clone();
+        let body = closure.lambda.body.clone();
 
         match callee_kind {
             ActKind::Pure => self.eval(&body, &call_env, World::Pure),

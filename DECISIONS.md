@@ -6,6 +6,43 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-19 — §5 canonical function identity (de-Bruijn half)
+
+`src/oracle/canon.rs` (new), `src/value.rs`, `src/oracle/` (mod.rs, eval.rs).
+Kernel AST §5. 5 new identity seeds green; the `((x)=>x)==((y)=>y)` seed
+un-ignored; full suite 137 (+1 ignored); clippy clean. First slice of the §5 work
+we deferred (with the author's sign-off).
+
+- **Delivered:** function-value identity is now **canonical**, not pointer-based.
+  `make_closure` computes a `FnKey`:
+  - `Canonical(Lambda)` — the body with bound variables α-renamed to positional
+    canonical names (`$0`, `$1`, …) and free variables replaced by the constant
+    they captured (an immutable value) or a location marker (a Box slot —
+    location identity participates in function identity, B1). Structurally-
+    identical functions with equal captures now compare `==`.
+  - `Opaque(u64)` — when a free variable is not yet resolvable (self/mutual
+    recursion under initialization: the μ case), canonicalization **bails** and
+    the closure gets a unique id (distinctness). Always sound: it can only fail to
+    merge, never wrongly merge.
+- **Value layer:** `ClosureRef` → `FnValue { closure, key }`; `==`/hash are by
+  `key` only. Evaluation still walks the original body against the captured env
+  (unchanged eval path), so late binding / mutual recursion are unaffected.
+- **Seeds now green:** α-equivalence (incl. multi-param and nested lambdas),
+  capture-by-value equality and inequality, identity through structures
+  (`[(x)=>x] == [(y)=>y]`), and self-equality of recursive (opaque) functions.
+- **Still deferred (μ half):** the §7 group-identity pair (`y = [() => y]` /
+  `z = [() => z]`) — their bodies self-reference, so they canonicalize to opaque
+  and stay `#[ignore]`d. Closing it needs μ-markers (rational-tree comparison),
+  which the compendium marks `[owed]`.
+- **Chosen — per-oracle opaque counter:** reset to 0 per `Oracle`, so a program
+  and its normalization assign matching opaque ids (keeps the `eval ∘ normalize`
+  harness consistent for recursive-function-valued programs). Correct because
+  canonical dedup only fires on equal captures, and the harness compares
+  structurally-equivalent programs.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-19 — Build-order step 4: normalization + property harness — **BUILD ORDER COMPLETE (the gate)**
 
 `src/normalize/` (mod.rs, tests.rs). Kernel AST §5 + Part I harness laws. 5
