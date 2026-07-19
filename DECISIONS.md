@@ -6,6 +6,42 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-19 — Polynomial NF over arithmetic bodies (frozen ==-set, H-05)
+
+`src/oracle/poly.rs` (new), `src/oracle/{canon.rs,eval.rs,mod.rs}`, `src/value.rs`.
+μ-Canonicalization Spec §6. 3 new poly seeds; full suite 147, 0 ignored, clippy
+clean. Closes the last observable gap in the frozen `==`-determining set.
+
+- **Delivered:** shape canonicalization now puts arithmetic subterms into
+  polynomial normal form, so algebraically-equal bodies share a shape and compare
+  `==`: `x+x == 2*x` (H-05), constant folding, commutativity, `x-x == 0`,
+  distribution, `x*x == x**2`, multivariate commute.
+- **Representation:** a polynomial is `monomial → rational coefficient`; a monomial
+  is `atom-key → exponent`. Atoms (variables) are non-arithmetic subterms,
+  serialized canonically (so equal atoms unify) and normalized recursively;
+  handled operators are `+ - *`, unary `-`, division by a **nonzero constant**, and
+  a **nonnegative integer constant** power. Reconstruction emits a deterministic
+  canonical `Expr` (monomials and factors in serialized order).
+- **Soundness — only total exact-rational identities are used:** `x/x`, `x % y`,
+  `x/0`, and variable / negative / non-integer powers are **left as atoms**, never
+  simplified — so a partial op is never equated with a total one. Verified: `x/x`
+  ≠ `1`, `x % x` ≠ `0`, `x` ≠ `x+1` all stay distinct; and NF-equal functions are
+  shown to compute the same value. Evaluation is untouched (shapes drive identity
+  only; closures run their original body).
+- **Known incompleteness (conservative, flagged):** poly-NF can *eliminate a
+  capture* (e.g. `(a) => k - k` ⇒ `0`), leaving a vacuous entry in `free_vars`
+  that `==` still compares — so two such constant functions with different `k`
+  compare unequal (a sound false negative). Closing it needs a capture
+  prune/renumber pass after NF (analogous to μ-law 1's "no vacuous binder"); left
+  as a follow-up since real code rarely hits it.
+- **Frozen `==`-set status:** positional α-conversion ✓, μ-laws' observable effect
+  via algorithm B ✓, polynomial NF ✓ — the `==`-determining set is now
+  observationally complete (modulo the capture edge above). Amending the set is a
+  semantics-version event (spec §6).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-19 — μ-canonicalization: value identity via bisimulation (the spec landed)
 
 `next-mu-canonicalization-specification-v0-1.md` (new normative doc, author-

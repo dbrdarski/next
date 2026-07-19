@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
+use crate::interner::Interner;
 
 /// A canonical function shape: the α/capture-normalized code and the ordered
 /// names of its free variables (capture slots).
@@ -35,7 +36,10 @@ const CAP: &str = "@cap";
 
 /// Canonicalize a lambda into its shape. Always succeeds: free variables become
 /// capture slots regardless of whether they are yet bound (resolution is B's job).
-pub(super) fn canonicalize(lambda: &Lambda) -> Shape {
+/// After α/capture normalization, arithmetic subterms are put into polynomial
+/// normal form (the frozen `==`-set item H-05) — hence the interner (for the
+/// coefficient/constant values it produces).
+pub(super) fn canonicalize(lambda: &Lambda, interner: &mut Interner) -> Shape {
     let mut c = Canon {
         scopes: Vec::new(),
         counter: 0,
@@ -43,6 +47,7 @@ pub(super) fn canonicalize(lambda: &Lambda) -> Shape {
         free_index: HashMap::new(),
     };
     let code = c.lambda(lambda);
+    let code = super::poly::normalize_lambda(&code, interner);
     Shape { code, free_vars: c.free }
 }
 

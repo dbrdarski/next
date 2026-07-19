@@ -47,6 +47,12 @@ impl ValueRef {
     fn as_ptr(&self) -> *const ValueData {
         Rc::as_ptr(&self.0)
     }
+
+    /// The interned allocation address, as a stable within-process id (used for
+    /// canonical serialization of constants — equal interned values share it).
+    pub fn addr(&self) -> usize {
+        self.as_ptr() as usize
+    }
 }
 
 // Pointer identity is the whole game: two `ValueRef`s are equal iff they point at

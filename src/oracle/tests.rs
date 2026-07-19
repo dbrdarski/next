@@ -593,3 +593,41 @@ fn recursive_self_function_equal_by_shape() {
     ";
     assert!(is_true(&eval(src)));
 }
+
+// ── Polynomial NF over arithmetic bodies (frozen ==-set, H-05) ───────────────
+
+#[test]
+fn h05_polynomial_normal_form_equalities() {
+    assert!(is_true(&eval("((x) => x + x) == ((x) => 2 * x)")), "x+x == 2x");
+    assert!(is_true(&eval("((x) => x + 1 + 1) == ((x) => x + 2)")), "constant fold");
+    assert!(is_true(&eval("((x) => x * 2) == ((x) => 2 * x)")), "commutativity");
+    assert!(is_true(&eval("((x) => x - x) == ((x) => 0)")), "cancellation");
+    assert!(is_true(&eval("((x) => (x + 1) * 2) == ((x) => 2 * x + 2)")), "distribution");
+    assert!(is_true(&eval("((x, y) => x + y) == ((a, b) => b + a)")), "multivariate commute");
+    assert!(is_true(&eval("((x) => x * x) == ((x) => x ** 2)")), "power");
+}
+
+#[test]
+fn polynomial_nf_keeps_genuinely_different_functions_apart() {
+    assert_eq!(eval("((x) => x) == ((x) => x + 1)").as_boolean(), Some(false));
+    // x/x is NOT 1 (it is Indeterminate at x = 0) — a partial op is never equated
+    // with a total one, so the shapes stay distinct.
+    assert_eq!(eval("((x) => x / x) == ((x) => 1)").as_boolean(), Some(false));
+    // x % y is not polynomial — left as an atom, not simplified.
+    assert_eq!(eval("((x) => x % x) == ((x) => 0)").as_boolean(), Some(false));
+}
+
+#[test]
+fn polynomial_nf_equal_functions_compute_the_same() {
+    // Soundness sanity: the functions NF equates really are extensionally equal.
+    let src = "
+        f = (x) => x + x
+        g = (x) => 2 * x
+        [f == g, f(5) == g(5), f(5)]
+    ";
+    let t = eval(src);
+    let parts = t.as_tuple().unwrap();
+    assert_eq!(parts[0].as_boolean(), Some(true));
+    assert_eq!(parts[1].as_boolean(), Some(true));
+    assert_eq!(parts[2].as_number().unwrap(), &Rational::from(10));
+}

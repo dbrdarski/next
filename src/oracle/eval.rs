@@ -177,9 +177,10 @@ impl<'a> Oracle<'a> {
     }
 
     fn make_closure(&mut self, lambda: &Lambda, env: &Env) -> ValueRef {
-        // Compute the canonical shape (α + capture slots); captures are resolved
-        // lazily at comparison time (algorithm B). Closures are plain allocations.
-        let shape = canon::canonicalize(lambda);
+        // Compute the canonical shape (α + capture slots + polynomial NF);
+        // captures are resolved lazily at comparison time (algorithm B). Closures
+        // are plain allocations.
+        let shape = canon::canonicalize(lambda, self.interner);
         let closure = Closure { lambda: lambda.clone(), env: env.clone() };
         self.interner.function(FnValue::new(shape.code, shape.free_vars, closure))
     }
