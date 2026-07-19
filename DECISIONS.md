@@ -6,6 +6,43 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-19 — Contracts C.1: the algebra + denotational membership (Part C begins)
+
+`src/contract/` (mod.rs, tests.rs). Compendium C§4 (contract algebra) + C§16
+(denotational kernel). 10 membership seeds; full suite 163, 0 ignored, clippy
+clean. **First analysis-layer code** — legitimate now the oracle + harness are
+green (hard rule 1).
+
+- **Delivered:** the `Contract` enum (C§4): `Top`/`Bottom`, `Kind`, `Equals`,
+  `Range`, `Greater`/`GreaterEq`/`Less`/`LessEq`, `Mod{n,r}`, `Geo{b,r}`,
+  `Union`/`Intersection`/`Difference`, `Record`/`HasField`/`Tuple`,
+  `Indeterminate`. Plus `Contract::contains(v)` — denotational membership
+  (`v ∈ ⟦C⟧`, C§16), decidable for every constructor, brute-tested against the
+  oracle's interned values.
+- **Notes on specific rules:**
+  - `Equals` uses the oracle's `values_equal` (bisimulation), so a fresh
+    structurally-equal value satisfies it — not pointer identity.
+  - `Mod{n,r}` denotes integers `x ≡ r (mod n)` (rational moduli clear to the
+    integer lattice, C§3.1); non-integers are excluded.
+  - `Geo{b,r}` (`r>1`, `b≠0`) is decided by dividing out `r` — terminates since
+    `r>1` shrinks the quotient.
+  - `NotEquals` is **not** a constructor — it is `Difference(Top, Equals(v))`
+    (C§4), and tests exercise it that way.
+- **`// [ask-author]` — one judgment call:** **`Record(fields)` field-openness.**
+  C§4 lists `Record(fields)` and `HasField(key)` without stating whether a
+  `Record` contract is *open* (the listed fields must be present and satisfy their
+  contracts; extra fields allowed) or *exact* (no other fields). I implemented it
+  **open** (HasField-style), which is the conservative reading and composes with
+  `HasField`; the pattern layer's `exact`/rest distinction (E9) suggests an
+  `exact` record contract may also be wanted. Flagging for confirmation; changing
+  it is a one-line predicate tweak.
+- **Deferred:** named recursive contracts (C§9 `[owed]`) — no constructor yet;
+  they need the certified-unfolding doctrine + μ-binder contract canonicalization.
+- **Next (C.2):** three-valued subcontract `A ⊑ B` (proven/refuted/unproven),
+  brute-tested against membership.
+
+---
+
 ## 2026-07-19 — Algorithm A: eager code canonicalization of binding groups (μ spec §4A)
 
 `src/oracle/mu.rs` + `src/oracle/mu/tests.rs` (new). μ-Canonicalization Spec

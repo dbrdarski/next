@@ -5,6 +5,7 @@
 //! This crate is currently at the value layer.
 
 pub mod ast;
+pub mod contract;
 pub mod desugar;
 pub mod env;
 pub mod interner;
