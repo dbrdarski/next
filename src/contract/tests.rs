@@ -330,6 +330,51 @@ fn subcontract_soundness_sweep() {
     }
 }
 
+#[test]
+fn disjoint_soundness() {
+    // Every provably-disjoint pair must share no value in a diverse pool.
+    let mut i = Interner::new();
+    let contracts = vec![
+        Contract::Kind(Kind::Number),
+        Contract::Kind(Kind::String),
+        Contract::Kind(Kind::Null),
+        Contract::Kind(Kind::Tuple),
+        Contract::Kind(Kind::Record),
+        Contract::Range(r(0), r(10)),
+        Contract::HasField("a".into()),
+        Contract::Record(vec![("a".into(), Contract::Kind(Kind::Number))]),
+        Contract::Record(vec![("b".into(), Contract::Kind(Kind::Number))]),
+        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+        Contract::Equals(i.integer(5)),
+    ];
+    let mut pool: Vec<ValueRef> = vec![
+        i.integer(5),
+        i.number(rat(1, 2)),
+        i.string("x"),
+        i.boolean(true),
+        i.null(),
+    ];
+    let a1 = i.integer(1);
+    pool.push(i.tuple(vec![a1]));
+    let av = i.integer(2);
+    pool.push(i.record_str(vec![("a", av)]));
+    let bv = i.integer(3);
+    pool.push(i.record_str(vec![("b", bv)]));
+
+    for a in &contracts {
+        for b in &contracts {
+            if crate::contract::disjoint(a, b) {
+                for v in &pool {
+                    assert!(
+                        !(a.contains(v) && b.contains(v)),
+                        "UNSOUND disjoint: {a:?} ⌢ {b:?} both contain {v:?}",
+                    );
+                }
+            }
+        }
+    }
+}
+
 // ── Operation rules (C§7) ─────────────────────────────────────────────────────
 
 use crate::ast::PrimOp;

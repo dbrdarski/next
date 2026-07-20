@@ -26,6 +26,12 @@ pub use operation::{OpResult, OpSafety, analyze_operation};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};
 pub use subcontract::{Verdict, subcontract};
 
+/// Whether two contracts are provably disjoint (`⟦a⟧ ∩ ⟦b⟧ = ∅`) — sound, so
+/// `true` only when provable. Used by the analyzer's access demands (E6).
+pub fn disjoint(a: &Contract, b: &Contract) -> bool {
+    subcontract::disjoint(a, b)
+}
+
 #[cfg(test)]
 mod tests;
 

@@ -4,9 +4,16 @@
 //! soundness direction (`accepted ⇒ oracle never traps` over sampled inputs).
 
 use super::*;
-use crate::ast::{BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
+use crate::ast::{AccessForm, BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
 use crate::oracle::eval_expr;
 use crate::rational::Rational;
+
+fn afield(target: Expr, field: &str, total: bool) -> Expr {
+    Expr::Access { target: Box::new(target), form: AccessForm::Field(field.into()), total }
+}
+fn aindex(target: Expr, idx: Expr, total: bool) -> Expr {
+    Expr::Access { target: Box::new(target), form: AccessForm::Index(Box::new(idx)), total }
+}
 
 fn konst(v: ValueRef) -> Expr {
     Expr::Const(v)
@@ -144,6 +151,22 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
     ]));
     let structure = Expr::TupleCons(vec![Element::Expr(n(i, 1)), Element::Expr(n(i, 2))]);
     c.push(Expr::Template(vec![TemplatePart::Interp(structure)])); // trap: unprintable
+
+    // Access (E6), closed → exact fold against the oracle.
+    let field_v = i.integer(7);
+    let rec = konst(i.record_str(vec![("a", field_v)]));
+    c.push(afield(rec.clone(), "a", false)); // present → 7
+    c.push(afield(rec.clone(), "b", false)); // trap: absent-field
+    c.push(afield(rec.clone(), "b", true)); // ?. → null (safe)
+    c.push(afield(konst(i.null()), "a", false)); // trap: null-receiver
+    c.push(afield(konst(i.null()), "a", true)); // ?. → null (safe)
+    let ten = i.integer(10);
+    let twenty = i.integer(20);
+    let tup = konst(i.tuple(vec![ten, twenty]));
+    c.push(aindex(tup.clone(), n(i, 0), false)); // in bounds → 10
+    c.push(aindex(tup.clone(), n(i, 5), false)); // trap: index-bounds
+    c.push(aindex(tup.clone(), n(i, 5), true)); // ?. → null (safe)
+    c.push(aindex(tup, n(i, -1), false)); // from-end → 20 (safe)
     c
 }
 
@@ -198,6 +221,44 @@ fn template_unknown_interpolation_warns_not_rejects() {
     assert!(a.accepted(), "unknown printability is a warning, not a rejection");
     assert_eq!(a.findings[0].severity, Severity::Warning);
     assert_eq!(a.findings[0].class, TrapClass::UnprintableInterpolation);
+}
+
+#[test]
+fn open_field_access_reasoning() {
+    let mut i = Interner::new();
+    let mut env = TypeEnv::new();
+    env.insert(
+        "r".into(),
+        Contract::Record(vec![("a".into(), Contract::Kind(Kind::Number))]),
+    );
+
+    // r.a where r : Record({a: Number}) — accepted, output is Number.
+    let a = analyze(&afield(name("r"), "a", false), &env, &mut i);
+    assert!(a.accepted());
+    assert_eq!(a.contract, Contract::Kind(Kind::Number));
+
+    // r.b (absent from an exact record) — rejected, absent-field.
+    let a = analyze(&afield(name("r"), "b", false), &env, &mut i);
+    assert!(!a.accepted());
+    assert_eq!(a.findings[0].class, TrapClass::AbsentField);
+
+    // null.a — rejected, null-receiver.
+    let mut nenv = TypeEnv::new();
+    nenv.insert("r".into(), Contract::Kind(Kind::Null));
+    let a = analyze(&afield(name("r"), "a", false), &nenv, &mut i);
+    assert!(!a.accepted());
+    assert_eq!(a.findings[0].class, TrapClass::NullReceiver);
+
+    // r?.b on an unknown receiver — total form never traps.
+    let mut tenv = TypeEnv::new();
+    tenv.insert("r".into(), Contract::Top);
+    let a = analyze(&afield(name("r"), "b", true), &tenv, &mut i);
+    assert!(a.accepted() && a.findings.is_empty());
+
+    // r.b on an unknown receiver (demand form) — a warning, not a rejection.
+    let a = analyze(&afield(name("r"), "b", false), &tenv, &mut i);
+    assert!(a.accepted());
+    assert_eq!(a.findings[0].severity, Severity::Warning);
 }
 
 #[test]

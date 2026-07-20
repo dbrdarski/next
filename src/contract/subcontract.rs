@@ -214,6 +214,12 @@ pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
         (Kind(k1), Kind(k2)) => k1 != k2,
         // A numeric interval is disjoint from a non-numeric kind.
         (Kind(k), other) | (other, Kind(k)) if *k != VKind::Number && is_numeric(other) => true,
+        // A record contract is disjoint from any non-Record kind.
+        (Kind(k), Record(_) | HasField(_)) | (Record(_) | HasField(_), Kind(k)) if *k != VKind::Record => true,
+        // A tuple contract is disjoint from any non-Tuple kind.
+        (Kind(k), Tuple(_)) | (Tuple(_), Kind(k)) if *k != VKind::Tuple => true,
+        // An exact record lacking field `k` can never have it.
+        (Record(fields), HasField(k)) | (HasField(k), Record(fields)) => !fields.iter().any(|(key, _)| key == k),
         (Union(a1, a2), other) | (other, Union(a1, a2)) => disjoint(a1, other) && disjoint(a2, other),
         (Intersection(a1, a2), other) | (other, Intersection(a1, a2)) => {
             disjoint(a1, other) || disjoint(a2, other)

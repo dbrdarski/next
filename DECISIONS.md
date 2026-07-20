@@ -6,6 +6,39 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-20 — Analyzer: access demands (E6 — Field / Index / Slice)
+
+`src/analyzer/mod.rs` `analyze_access` + supporting C.2 disjointness rules + 2
+tests (closed access rows in the concordance corpus; open field reasoning). Full
+suite 198, 0 ignored, clippy clean.
+
+- **`Access(target, form, total)` (E6).** The demand form (`total = false`) must
+  prove the receiver non-null and the field present / index in bounds; the total
+  form (`?.`) totalizes null/absent/out-of-bounds to `null` and never traps on
+  those; slices are clamped-total on the window but still demand a sliceable
+  receiver and integer bounds.
+- **Closed accesses are exact.** When the receiver (and any bound) is a singleton,
+  `analyze_access` reconstructs a `Const`-childed node and runs the oracle's own
+  `eval_expr` — predicting NullReceiver / AbsentField / IndexBounds /
+  OperationSafety(slice) exactly. Added to the concordance corpus (field present /
+  absent / null-receiver / `?.` totalization / tuple index in-bounds / out-of-bounds
+  / from-end / totalized).
+- **Field access fully reasoned on open receivers.** `⊑ HasField(name)` → accept
+  (output = the field's contract when the receiver is an exact `Record`); `?.` →
+  accept (result `∪ Null`); provably-disjoint from `HasField(name)` → **error**
+  (NullReceiver if the receiver can be null, else AbsentField); otherwise a warning.
+- **Index/Slice bounds are owed (C§17).** Open index/slice out-of-fold cases catch
+  a provably-null receiver as an error, but otherwise emit a **warning** — bounds
+  reasoning needs the tuple-length family, tracked in `OwedItems.md` (C§17 owed).
+  Honest: not silently accepted.
+- **C.2 disjointness rules this needed (added + soundness-tested):** a non-Record
+  kind ⌢ `Record`/`HasField`; a non-Tuple kind ⌢ `Tuple`; an exact `Record` lacking
+  field `k` ⌢ `HasField(k)`. New `contract::disjoint` public wrapper + a
+  `disjoint_soundness` sweep (no provably-disjoint pair shares a pool value).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-20 — Analyzer (Part D begins): pure-fragment contract inference + §6 concordance
 
 `src/analyzer/mod.rs` (new) + `oracle::eval_expr` (exposed) + 7 tests incl. the
