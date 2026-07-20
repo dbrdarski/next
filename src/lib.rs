@@ -4,6 +4,7 @@
 //! → **oracle interpreter** → normalization + harness → (later) contracts.
 //! This crate is currently at the value layer.
 
+pub mod analyzer;
 pub mod ast;
 pub mod contract;
 pub mod desugar;

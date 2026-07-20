@@ -6,6 +6,46 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-20 — Analyzer (Part D begins): pure-fragment contract inference + §6 concordance
+
+`src/analyzer/mod.rs` (new) + `oracle::eval_expr` (exposed) + 7 tests incl. the
+exact concordance sweep and an open-term soundness sweep. Full suite 194, 0
+ignored, clippy clean. This is the first analysis pass over kernel AST — legitimate
+now that the oracle, normalization harness, and contracts C.1–C.3/C§9 are green
+(CLAUDE.md hard rule 1).
+
+- **`analyze(expr, env, interner) → Analysis { contract, findings }`.** Infers a
+  contract over-approximating the produced value and gathers `Finding`s tagged with
+  the oracle `TrapClass` they mirror (§6). `Severity::Error` = proven-to-trap (a
+  rejection); `Severity::Warning` = unproven-safe (surfaced, not a rejection).
+  `Analysis::accepted()` = no error findings.
+- **The §6 concordance made executable.** For each `PrimOp`, findings come from the
+  contract layer: constant-fold when every operand is `Equals(v)` — run the oracle's
+  own `eval_prim`, so a closed expression's trap **class is predicted exactly**;
+  otherwise `analyze_operation` (C.3), with `Refuted(witness)` → an error whose class
+  is read back from the oracle trapping on that witness, and `Unproven` → a warning.
+- **Why constant-fold (not just `analyze_operation`):** `analyze_operation` outputs
+  `Kind(Number)` for `Add(Equals,Equals)`, which loses exactness — e.g. `(2+3)^-1`
+  would then sample `0` and *falsely* report a `0^neg` trap. Folding keeps
+  `(2+3) → Equals(5)`, so nested closed expressions predict traps exactly and match
+  the oracle. This is the analyzer doing partial evaluation on constants.
+- **Truth-sourced brute-test.** Exposed `oracle::eval_expr` (evaluate a closed
+  kernel expr, pure world, empty env). The concordance test runs a corpus of closed
+  expressions through both: `oracle traps ⇔ analyzer errors`, and the classes agree
+  (covers `OperationSafety`, `UndischargedIndeterminate`, division totality, `0^neg`,
+  non-integer exponent, Indeterminate propagation, nested/tuple/record). An
+  open-term test confirms the soundness direction: an *accepted* expression over a
+  variable's contract never traps on sampled admitted values.
+- **Scope (this increment):** the pure expression fragment — `Const`, `Ref` (against
+  a `TypeEnv`; unbound → `UnboundEvaluation` error), `PrimOp`, `TupleCons`,
+  `RecordCons`. Worlds, `Apply`, `Match`, `Access`, `Template`, `Write` type as
+  `Top` and are **not yet checked** — honest gap, not a false safety claim (the
+  brute-test only generates covered nodes). Next: access demands (E6 →
+  Null/AbsentField/IndexBounds), then application/`Match`.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-19 — Contracts C.1: the algebra + denotational membership (Part C begins)
 
 `src/contract/` (mod.rs, tests.rs). Compendium C§4 (contract algebra) + C§16

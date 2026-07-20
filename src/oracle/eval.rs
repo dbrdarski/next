@@ -35,6 +35,15 @@ pub fn eval_prim(op: PrimOp, args: &[ValueRef], interner: &mut Interner) -> Resu
     }
 }
 
+/// Evaluate a single closed kernel expression in an empty environment under the
+/// **pure world**, returning its outcome or a [`Trap`]. This is the truth source
+/// the analyzer's pure-fragment checker (§6 concordance) is tested against: an
+/// accepted expression must not trap.
+pub fn eval_expr(expr: &Expr, interner: &mut Interner) -> EvalResult {
+    let mut oracle = Oracle::new(interner);
+    oracle.eval(expr, &crate::env::Scope::root(), World::Pure)
+}
+
 /// Like [`run_program_value`], but also returns the number of *actual* slot
 /// commits — test-observable evidence of the interning-exact equality guard.
 pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
