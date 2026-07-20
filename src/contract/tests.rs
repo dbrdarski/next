@@ -505,3 +505,209 @@ fn operation_soundness_sweep() {
         }
     }
 }
+
+// ── Recursive contracts (C§9) ─────────────────────────────────────────────────
+
+mod rec {
+    use super::*;
+    use crate::contract::recursive::{self, RecGroup};
+
+    fn rec_ref(name: &str) -> Contract {
+        Contract::Ref(name.into())
+    }
+    fn record(fields: &[(&str, Contract)]) -> Contract {
+        Contract::Record(fields.iter().map(|(k, c)| (k.to_string(), c.clone())).collect())
+    }
+    fn union(a: Contract, b: Contract) -> Contract {
+        Contract::Union(Box::new(a), Box::new(b))
+    }
+    fn group(defs: &[(&str, Contract)]) -> RecGroup {
+        RecGroup::new(defs.iter().map(|(n, c)| (n.to_string(), c.clone())))
+    }
+
+    #[test]
+    fn rc09_negative_occurrence_rejected() {
+        // Bad = Difference(Top, Bad) — antitone, no least fixpoint.
+        let g = group(&[(
+            "Bad",
+            Contract::Difference(Box::new(Contract::Top), Box::new(rec_ref("Bad"))),
+        )]);
+        assert_eq!(
+            recursive::admissible(&g),
+            Err(recursive::DefError::NegativeOccurrence { name: "Bad".into() }),
+        );
+    }
+
+    #[test]
+    fn rc10_unguarded_recursion_rejected() {
+        // R = R
+        let g1 = group(&[("R", rec_ref("R"))]);
+        assert!(matches!(
+            recursive::admissible(&g1),
+            Err(recursive::DefError::Unguarded { .. })
+        ));
+        // R = Union(Number, R) — denotes Number; hint says so.
+        let g2 = group(&[("R", union(Contract::Kind(Kind::Number), rec_ref("R")))]);
+        match recursive::admissible(&g2) {
+            Err(recursive::DefError::Unguarded { hint, .. }) => assert!(hint.contains("denotes")),
+            other => panic!("expected unguarded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guarded_group_is_admissible() {
+        // List = Union(Null, Record({head: Number, tail: List})) — references are
+        // guarded beneath the Record.
+        let g = group(&[(
+            "List",
+            union(
+                Contract::Kind(Kind::Null),
+                record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("List"))]),
+            ),
+        )]);
+        assert_eq!(recursive::admissible(&g), Ok(()));
+    }
+
+    #[test]
+    fn recursive_membership() {
+        let mut i = Interner::new();
+        let g = group(&[(
+            "List",
+            union(
+                Contract::Kind(Kind::Null),
+                record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("List"))]),
+            ),
+        )]);
+        assert!(recursive::admissible(&g).is_ok());
+        let list = rec_ref("List");
+
+        let nil = i.null();
+        assert!(recursive::contains(&g, &list, &nil)); // empty list
+
+        let one_two = {
+            let two = i.integer(2);
+            let inner = i.record_str(vec![("head", two), ("tail", nil.clone())]);
+            let one = i.integer(1);
+            i.record_str(vec![("head", one), ("tail", inner)])
+        };
+        assert!(recursive::contains(&g, &list, &one_two)); // [1, 2]
+
+        let x = i.string("x");
+        let bad_head = i.record_str(vec![("head", x), ("tail", nil.clone())]);
+        assert!(!recursive::contains(&g, &list, &bad_head)); // head not a Number
+    }
+
+    #[test]
+    fn rc11_empty_source_subcontract_proven() {
+        // μR.Record({next: R}) is empty (a list with no nil is uninhabited), so it
+        // is a subcontract of everything — v0.1 would have wrongly refuted.
+        let mut i = Interner::new();
+        let g = group(&[("R", record(&[("next", rec_ref("R"))]))]);
+        assert!(recursive::admissible(&g).is_ok());
+        let v = recursive::subcontract(&g, &rec_ref("R"), &Contract::Kind(Kind::Number), &mut i);
+        assert!(matches!(v, Verdict::Proven), "empty source ⊑ anything, got {v:?}");
+    }
+
+    #[test]
+    fn rc12_mutual_productivity() {
+        // A = Record({b: B}); B = Union(Null, Record({a: A})). Both inhabited: B
+        // via Null, then A via {b: null}.
+        let mut i = Interner::new();
+        let g = group(&[
+            ("A", record(&[("b", rec_ref("B"))])),
+            ("B", union(Contract::Kind(Kind::Null), record(&[("a", rec_ref("A"))]))),
+        ]);
+        assert!(recursive::admissible(&g).is_ok());
+        let e = recursive::emptiness(&g, &mut i);
+        // Witnesses must genuinely inhabit their contracts.
+        for name in ["A", "B"] {
+            match &e[name] {
+                recursive::Emptiness::NonEmpty(w) => {
+                    assert!(recursive::contains(&g, &rec_ref(name), w), "{name} witness invalid");
+                }
+                other => panic!("{name} expected NonEmpty, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rc13_mutual_all_empty() {
+        // A = Record({b: B}); B = Record({a: A}) — no base case, both empty.
+        let mut i = Interner::new();
+        let g = group(&[
+            ("A", record(&[("b", rec_ref("B"))])),
+            ("B", record(&[("a", rec_ref("A"))])),
+        ]);
+        assert!(recursive::admissible(&g).is_ok());
+        let e = recursive::emptiness(&g, &mut i);
+        assert!(matches!(e["A"], recursive::Emptiness::Empty));
+        assert!(matches!(e["B"], recursive::Emptiness::Empty));
+    }
+
+    #[test]
+    fn rc15_opaque_leaf_stays_unproven() {
+        // L = Union(Function, Record({next: L})). The Function leaf is opaque —
+        // recursion never settles what its leaves cannot; emptiness is Unproven.
+        let mut i = Interner::new();
+        let g = group(&[(
+            "L",
+            union(Contract::Kind(Kind::Function), record(&[("next", rec_ref("L"))])),
+        )]);
+        assert!(recursive::admissible(&g).is_ok());
+        let e = recursive::emptiness(&g, &mut i);
+        assert!(matches!(e["L"], recursive::Emptiness::Unproven), "got {:?}", e["L"]);
+    }
+
+    #[test]
+    fn recursive_subcontract_progress_guarded() {
+        // NumList ⊑ AnyList: number lists refine top-lists, proven by descending
+        // through the Record `tail` and closing the revisited pair at greater depth.
+        let mut i = Interner::new();
+        let num_list = union(
+            Contract::Kind(Kind::Null),
+            record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("NumList"))]),
+        );
+        let any_list = union(
+            Contract::Kind(Kind::Null),
+            record(&[("head", Contract::Top), ("tail", rec_ref("AnyList"))]),
+        );
+        let g = group(&[("NumList", num_list), ("AnyList", any_list)]);
+        assert!(recursive::admissible(&g).is_ok());
+        let v = recursive::subcontract(&g, &rec_ref("NumList"), &rec_ref("AnyList"), &mut i);
+        assert!(matches!(v, Verdict::Proven), "NumList ⊑ AnyList, got {v:?}");
+    }
+
+    #[test]
+    fn recursive_subcontract_soundness() {
+        // Whatever the recursive subcontract proves, no sampled inhabitant of the
+        // source may fall outside the target (soundness against membership).
+        let mut i = Interner::new();
+        let num_list = union(
+            Contract::Kind(Kind::Null),
+            record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("NumList"))]),
+        );
+        let any_list = union(
+            Contract::Kind(Kind::Null),
+            record(&[("head", Contract::Top), ("tail", rec_ref("AnyList"))]),
+        );
+        let g = group(&[("NumList", num_list), ("AnyList", any_list)]);
+
+        // Build a few concrete NumList inhabitants and confirm AnyList membership.
+        let nil = i.null();
+        let seven = i.integer(7);
+        let l1 = i.record_str(vec![("head", seven), ("tail", nil.clone())]);
+        let three = i.integer(3);
+        let l2 = i.record_str(vec![("head", three), ("tail", l1.clone())]);
+        if let Verdict::Proven =
+            recursive::subcontract(&g, &rec_ref("NumList"), &rec_ref("AnyList"), &mut i)
+        {
+            for v in [&nil, &l1, &l2] {
+                assert!(
+                    !recursive::contains(&g, &rec_ref("NumList"), v)
+                        || recursive::contains(&g, &rec_ref("AnyList"), v),
+                    "UNSOUND: {v:?} ∈ NumList but ∉ AnyList",
+                );
+            }
+        }
+    }
+}

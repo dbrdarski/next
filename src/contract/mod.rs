@@ -20,8 +20,10 @@ use crate::rational::Rational;
 use crate::value::{ValueData, ValueRef};
 
 mod operation;
+pub mod recursive;
 mod subcontract;
 pub use operation::{OpResult, OpSafety, analyze_operation};
+pub use recursive::{DefError, Emptiness, RecGroup, admissible};
 pub use subcontract::{Verdict, subcontract};
 
 #[cfg(test)]
@@ -78,6 +80,10 @@ pub enum Contract {
     Tuple(Vec<Contract>),
     /// An Indeterminate value of a given form.
     Indeterminate(crate::value::IndetForm),
+    /// A late-bound reference to a named contract in the ambient recursive group
+    /// (C§9). Meaningful only relative to a [`recursive::RecGroup`]; bare, it
+    /// denotes nothing (`contains` is `false`) — recursive code resolves it first.
+    Ref(String),
 }
 
 /// The kind of a value, or `None` for an Indeterminate value.
@@ -116,6 +122,9 @@ impl Contract {
             Contract::HasField(key) => has_field(v, key),
             Contract::Tuple(elems) => tuple_contains(v, elems),
             Contract::Indeterminate(f) => v.as_indeterminate() == Some(*f),
+            // A bare reference has no ambient group to resolve against; recursive
+            // membership goes through `recursive::contains`.
+            Contract::Ref(_) => false,
         }
     }
 }

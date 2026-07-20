@@ -42,6 +42,63 @@ green (hard rule 1).
 
 ---
 
+## 2026-07-20 — Contracts C§9: recursive contracts (admissibility, emptiness, subcontract)
+
+`src/contract/recursive.rs` (new) + `Contract::Ref` + 10 RC tests. Recursive
+Contracts Specification v0.2 (patch 0.2.1). Full suite 184, 0 ignored, clippy clean.
+
+A recursive contract is a named binding in a `RecGroup` referencing itself/its
+mutual group via `Contract::Ref`. Four subsystems, all over the finite canonical
+graph (never a materialized unfolding, §4):
+
+- **Admissibility (§1) → `admissible`, `DefError`.** Positivity by a polarity walk
+  (`Difference(B,E)` flips E; a group reference at negative polarity → definition
+  error) and structural guardedness by an unguarded-reachability graph (a reference
+  reachable without crossing a `Tuple`/`Record` constructor; any cycle → error).
+  RC-09 `Bad = Difference(Top, Bad)` rejected (negative); RC-10 `R = R` and
+  `R = Union(Number, R)` rejected (unguarded, the latter with the "denotes Number"
+  hint).
+- **Membership (§3) → `contains`.** Inductive: `Ref`s resolve to definitions and the
+  value strictly shrinks at each structural descent, so on admissible groups it
+  terminates over finite acyclic data.
+- **Emptiness (§6) → `emptiness` : bounded productivity closure.** Two monotone
+  passes over the group's finite state space (each state flips at most once — no
+  iteration budget, Principle 7): (1) *productivity* seeds inhabited leaves and
+  flips a name when a `Union` branch / all `Tuple`·`Record` components / a resolved
+  `Ref` become productive, **storing a finite witness at each flip**; (2)
+  *exactness* marks the still-unproductive names `Empty` unless they depend on an
+  opaque leaf (→ `Unproven`). RC-11 flagship `Record({next: R})` empty; RC-12 mutual
+  `A/B` both non-empty with witnesses `{b: null}` / `null`; RC-13 mutual `A/B` both
+  empty; RC-15 opaque `Kind(Function)` leaf → emptiness stays `Unproven`.
+- **Subcontract (§5) → `subcontract` : progress-guarded pair induction.** Empty-source
+  short-circuit (step 0) via the emptiness env; a per-pair **depth-stamped** hypothesis
+  that closes a revisit as *holds* only at strictly greater source depth (a global
+  progress flag would be non-conforming, RC-16); source depth increments only on
+  `Tuple`/`Record` descent; `Ref` heads resolve without incrementing (μ-traversal);
+  ordinary constructor rows otherwise; leaf pairs delegate to the C.2 check. RC-11
+  `μR.Record({next:R}) ⊑ Number` **proven** via the empty source (v0.1 would have
+  wrongly refuted); `NumList ⊑ AnyList` proven by closing the revisited tail-pair at
+  greater depth. Soundness spot-checked against `contains`.
+
+- **`Contract::Ref` added** to the core enum; bare (no ambient group) it denotes
+  nothing — `contains` is `false`, `sample` empty — so non-recursive code is
+  unaffected and recursive code resolves references first.
+
+**Scoped as owed (sound `Unproven`, matching spec §5.3/§6 "owed" rows), flagged for
+the author:**
+- **RC-14** recursive-`Intersection` emptiness over the finite *product graph* is
+  not built; exact intersection emptiness returns `Unproven` unless a side is
+  outright empty. `// [ask-author]`-class: the product-graph construction is
+  specified but deferred to keep this increment reviewable.
+- **§5.3 witness-assembled refutation** for recursive shapes is not built; the
+  recursive subcontract yields `Proven`/`Unproven`, delegating refutation to C.2 for
+  ref-free pairs only. Recursive mismatches never claim `Refuted` (sound).
+
+- **`// [ask-author]`:** the two scoped-owed items above; no silent semantic
+  choices.
+
+---
+
 ## 2026-07-20 — Contracts C.3: operation transfer rules (`analyze_operation`)
 
 `src/contract/operation.rs` (new) + `oracle::eval_prim` (exposed) + 5 tests incl.

@@ -321,6 +321,9 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
             vec![interner.number(b.clone()), interner.number(b.clone() * r.clone())]
         }
         Indeterminate(f) => vec![interner.indeterminate(*f)],
+        // A bare reference is unsampleable without its group; recursive sampling
+        // lives in `recursive`.
+        Ref(_) => vec![],
         Union(a1, a2) => {
             let mut v = sample(a1, interner);
             v.extend(sample(a2, interner));
