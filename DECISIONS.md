@@ -33,9 +33,17 @@ closed `Apply` concordance rows. Full suite 204, 0 ignored, clippy clean.
   cost of not yet analyzing function bodies.
 - **C.2 rule added:** `Tuple(pa) ⌢ Tuple(pb)` disjoint when arities differ or any
   position is disjoint — the basis of the arity-mismatch argument-obligation.
-- **`// [ask-author]`:** none. Owed for a later increment: a function-shape contract
-  (C§13.2) to give open calls a return contract and to check unknown-callee
-  admission; world threading via `Lambda`-body analysis.
+- **`// [ask-author]`:** none.
+- **Provenance correction (the deferred pieces are doc-owed, not merely
+  unimplemented).** Unlike `Access`/`Match` (decided design, sequenced by me), the
+  *deep* `Apply` deferrals rest on genuine **C§17 Owed** items now recorded in
+  `OwedItems.md` §3–§4: the **`analyzeOperation` application table** (the app rule's
+  admission + expecting-seat demand — owed verbatim), **domain-indexed return
+  induction** details + the **instance / global-fact-graph** machinery (open-call
+  return + body completion), and the absence of a **first-class function-shape
+  (arrow) contract** (unknown-callee reasoning). What *was* decided and so
+  implemented: the B5 admission matrix, argument-obligation as a parameter-pattern
+  match, spread-kind, and the closed-fold technique.
 
 ---
 

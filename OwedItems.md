@@ -58,6 +58,50 @@ requires.
 
 ---
 
+## 3. `analyzeOperation` application table + interprocedural return induction — **[owed]**
+
+- **Source:** Compendium **C§17 Owed** list, verbatim items: *"per-operation
+  analyzeOperation tables (incl. the application rule's act-kind admission check and
+  the expecting-seat completion demand)"*, *"domain-indexed induction details
+  (partition rule, escaped-row evaluation, conservative row selection)"*,
+  *"instance-chain cutoff spec"*, *"global fact-graph construction spec"*,
+  *"template-instantiation spec"*. Architecture is laid out (§10.6/§10.7 return &
+  vector induction; C§12.3 the three function-identity layers; C§13.2 input
+  obligation + admission) — the compendium tags the cluster **"writing and proving,
+  not designing."** The detailed executable rule tables are not yet written.
+- **What is owed:** how a call site derives the callee's **return** contract and
+  completion from the body (a return fact `for inputs ⊑ I, return ⊑ C` bound to an
+  analysis *instance*), settled jointly across mutually-recursive functions via a
+  global fact graph (SCC/vector induction); and the full **application** transfer
+  table (admission + expecting-seat completion for arbitrary callees).
+- **Current implementation behavior (analyzer `analyze_apply`):** analysis runs in
+  the **pure world**; **closed** calls fold exactly through the oracle. For **open**
+  calls the settled pieces are checked — spread-kind, non-function callee, and, for
+  a **known** callee value, B5 admission + argument-obligation. Deferred to this
+  owed item (all sound — never a false accept): an **open call's return** types as
+  `Top`; an **unknown** callee's act-kind admission / argument obligation is **not**
+  checked; a `Pure`/`Effect` body's completion is not derived (`may_complete = false`
+  for non-mutators).
+- **To close:** author writes the analyzeOperation application table + the
+  return-induction/instance/fact-graph details; then the analyzer analyzes `Lambda`
+  bodies (with param contracts bound), threads the world, and gives open calls a
+  real return contract and completion.
+
+## 4. First-class function-shape (arrow) contract — **[owed / gap]**
+
+- **Source:** the enumerated contract algebra (Compendium C§4 / §292:
+  `Range, Mod, Equals, Union, Difference, HasField, Geo, …`) has **no arrow
+  contract** carrying act-kind + input + output. Function *identity/shape* is
+  defined (C§12.3 three layers; act-kind is part of shape, C§13.2), but a
+  **contract** describing a function's signature is not in the written algebra.
+- **What is owed:** whether functions get first-class signature contracts (with the
+  contravariant-input / covariant-output subcontract rule), enabling higher-order
+  reasoning — an open callee's admission and return without knowing its exact value.
+- **Current implementation behavior:** `Contract::Kind(Function)` only. Open callees
+  are `Top`-returning and unchecked for admission (see item 3).
+- **To close:** decide/spec the arrow contract; add it to the `Contract` algebra
+  and to `subcontract` (arrow variance).
+
 ## Related author-flagged opens (tracked elsewhere, listed for completeness)
 
 These are genuine doc-opens but are already implemented per their **provisional
