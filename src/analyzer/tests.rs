@@ -4,9 +4,19 @@
 //! soundness direction (`accepted ⇒ oracle never traps` over sampled inputs).
 
 use super::*;
-use crate::ast::{AccessForm, BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
+use crate::ast::{
+    AccessForm, Arm, Bind, BindTarget, BindingRef, Element, Expr, Field, Match, MatchItem, Pat,
+    PatElem, PrimOp, Ref, TemplatePart,
+};
 use crate::oracle::eval_expr;
 use crate::rational::Rational;
+
+fn matchx(scrut: Option<Expr>, items: Vec<MatchItem>) -> Expr {
+    Expr::Match(Match { scrutinee: scrut.map(Box::new), items })
+}
+fn arm(pattern: Option<Pat>, guard: Option<Expr>, result: Expr) -> MatchItem {
+    MatchItem::Arm(Arm { pattern, guard, result })
+}
 
 fn afield(target: Expr, field: &str, total: bool) -> Expr {
     Expr::Access { target: Box::new(target), form: AccessForm::Field(field.into()), total }
@@ -167,6 +177,22 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
     c.push(aindex(tup.clone(), n(i, 5), false)); // trap: index-bounds
     c.push(aindex(tup.clone(), n(i, 5), true)); // ?. → null (safe)
     c.push(aindex(tup, n(i, -1), false)); // from-end → 20 (safe)
+
+    // Match (E9/E10), closed → exact against the oracle.
+    let five = i.integer(5);
+    c.push(matchx(Some(n(i, 5)), vec![arm(Some(Pat::Const(five)), None, n(i, 10))])); // → 10
+    c.push(matchx(Some(n(i, 5)), vec![arm(Some(Pat::Wild), Some(n(i, 3)), n(i, 10))])); // tested-seat trap
+    let one = i.integer(1);
+    let nonexhaustive = matchx(Some(n(i, 5)), vec![arm(Some(Pat::Const(one)), None, n(i, 10))]);
+    c.push(prim(PrimOp::Add, vec![nonexhaustive, n(i, 1)])); // expecting-seat trap
+    let pair = Pat::Tuple(vec![
+        PatElem::Pat(Pat::Bind("a".into())),
+        PatElem::Pat(Pat::Bind("b".into())),
+    ]);
+    c.push(matchx(
+        None,
+        vec![MatchItem::Bind(Bind { target: BindTarget::Pattern(pair), value: n(i, 5), exported: false }), MatchItem::Stmt(name("a"))],
+    )); // refuted-binding trap
     c
 }
 
@@ -259,6 +285,82 @@ fn open_field_access_reasoning() {
     let a = analyze(&afield(name("r"), "b", false), &tenv, &mut i);
     assert!(a.accepted());
     assert_eq!(a.findings[0].severity, Severity::Warning);
+}
+
+#[test]
+fn match_tested_seat_guard() {
+    let mut i = Interner::new();
+    // match 5 { _ if 3 => 10 } — a non-Boolean guard is a tested-seat trap.
+    let m = matchx(
+        Some(konst(i.integer(5))),
+        vec![arm(Some(Pat::Wild), Some(konst(i.integer(3))), konst(i.integer(10)))],
+    );
+    let a = analyze(&m, &empty(), &mut i);
+    assert!(a.findings.iter().any(|f| f.class == TrapClass::TestedSeat && f.severity == Severity::Error));
+}
+
+#[test]
+fn match_refuted_destructuring_binding() {
+    let mut i = Interner::new();
+    // match { [a, b] = 5; a } — destructuring a Number as a pair never matches.
+    let pat = Pat::Tuple(vec![
+        PatElem::Pat(Pat::Bind("a".into())),
+        PatElem::Pat(Pat::Bind("b".into())),
+    ]);
+    let m = matchx(
+        None,
+        vec![
+            MatchItem::Bind(Bind { target: BindTarget::Pattern(pat), value: konst(i.integer(5)), exported: false }),
+            MatchItem::Stmt(name("a")),
+        ],
+    );
+    let a = analyze(&m, &empty(), &mut i);
+    assert!(a.findings.iter().any(|f| f.class == TrapClass::RefutedBinding && f.severity == Severity::Error));
+}
+
+#[test]
+fn match_exhaustiveness_and_expecting_seat() {
+    let mut i = Interner::new();
+    // (match 5 { 1 => 10 }) + 1 — the match may fall through (non-exhaustive), so a
+    // demanding seat is an expecting-seat trap.
+    let one = i.integer(1);
+    let nonexhaustive = matchx(
+        Some(konst(i.integer(5))),
+        vec![arm(Some(Pat::Const(one)), None, konst(i.integer(10)))],
+    );
+    let e = prim(PrimOp::Add, vec![nonexhaustive, konst(i.integer(1))]);
+    let a = analyze(&e, &empty(), &mut i);
+    assert!(!a.accepted());
+    assert!(a.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat));
+
+    // (match 5 { _ => 10 }) + 1 — exhaustive, always produces; accepted.
+    let exhaustive = matchx(
+        Some(konst(i.integer(5))),
+        vec![arm(Some(Pat::Wild), None, konst(i.integer(10)))],
+    );
+    let ok = prim(PrimOp::Add, vec![exhaustive, konst(i.integer(1))]);
+    let a = analyze(&ok, &empty(), &mut i);
+    assert!(a.accepted(), "exhaustive match must not trip expecting-seat: {:?}", a.findings);
+}
+
+#[test]
+fn match_arm_narrows_scrutinee() {
+    let mut i = Interner::new();
+    // match x { [a, b] => a + b }  with x : Tuple([Number, Number]).
+    // The pattern narrows the elements to Number, so `a + b` is proven safe.
+    let mut env = TypeEnv::new();
+    env.insert(
+        "x".into(),
+        Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)]),
+    );
+    let pat = Pat::Tuple(vec![
+        PatElem::Pat(Pat::Bind("a".into())),
+        PatElem::Pat(Pat::Bind("b".into())),
+    ]);
+    let body = prim(PrimOp::Add, vec![name("a"), name("b")]);
+    let m = matchx(Some(name("x")), vec![arm(Some(pat), None, body)]);
+    let a = analyze(&m, &env, &mut i);
+    assert!(a.accepted() && a.findings.is_empty(), "narrowing should prove a+b safe: {:?}", a.findings);
 }
 
 #[test]

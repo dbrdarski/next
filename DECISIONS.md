@@ -6,6 +6,45 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-20 — Analyzer: `Match` (E9/E10 — the sole control node)
+
+`src/analyzer/mod.rs` `analyze_match` + pattern machinery + `Analysis.may_complete`
++ expecting-seat demands + 4 tests and closed `Match` concordance rows. Full suite
+202, 0 ignored, clippy clean.
+
+- **Arm narrowing (E9).** Each arm narrows the scrutinee by its pattern —
+  `pattern_contract` maps a `Pat` to a *superset* of its match set (sound for
+  intersection): `Const → Equals`, `Wild`/`Bind → Top`, exact `Tuple`/`Record` →
+  the structural contract, open record → `∩ HasField`, `Contract(ref)` → the prelude
+  Kind (user contracts owed → `Top`). The arm body sees `remainder ∩ pattern`, and
+  the **remainder** for later items is the accumulated Difference; a covering
+  pattern (`remainder ⊑ pattern`) empties it. `bind_pattern` threads the narrowed
+  contract to the pattern's names (e.g. `[a, b]` on `Tuple([Number, Number])` gives
+  `a, b : Number`, proving `a + b` safe).
+- **tested-seat (E10).** A guard must be `⊑ Boolean` — else error (provably
+  non-Boolean) or warning.
+- **refuted-binding (E9).** A destructuring `Bind` must be irrefutable
+  (`value ⊑ pattern`) — else error (disjoint) or warning.
+- **expecting-seat (E10) via `Analysis.may_complete`.** A `Match` whose remainder
+  is not provably empty may complete without a value; the new `demand(...)` helper,
+  called at every value-demanding seat (operands, elements, field values, template
+  interpolations, access receiver/index/bounds, bind RHS, guard, arm result,
+  scrutinee), turns that into an expecting-seat error. Statements are *not*
+  expecting seats. A standalone non-exhaustive `Match` is fine (it just completes
+  without a value); the error is only at a demanding seat — matching the oracle.
+- **Result contract** = union of arm results (`Top` for an arm-less match).
+- **Closed `Match` folds are not needed for exactness** — the structural reasoning
+  already predicts the trap classes; the concordance corpus gained `match 5 {5=>10}`
+  (produces), a non-Boolean guard (tested-seat), a non-exhaustive match in an
+  operand (expecting-seat), and a refuted destructuring (refuted-binding), all
+  agreeing with `eval_expr`.
+- **Owed within `Match`:** `Pat::Contract` to a *user* contract resolves to `Top`
+  (no narrowing) until a named-contract environment exists; tuple-rest / record-rest
+  patterns widen (length ← C§17). Both sound (no false accept). `// [ask-author]`:
+  none.
+
+---
+
 ## 2026-07-20 — Analyzer: access demands (E6 — Field / Index / Slice)
 
 `src/analyzer/mod.rs` `analyze_access` + supporting C.2 disjointness rules + 2

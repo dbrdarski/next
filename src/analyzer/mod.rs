@@ -46,18 +46,38 @@ pub struct Finding {
     pub message: String,
 }
 
-/// The result of analyzing an expression: the inferred contract plus any findings
-/// gathered from it and its subexpressions.
+/// The result of analyzing an expression: the inferred contract, any findings
+/// gathered from it and its subexpressions, and whether evaluation can complete
+/// *without* producing a value (a `Match` that may fall through — E10). The last
+/// drives the expecting-seat demand.
 #[derive(Clone, Debug)]
 pub struct Analysis {
     pub contract: Contract,
     pub findings: Vec<Finding>,
+    pub may_complete: bool,
 }
 
 impl Analysis {
+    /// An expression that always produces a value.
+    fn produced(contract: Contract, findings: Vec<Finding>) -> Analysis {
+        Analysis { contract, findings, may_complete: false }
+    }
+
     /// Whether the expression is accepted — no error-level findings.
     pub fn accepted(&self) -> bool {
         self.findings.iter().all(|f| f.severity != Severity::Error)
+    }
+}
+
+/// An expecting seat (E10) demands `Produced`; if the sub-analysis `may_complete`
+/// without a value, that is the expecting-seat trap's compile-time mirror.
+fn demand(a: &Analysis, findings: &mut Vec<Finding>) {
+    if a.may_complete {
+        findings.push(Finding {
+            class: TrapClass::ExpectingSeat,
+            severity: Severity::Error,
+            message: "a value is demanded here, but this expression may complete without one".into(),
+        });
     }
 }
 
@@ -74,14 +94,14 @@ pub fn analyze(expr: &Expr, env: &TypeEnv, interner: &mut Interner) -> Analysis 
         // unbound-evaluation trap's compile-time mirror.
         Expr::Ref(Ref::Immutable(BindingRef::Name(name))) => match env.get(name) {
             Some(c) => exact(c.clone()),
-            None => Analysis {
-                contract: Contract::Top,
-                findings: vec![Finding {
+            None => Analysis::produced(
+                Contract::Top,
+                vec![Finding {
                     class: TrapClass::UnboundEvaluation,
                     severity: Severity::Error,
                     message: format!("reference to unbound name `{name}`"),
                 }],
-            },
+            ),
         },
         // Positional / Location / Mu references are out of scope for this increment.
         Expr::Ref(_) => exact(Contract::Top),
@@ -92,6 +112,7 @@ pub fn analyze(expr: &Expr, env: &TypeEnv, interner: &mut Interner) -> Analysis 
         Expr::RecordCons(fields) => analyze_record(fields, env, interner),
         Expr::Template(parts) => analyze_template(parts, env, interner),
         Expr::Access { target, form, total } => analyze_access(target, form, *total, env, interner),
+        Expr::Match(m) => analyze_match(m, env, interner),
 
         // Not yet analyzed: conservatively typed `Top`, unchecked.
         _ => exact(Contract::Top),
@@ -99,7 +120,7 @@ pub fn analyze(expr: &Expr, env: &TypeEnv, interner: &mut Interner) -> Analysis 
 }
 
 fn exact(contract: Contract) -> Analysis {
-    Analysis { contract, findings: vec![] }
+    Analysis::produced(contract, vec![])
 }
 
 fn analyze_primop(op: PrimOp, args: &[Expr], env: &TypeEnv, interner: &mut Interner) -> Analysis {
@@ -107,6 +128,7 @@ fn analyze_primop(op: PrimOp, args: &[Expr], env: &TypeEnv, interner: &mut Inter
     let mut inputs = Vec::with_capacity(args.len());
     for a in args {
         let mut r = analyze(a, env, interner);
+        demand(&r, &mut findings); // operands are expecting seats
         findings.append(&mut r.findings);
         inputs.push(r.contract);
     }
@@ -159,7 +181,7 @@ fn analyze_primop(op: PrimOp, args: &[Expr], env: &TypeEnv, interner: &mut Inter
         }
     };
 
-    Analysis { contract, findings }
+    Analysis::produced(contract, findings)
 }
 
 fn analyze_tuple(elems: &[Element], env: &TypeEnv, interner: &mut Interner) -> Analysis {
@@ -170,6 +192,7 @@ fn analyze_tuple(elems: &[Element], env: &TypeEnv, interner: &mut Interner) -> A
         match el {
             Element::Expr(e) => {
                 let mut r = analyze(e, env, interner);
+                demand(&r, &mut findings); // elements are expecting seats
                 findings.append(&mut r.findings);
                 parts.push(r.contract);
             }
@@ -181,7 +204,7 @@ fn analyze_tuple(elems: &[Element], env: &TypeEnv, interner: &mut Interner) -> A
         }
     }
     let contract = if exact_shape { Contract::Tuple(parts) } else { Contract::Top };
-    Analysis { contract, findings }
+    Analysis::produced(contract, findings)
 }
 
 fn analyze_record(fields: &[Field], env: &TypeEnv, interner: &mut Interner) -> Analysis {
@@ -192,6 +215,7 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, interner: &mut Interner) -> A
         match field {
             Field::Field { key, value } => {
                 let mut r = analyze(value, env, interner);
+                demand(&r, &mut findings); // field values are expecting seats
                 findings.append(&mut r.findings);
                 pairs.push((key.clone(), r.contract));
             }
@@ -208,7 +232,7 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, interner: &mut Interner) -> A
         }
     }
     let contract = if exact_shape { Contract::Record(pairs) } else { Contract::Top };
-    Analysis { contract, findings }
+    Analysis::produced(contract, findings)
 }
 
 /// A template produces a String (when it does not trap). Each interpolation is a
@@ -221,6 +245,7 @@ fn analyze_template(parts: &[TemplatePart], env: &TypeEnv, interner: &mut Intern
     for part in parts {
         let TemplatePart::Interp(e) = part else { continue };
         let mut r = analyze(e, env, interner);
+        demand(&r, &mut findings); // interpolations are expecting seats
         findings.append(&mut r.findings);
         match printability(&r.contract, interner) {
             Printability::Printable => {}
@@ -236,7 +261,7 @@ fn analyze_template(parts: &[TemplatePart], env: &TypeEnv, interner: &mut Intern
             }),
         }
     }
-    Analysis { contract: Contract::Kind(Kind::String), findings }
+    Analysis::produced(Contract::Kind(Kind::String), findings)
 }
 
 /// Access demands (E6). The *demand form* (`total = false`) must prove the
@@ -251,12 +276,14 @@ fn analyze_template(parts: &[TemplatePart], env: &TypeEnv, interner: &mut Intern
 fn analyze_access(target: &Expr, form: &AccessForm, total: bool, env: &TypeEnv, interner: &mut Interner) -> Analysis {
     let mut findings = Vec::new();
     let ta = analyze(target, env, interner);
+    demand(&ta, &mut findings); // the receiver is an expecting seat
     findings.extend(ta.findings);
     let tc = ta.contract;
 
     // Analyze the index/bound subexpressions for their findings and fold values.
     let mut child = |e: &Expr, findings: &mut Vec<Finding>| -> Contract {
         let mut a = analyze(e, env, interner);
+        demand(&a, findings); // index / slice bounds are expecting seats
         findings.append(&mut a.findings);
         a.contract
     };
@@ -279,11 +306,11 @@ fn analyze_access(target: &Expr, form: &AccessForm, total: bool, env: &TypeEnv, 
     };
     if let Some(node) = folded {
         return match eval_expr(&node, interner) {
-            Ok(Outcome::Produced(v)) => Analysis { contract: Contract::Equals(v), findings },
-            Ok(Outcome::CompletedWithoutValue) => Analysis { contract: Contract::Top, findings },
+            Ok(Outcome::Produced(v)) => Analysis::produced(Contract::Equals(v), findings),
+            Ok(Outcome::CompletedWithoutValue) => Analysis::produced(Contract::Top, findings),
             Err(trap) => {
                 findings.push(Finding { class: trap.class, severity: Severity::Error, message: trap.message });
-                Analysis { contract: Contract::Bottom, findings }
+                Analysis::produced(Contract::Bottom, findings)
             }
         };
     }
@@ -294,7 +321,7 @@ fn analyze_access(target: &Expr, form: &AccessForm, total: bool, env: &TypeEnv, 
         AccessForm::Index(_) => analyze_index(&tc, total, &mut findings, interner),
         AccessForm::Slice { .. } => analyze_slice(&tc, &mut findings, interner),
     };
-    Analysis { contract, findings }
+    Analysis::produced(contract, findings)
 }
 
 /// Reconstruct a closed `Access` node from singleton operand values, or `None` if
@@ -418,6 +445,287 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
         message: "cannot prove receiver sliceable / bounds integer (C§17 owed)".into(),
     });
     Contract::Top
+}
+
+// ── Match (E9/E10) — the sole control node ────────────────────────────────────
+
+/// Analyze a `Match`. Each `Arm` narrows the scrutinee by its pattern (the arm
+/// body sees `scrutinee ∩ pattern`), and the remainder for later items is the
+/// accumulated Difference (E9). Guards are strict tested seats (`tested-seat`),
+/// destructuring `Bind`s must be irrefutable (`refuted-binding`), and every
+/// value-demanding sub-position is an expecting seat. The result contract is the
+/// union of the arm results; a `Match` whose remainder is not provably empty
+/// `may_complete` without a value.
+fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, interner: &mut Interner) -> Analysis {
+    use crate::ast::MatchItem;
+
+    let mut findings = Vec::new();
+
+    // The scrutinee is evaluated once, in an expecting seat.
+    let scrut = match &m.scrutinee {
+        Some(e) => {
+            let a = analyze(e, env, interner);
+            demand(&a, &mut findings);
+            findings.extend(a.findings);
+            a.contract
+        }
+        None => Contract::Top,
+    };
+
+    // `body_env` accumulates Bind / Stmt bindings; each item runs against it.
+    let mut body_env = env.clone();
+    let mut remainder = scrut.clone();
+    let mut results: Vec<Contract> = Vec::new();
+
+    for item in &m.items {
+        match item {
+            MatchItem::Bind(b) => {
+                let a = analyze(&b.value, &body_env, interner);
+                demand(&a, &mut findings); // a bind RHS is an expecting seat
+                findings.extend(a.findings);
+                analyze_bind(&b.target, &a.contract, &mut body_env, &mut findings, interner);
+            }
+            MatchItem::Stmt(e) => {
+                // A statement's value is discarded — *not* an expecting seat.
+                let a = analyze(e, &body_env, interner);
+                findings.extend(a.findings);
+            }
+            MatchItem::Arm(arm) => {
+                let pc = arm.pattern.as_ref().map(pattern_contract).unwrap_or(Contract::Top);
+                let narrowed = intersect(&remainder, &pc);
+
+                // Arm-local environment: the outer bindings plus the pattern's.
+                let mut arm_env = body_env.clone();
+                if let Some(p) = &arm.pattern {
+                    bind_pattern(p, &narrowed, &mut arm_env);
+                }
+
+                // Guard: a strict Boolean tested seat.
+                let mut guarded = false;
+                if let Some(g) = &arm.guard {
+                    guarded = true;
+                    let ga = analyze(g, &arm_env, interner);
+                    demand(&ga, &mut findings);
+                    findings.extend(ga.findings);
+                    check_tested_seat(&ga.contract, &mut findings, interner);
+                }
+
+                // Arm result — an expecting seat.
+                let ra = analyze(&arm.result, &arm_env, interner);
+                demand(&ra, &mut findings);
+                findings.extend(ra.findings);
+                results.push(ra.contract);
+
+                // A guarded arm's success is opaque, so it consumes nothing of the
+                // remainder (uncertainty selects, E9); an unguarded arm consumes its
+                // whole pattern region — which empties the remainder when the pattern
+                // covers all of it (e.g. `_` / a bare binding).
+                if !guarded {
+                    remainder = if matches!(subcontract(&remainder, &pc, interner), Verdict::Proven) {
+                        Contract::Bottom
+                    } else {
+                        difference(&remainder, &pc)
+                    };
+                }
+            }
+        }
+    }
+
+    // Exhaustive iff no scrutinee value escapes every arm.
+    let exhaustive = matches!(subcontract(&remainder, &Contract::Bottom, interner), Verdict::Proven);
+    let contract = union_of(results);
+    Analysis { contract, findings, may_complete: !exhaustive }
+}
+
+/// The contract of values a pattern matches — a **superset** of the true match set
+/// (sound for narrowing by intersection).
+fn pattern_contract(pat: &crate::ast::Pat) -> Contract {
+    use crate::ast::{Pat, PatElem, PatField};
+    match pat {
+        Pat::Const(v) => Contract::Equals(v.clone()),
+        Pat::Wild | Pat::Bind(_) => Contract::Top,
+        Pat::Tuple(elems) => {
+            // An exact positional tuple (no rest) is a precise Tuple contract;
+            // a rest widens to any Tuple (length reasoning is C§17 owed).
+            if elems.iter().any(|e| matches!(e, PatElem::Rest(_))) {
+                Contract::Kind(Kind::Tuple)
+            } else {
+                let parts = elems
+                    .iter()
+                    .map(|e| match e {
+                        PatElem::Pat(p) => pattern_contract(p),
+                        PatElem::Rest(_) => unreachable!(),
+                    })
+                    .collect();
+                Contract::Tuple(parts)
+            }
+        }
+        Pat::Record { fields, exact } => {
+            let named: Vec<&PatField> =
+                fields.iter().filter(|f| matches!(f, PatField::Field { .. })).collect();
+            let has_rest = fields.iter().any(|f| matches!(f, PatField::Rest(_)));
+            if *exact && !has_rest {
+                let pairs = named
+                    .iter()
+                    .map(|f| match f {
+                        PatField::Field { key, pat } => (key.clone(), pattern_contract(pat)),
+                        PatField::Rest(_) => unreachable!(),
+                    })
+                    .collect();
+                Contract::Record(pairs)
+            } else {
+                // Open record: "has at least these fields."
+                named
+                    .iter()
+                    .filter_map(|f| match f {
+                        PatField::Field { key, .. } => Some(Contract::HasField(key.clone())),
+                        PatField::Rest(_) => None,
+                    })
+                    .reduce(|a, b| intersect(&a, &b))
+                    .unwrap_or(Contract::Kind(Kind::Record))
+            }
+        }
+        Pat::Contract(r) => contract_ref(r).unwrap_or(Contract::Top),
+    }
+}
+
+/// Resolve a contract-as-pattern reference to a contract. The prelude Kind names
+/// (E9) map to `Kind` contracts; unknown (user) contracts are not yet resolved —
+/// `None` (conservatively `Top`, no narrowing).
+fn contract_ref(r: &Ref) -> Option<Contract> {
+    let Ref::Immutable(BindingRef::Name(name)) = r else { return None };
+    Some(match name.as_str() {
+        "Number" => Contract::Kind(Kind::Number),
+        "String" => Contract::Kind(Kind::String),
+        "Boolean" => Contract::Kind(Kind::Boolean),
+        "Null" => Contract::Kind(Kind::Null),
+        "Tuple" => Contract::Kind(Kind::Tuple),
+        "Record" => Contract::Kind(Kind::Record),
+        "Function" => Contract::Kind(Kind::Function),
+        "Failure" => intersect(
+            &Contract::HasField("path".into()),
+            &Contract::HasField("reason".into()),
+        ),
+        _ => return None,
+    })
+}
+
+/// Bind a pattern's names to their narrowed contracts in `env` (best-effort; a
+/// name whose position is not tracked binds to `Top`).
+fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut TypeEnv) {
+    use crate::ast::{Pat, PatElem, PatField};
+    match pat {
+        Pat::Bind(name) => {
+            env.insert(name.clone(), narrowed.clone());
+        }
+        Pat::Tuple(elems) => {
+            for (i, e) in elems.iter().enumerate() {
+                if let PatElem::Pat(p) = e {
+                    let sub = tuple_element(narrowed, i);
+                    bind_pattern(p, &sub, env);
+                }
+            }
+        }
+        Pat::Record { fields, .. } => {
+            for f in fields {
+                if let PatField::Field { key, pat } = f {
+                    bind_pattern(pat, &field_output(narrowed, key), env);
+                }
+            }
+        }
+        // Const / Wild / Contract bind no names.
+        _ => {}
+    }
+}
+
+fn tuple_element(c: &Contract, i: usize) -> Contract {
+    match c {
+        Contract::Tuple(parts) => parts.get(i).cloned().unwrap_or(Contract::Top),
+        _ => Contract::Top,
+    }
+}
+
+/// A destructuring `Bind` must be irrefutable (E9): its pattern always matches the
+/// value. A `Name` target always binds.
+fn analyze_bind(
+    target: &crate::ast::BindTarget,
+    value: &Contract,
+    env: &mut TypeEnv,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) {
+    use crate::ast::BindTarget;
+    match target {
+        BindTarget::Name(name) => {
+            env.insert(name.clone(), value.clone());
+        }
+        BindTarget::Pattern(p) => {
+            let pc = pattern_contract(p);
+            if matches!(subcontract(value, &pc, interner), Verdict::Proven) {
+                // Irrefutable — always matches.
+            } else if disjoint(value, &pc) {
+                findings.push(Finding {
+                    class: TrapClass::RefutedBinding,
+                    severity: Severity::Error,
+                    message: "destructuring binding never matches its value".into(),
+                });
+            } else {
+                findings.push(Finding {
+                    class: TrapClass::RefutedBinding,
+                    severity: Severity::Warning,
+                    message: "cannot prove this destructuring binding irrefutable".into(),
+                });
+            }
+            bind_pattern(p, &intersect(value, &pc), env);
+        }
+    }
+}
+
+/// A guard occupies a strict tested seat (E10): it must be a Boolean.
+fn check_tested_seat(guard: &Contract, findings: &mut Vec<Finding>, interner: &mut Interner) {
+    let boolean = Contract::Kind(Kind::Boolean);
+    if matches!(subcontract(guard, &boolean, interner), Verdict::Proven) {
+        return;
+    }
+    if disjoint(guard, &boolean) {
+        findings.push(Finding {
+            class: TrapClass::TestedSeat,
+            severity: Severity::Error,
+            message: "a guard must be a strict Boolean".into(),
+        });
+    } else {
+        findings.push(Finding {
+            class: TrapClass::TestedSeat,
+            severity: Severity::Warning,
+            message: "cannot prove this guard is a Boolean".into(),
+        });
+    }
+}
+
+fn intersect(a: &Contract, b: &Contract) -> Contract {
+    match (a, b) {
+        (Contract::Top, x) | (x, Contract::Top) => x.clone(),
+        // Elementwise on matching tuples, so narrowing reaches sub-patterns.
+        (Contract::Tuple(pa), Contract::Tuple(pb)) if pa.len() == pb.len() => {
+            Contract::Tuple(pa.iter().zip(pb).map(|(x, y)| intersect(x, y)).collect())
+        }
+        _ => Contract::Intersection(Box::new(a.clone()), Box::new(b.clone())),
+    }
+}
+
+fn difference(a: &Contract, b: &Contract) -> Contract {
+    Contract::Difference(Box::new(a.clone()), Box::new(b.clone()))
+}
+
+fn union_of(mut contracts: Vec<Contract>) -> Contract {
+    match contracts.len() {
+        0 => Contract::Top, // a Match with no arms only ever completes-without-value
+        1 => contracts.pop().unwrap(),
+        _ => contracts
+            .into_iter()
+            .reduce(|a, b| Contract::Union(Box::new(a), Box::new(b)))
+            .unwrap(),
+    }
 }
 
 enum Printability {
