@@ -21,6 +21,20 @@ pub fn run_program_value(src: &str) -> Result<ValueRef, Trap> {
     oracle.run_module(&module)
 }
 
+/// Apply a primitive operation to concrete operand values, returning the produced
+/// value or a [`Trap`]. This exposes the oracle's value-level primop semantics as
+/// the truth source for the analyzer's operation rules (C§7): the analyzer's
+/// `analyze_operation` is brute-tested to over-approximate this and to agree on
+/// operation-safety. Primops always produce (never suspend), so a non-`Produced`
+/// outcome is unreachable.
+pub fn eval_prim(op: PrimOp, args: &[ValueRef], interner: &mut Interner) -> Result<ValueRef, Trap> {
+    let mut oracle = Oracle::new(interner);
+    match oracle.apply_prim(op, args)? {
+        Outcome::Produced(v) => Ok(v),
+        _ => unreachable!("primops always produce a value"),
+    }
+}
+
 /// Like [`run_program_value`], but also returns the number of *actual* slot
 /// commits — test-observable evidence of the interning-exact equality guard.
 pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
@@ -192,7 +206,13 @@ impl<'a> Oracle<'a> {
         for a in args {
             vals.push(self.eval_value(a, env, world)?);
         }
+        self.apply_prim(op, &vals)
+    }
 
+    /// Apply a primitive operation to already-evaluated operand values. This is the
+    /// value-level truth source the analyzer's operation rules (C§7) are tested
+    /// against — see [`eval_prim`].
+    pub(crate) fn apply_prim(&mut self, op: PrimOp, vals: &[ValueRef]) -> EvalResult {
         // Indeterminate propagation: arithmetic with an Indeterminate operand
         // yields the left-most Indeterminate unchanged. Ordering/numeric-demand
         // ops instead trap; `==`/`!=` treat it as an ordinary value.
@@ -212,8 +232,8 @@ impl<'a> Oracle<'a> {
                 self.interner.number(-n)
             }
             PrimOp::Add => return self.eval_add(&vals[0], &vals[1]).map(Outcome::Produced),
-            PrimOp::Sub => self.num_binop(&vals, |a, b| a - b)?,
-            PrimOp::Mul => self.num_binop(&vals, |a, b| a * b)?,
+            PrimOp::Sub => self.num_binop(vals, |a, b| a - b)?,
+            PrimOp::Mul => self.num_binop(vals, |a, b| a * b)?,
             PrimOp::Div => return self.eval_div(&vals[0], &vals[1]).map(Outcome::Produced),
             PrimOp::Rem => return self.eval_rem(&vals[0], &vals[1]).map(Outcome::Produced),
             PrimOp::Pow => return self.eval_pow(&vals[0], &vals[1]).map(Outcome::Produced),

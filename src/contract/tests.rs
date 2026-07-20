@@ -323,3 +323,185 @@ fn subcontract_soundness_sweep() {
         }
     }
 }
+
+// ── Operation rules (C§7) ─────────────────────────────────────────────────────
+
+use crate::ast::PrimOp;
+use crate::oracle::eval_prim;
+
+#[test]
+fn operation_add_ranges() {
+    let mut i = Interner::new();
+    // [0,10] + [5,15] safely produces [5,25].
+    let a = Contract::Range(r(0), r(10));
+    let b = Contract::Range(r(5), r(15));
+    let res = analyze_operation(PrimOp::Add, &[a, b], &mut i);
+    assert!(matches!(res.safety, OpSafety::Proven));
+    assert_eq!(res.output, Contract::Range(r(5), r(25)));
+    // Concrete: 3 + 7 = 10 ∈ output.
+    let out = eval_prim(PrimOp::Add, &[i.integer(3), i.integer(7)], &mut i).unwrap();
+    assert!(res.output.contains(&out));
+}
+
+#[test]
+fn operation_add_type_mismatch_refuted() {
+    let mut i = Interner::new();
+    // Number + String traps; the rule must exhibit a trapping witness tuple.
+    let res = analyze_operation(
+        PrimOp::Add,
+        &[Contract::Kind(Kind::Number), Contract::Kind(Kind::String)],
+        &mut i,
+    );
+    match res.safety {
+        OpSafety::Refuted(w) => {
+            assert!(eval_prim(PrimOp::Add, &w, &mut i).is_err(), "witness must trap");
+        }
+        other => panic!("expected Refuted, got {other:?}"),
+    }
+}
+
+#[test]
+fn operation_division_is_total() {
+    let mut i = Interner::new();
+    // Division by a range spanning zero is *safe* (total) but the image includes
+    // Indeterminate values.
+    let a = Contract::Kind(Kind::Number);
+    let b = Contract::Range(r(0), r(10));
+    let res = analyze_operation(PrimOp::Div, &[a, b], &mut i);
+    assert!(matches!(res.safety, OpSafety::Proven), "division never traps");
+    let one_over_zero = eval_prim(PrimOp::Div, &[i.integer(1), i.integer(0)], &mut i).unwrap();
+    assert!(res.output.contains(&one_over_zero), "output must cover 1/0 = _/0");
+    // A nonzero divisor drops the Indeterminate from the image.
+    let safe = analyze_operation(
+        PrimOp::Div,
+        &[Contract::Kind(Kind::Number), Contract::Greater(r(0))],
+        &mut i,
+    );
+    assert_eq!(safe.output, Contract::Kind(Kind::Number));
+}
+
+#[test]
+fn operation_comparison_and_neg() {
+    let mut i = Interner::new();
+    let cmp = analyze_operation(
+        PrimOp::Lt,
+        &[Contract::Range(r(0), r(10)), Contract::Range(r(0), r(10))],
+        &mut i,
+    );
+    assert!(matches!(cmp.safety, OpSafety::Proven));
+    assert_eq!(cmp.output, Contract::Kind(Kind::Boolean));
+    // Negation flips a range.
+    let neg = analyze_operation(PrimOp::Neg, &[Contract::Range(r(2), r(5))], &mut i);
+    assert!(matches!(neg.safety, OpSafety::Proven));
+    assert_eq!(neg.output, Contract::Range(r(-5), r(-2)));
+    // `<` on a non-number is refuted.
+    let bad = analyze_operation(
+        PrimOp::Lt,
+        &[Contract::Kind(Kind::String), Contract::Kind(Kind::Number)],
+        &mut i,
+    );
+    assert!(matches!(bad.safety, OpSafety::Refuted(_)));
+}
+
+#[test]
+fn operation_soundness_sweep() {
+    // Brute-force every operation over a grid of input contracts against the
+    // oracle (`eval_prim`): the output must over-approximate the true image, a
+    // `Proven` safety must never trap, and a `Refuted` witness must trap.
+    let mut i = Interner::new();
+
+    let inputs = vec![
+        Contract::Top,
+        Contract::Kind(Kind::Number),
+        Contract::Kind(Kind::String),
+        Contract::Kind(Kind::Boolean),
+        Contract::Range(r(0), r(10)),
+        Contract::Range(r(-5), r(5)),
+        Contract::Greater(r(0)),
+        Contract::Equals(i.integer(0)),
+        Contract::Indeterminate(crate::value::IndetForm::DivByZero),
+    ];
+
+    let mut pool: Vec<ValueRef> = Vec::new();
+    for v in [-5, -2, 0, 1, 2, 3, 7, 10, 100] {
+        pool.push(i.integer(v));
+    }
+    pool.push(i.number(rat(1, 2)));
+    pool.push(i.string("a"));
+    pool.push(i.boolean(true));
+    pool.push(i.null());
+    pool.push(i.indeterminate(crate::value::IndetForm::DivByZero));
+    pool.push(i.indeterminate(crate::value::IndetForm::ZeroOverZero));
+
+    let binops = [
+        PrimOp::Add,
+        PrimOp::Sub,
+        PrimOp::Mul,
+        PrimOp::Div,
+        PrimOp::Rem,
+        PrimOp::Pow,
+        PrimOp::Lt,
+        PrimOp::Le,
+        PrimOp::Gt,
+        PrimOp::Ge,
+        PrimOp::Eq,
+        PrimOp::Ne,
+    ];
+
+    for op in binops {
+        for a in &inputs {
+            for b in &inputs {
+                let res = analyze_operation(op, &[a.clone(), b.clone()], &mut i);
+                if let OpSafety::Refuted(w) = &res.safety {
+                    assert!(
+                        eval_prim(op, w, &mut i).is_err(),
+                        "UNSOUND Refuted: {op:?} witness {w:?} does not trap",
+                    );
+                }
+                for v1 in &pool {
+                    if !a.contains(v1) {
+                        continue;
+                    }
+                    for v2 in &pool {
+                        if !b.contains(v2) {
+                            continue;
+                        }
+                        let t = [v1.clone(), v2.clone()];
+                        match eval_prim(op, &t, &mut i) {
+                            Ok(out) => assert!(
+                                res.output.contains(&out),
+                                "IMAGE ESCAPE: {op:?}({v1:?},{v2:?}) = {out:?} ∉ {:?}",
+                                res.output,
+                            ),
+                            Err(_) => assert!(
+                                !matches!(res.safety, OpSafety::Proven),
+                                "UNSOUND Proven: {op:?}({v1:?},{v2:?}) traps",
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Unary negation.
+    for a in &inputs {
+        let res = analyze_operation(PrimOp::Neg, std::slice::from_ref(a), &mut i);
+        if let OpSafety::Refuted(w) = &res.safety {
+            assert!(eval_prim(PrimOp::Neg, w, &mut i).is_err());
+        }
+        for v in &pool {
+            if !a.contains(v) {
+                continue;
+            }
+            match eval_prim(PrimOp::Neg, std::slice::from_ref(v), &mut i) {
+                Ok(out) => assert!(
+                    res.output.contains(&out),
+                    "IMAGE ESCAPE: -{v:?} = {out:?} ∉ {:?}",
+                    res.output,
+                ),
+                Err(_) => assert!(!matches!(res.safety, OpSafety::Proven)),
+            }
+        }
+    }
+}

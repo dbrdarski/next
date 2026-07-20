@@ -42,6 +42,47 @@ green (hard rule 1).
 
 ---
 
+## 2026-07-20 — Contracts C.3: operation transfer rules (`analyze_operation`)
+
+`src/contract/operation.rs` (new) + `oracle::eval_prim` (exposed) + 5 tests incl.
+an operation × input-grid soundness sweep. Compendium C§7 / C§16 obligation 3.
+Full suite 174, 0 ignored, clippy clean.
+
+- **`analyze_operation(op, [C₁…Cₙ]) → { safety, output }`** — the one uniform rule
+  shape the spec mandates for every primop.
+  - **`safety: OpSafety`** = `Proven` / `Refuted(witness tuple)` / `Unproven` — a
+    subcontract carrying an *n-ary* witness. Proof side discharges the op's demand
+    via C.2 `subcontract` (`+` wants two Numbers **or** two Strings; `- * / % < <=
+    > >=` want two Numbers; `^` wants an integer exponent and no `0`-to-a-negative;
+    `== !=` never trap). Refutation samples operand tuples and asks the **oracle**
+    (`eval_prim`) whether they trap — the witness genuinely halts.
+  - **`output: Contract`** over-approximates the image. Interval arithmetic where
+    clean (`Range+Range`, `Range−Range`, `Range·Range` corner products, negation
+    flips bounds), `Kind(Number)`/`Kind(Boolean)` otherwise.
+- **Oracle as truth source:** extracted the value-level primop dispatch into
+  `Oracle::apply_prim` and exposed `oracle::eval_prim(op, args, interner)`. The
+  sweep runs every op over an input-contract grid, samples operand tuples, and
+  checks: `Ok(v) ⇒ output.contains(v)` (no image escape), `Err ⇒ safety ≠ Proven`,
+  and every `Refuted(w)` actually traps. This is Part I's "brute-forced per-rule
+  against the oracle" applied to operations.
+- **Two totality/passthrough subtleties made explicit** (both mandated by the
+  semantics companion, surfaced by the sweep):
+  1. **Division is total** — a `0` divisor yields `Indeterminate`, *not* a trap. So
+     `/` and `%` are safety-`Proven` on any two Numbers, and the output unions in
+     `Indeterminate(_/0)`/`(0/0)` exactly when `0 ∈ ⟦divisor⟧` (decided by
+     `contains`).
+  2. **Arithmetic passes an Indeterminate operand through unchanged** — so when any
+     operand contract can contain an Indeterminate, the image includes that form
+     (`with_indet_passthrough`). Without this the sweep caught `Add(Top,Top)` on an
+     Indeterminate operand escaping a `Number∪String` output.
+- **Known incompleteness → `Unproven`** (sound): non-interval numeric outputs fall
+  back to `Kind(Number)`; `Pow` output is `Kind(Number)`; demands that C.2 can't
+  yet prove (e.g. integer-exponent on a `Range`) yield `Unproven` unless a sampled
+  tuple traps.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-20 — Contracts C.2: three-valued subcontract `A ⊑ B`
 
 `src/contract/subcontract.rs` (new) + tests. Compendium C§8. 7 subcontract seeds

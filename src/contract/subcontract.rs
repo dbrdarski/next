@@ -274,7 +274,9 @@ fn refute(a: &Contract, b: &Contract, interner: &mut Interner) -> Option<ValueRe
 }
 
 /// Candidate members of `⟦c⟧` (best-effort; the caller re-checks membership).
-fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
+/// Shared with the operation rules (C§7), which sample operands to hunt for
+/// safety-refuting witness tuples.
+pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
     use Contract::*;
     let nums = |i: &mut Interner, vs: &[i64]| vs.iter().map(|&n| i.integer(n)).collect::<Vec<_>>();
     match c {

@@ -36,7 +36,7 @@ mod poly;
 mod tests;
 
 pub use equal::values_equal;
-pub use eval::{run_program_commits, run_program_value};
+pub use eval::{eval_prim, run_program_commits, run_program_value};
 pub use harness::{HostIo, RunError, run_source, run_with_io};
 
 /// An oracle trap: a non-value, non-catchable halt (§6). Its class is the

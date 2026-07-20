@@ -19,7 +19,9 @@ use crate::oracle::values_equal;
 use crate::rational::Rational;
 use crate::value::{ValueData, ValueRef};
 
+mod operation;
 mod subcontract;
+pub use operation::{OpResult, OpSafety, analyze_operation};
 pub use subcontract::{Verdict, subcontract};
 
 #[cfg(test)]
