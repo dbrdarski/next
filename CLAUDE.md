@@ -1,6 +1,6 @@
 # CLAUDE.md — NEXT Language Implementation
 
-You are implementing **NEXT**, a language whose design is complete and recorded in five normative documents in this repository. Your job is implementation, not design.
+You are implementing **NEXT**, a language whose design is complete and recorded in six normative documents in this repository. Your job is implementation, not design.
 
 ## Normative documents (read in this order)
 
@@ -8,7 +8,8 @@ You are implementing **NEXT**, a language whose design is complete and recorded 
 2. `next-grammar-specification-v0-1.md` — what parses. Final; no throwaway notation.
 3. `next-kernel-ast-specification-v0-1.md` — what exists after parsing: node inventory + the **closed desugaring catalog** (§4). The analyzer-facing form.
 4. `next-semantics-companion-v0-1.md` — what running means: per-node evaluation rules, **oracle traps**, the trap↔compile-error concordance (§6).
-5. `next-mu-canonicalization-specification-v0-1.md` — value/function identity: canonical code shape (algorithm A) + runtime `==` as bisimulation over value graphs (algorithm B). The `==`-determining rule set is **frozen** per §6.
+5. `next-mu-canonicalization-specification-v0-5.md` — value/function identity: two graph domains (code vs value); Algorithm A (eager per-SCC code canonicalization, capture routing); Algorithm B (value-graph bisimulation, canonicalization-internal); **universal interning restored** (closures intern shallowly; runtime `==` is a pointer test); the enumerated, frozen `==`-slice (§8). Supersedes v0.1 (kept on disk as history).
+6. `next-recursive-contracts-specification-v0-2.md` — C§9: named recursive contracts; admissibility (positivity + structural guardedness); vector-lfp denotation; progress-guarded pair-induction subcontract; productivity-closure emptiness.
 
 Status vocabulary matters: [decided]/[owed]/[open]/[parked]/[leaning]/[fenced]. Nothing is [verified]. Fenced subsystems (reactive layer, concurrency, UI) are **not** in scope.
 

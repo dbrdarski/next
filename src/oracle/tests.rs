@@ -526,6 +526,18 @@ fn self_referential_values_intern_equal() {
 }
 
 #[test]
+fn mu17_mixed_aggregate_flagships() {
+    // Open aggregates as group members: the cycle threads code, never data (B3).
+    // The record variant `r = { f: () => r }` interns like the tuple flagship.
+    assert!(is_true(&eval("r = { f: () => r }\ns = { f: () => s }\nr == s")));
+    // and a record differing in a non-cyclic field is distinct
+    assert_eq!(
+        eval("r = { f: () => r, tag: 1 }\ns = { f: () => s, tag: 2 }\nr == s").as_boolean(),
+        Some(false),
+    );
+}
+
+#[test]
 fn symmetric_group_collapses_to_self_loop() {
     // Law 4 at the value level: the two-slot symmetric group has the same
     // unfolding as the single self-loop, so `a == b == y`.
@@ -594,32 +606,43 @@ fn recursive_self_function_equal_by_shape() {
     assert!(is_true(&eval(src)));
 }
 
-// ── Polynomial NF over arithmetic bodies (frozen ==-set, H-05) ───────────────
+// ── The narrow arithmetic ==-slice (μ spec v0.5 §8; H-05 kept, MU-10 excluded) ─
 
 #[test]
-fn h05_polynomial_normal_form_equalities() {
-    assert!(is_true(&eval("((x) => x + x) == ((x) => 2 * x)")), "x+x == 2x");
-    assert!(is_true(&eval("((x) => x + 1 + 1) == ((x) => x + 2)")), "constant fold");
-    assert!(is_true(&eval("((x) => x * 2) == ((x) => 2 * x)")), "commutativity");
-    assert!(is_true(&eval("((x) => x - x) == ((x) => 0)")), "cancellation");
-    assert!(is_true(&eval("((x) => (x + 1) * 2) == ((x) => 2 * x + 2)")), "distribution");
-    assert!(is_true(&eval("((x, y) => x + y) == ((a, b) => b + a)")), "multivariate commute");
-    assert!(is_true(&eval("((x) => x * x) == ((x) => x ** 2)")), "power");
+fn h05_the_permitted_arithmetic_rewrites() {
+    // The three permitted rewrites: reordering, literal folding, like-term
+    // combining (every variable survives with its demand).
+    assert!(is_true(&eval("((x) => x + x) == ((x) => 2 * x)")), "x+x == 2x (H-05)");
+    assert!(is_true(&eval("((x) => x + 1 + 1) == ((x) => x + 2)")), "literal fold");
+    assert!(is_true(&eval("((x) => x * 2) == ((x) => 2 * x)")), "mul commutativity");
+    assert!(is_true(&eval("((x, y) => x + y) == ((a, b) => b + a)")), "add commutativity");
+    assert!(is_true(&eval("((x) => x + x + x) == ((x) => 3 * x)")), "like-term sum");
 }
 
 #[test]
-fn polynomial_nf_keeps_genuinely_different_functions_apart() {
+fn mu10_excluded_rewrites_do_not_fire() {
+    // These change divergence and/or operation-safety demands, so the shape-level
+    // rewrites are permanently excluded and must NOT fire (μ spec §8 / MU-10).
+    assert_eq!(eval("((x) => x - x) == ((x) => 0)").as_boolean(), Some(false), "cancellation");
+    assert_eq!(eval("((x) => x + 0) == ((x) => x)").as_boolean(), Some(false), "identity-elim (+0)");
+    assert_eq!(eval("((x) => x * 1) == ((x) => x)").as_boolean(), Some(false), "identity-elim (*1)");
+    assert_eq!(eval("((x) => 0 * x) == ((x) => 0)").as_boolean(), Some(false), "annihilation");
+    // No distribution (not in the enumerated slice).
+    assert_eq!(
+        eval("((x) => (x + 1) * 2) == ((x) => 2 * x + 2)").as_boolean(),
+        Some(false),
+        "distribution not applied",
+    );
+    // x/x is not 1 (Indeterminate at 0); x % x not simplified.
+    assert_eq!(eval("((x) => x / x) == ((x) => 1)").as_boolean(), Some(false), "x/x != 1");
+    assert_eq!(eval("((x) => x % x) == ((x) => 0)").as_boolean(), Some(false), "x%x != 0");
+    // and genuinely different functions stay apart
     assert_eq!(eval("((x) => x) == ((x) => x + 1)").as_boolean(), Some(false));
-    // x/x is NOT 1 (it is Indeterminate at x = 0) — a partial op is never equated
-    // with a total one, so the shapes stay distinct.
-    assert_eq!(eval("((x) => x / x) == ((x) => 1)").as_boolean(), Some(false));
-    // x % y is not polynomial — left as an atom, not simplified.
-    assert_eq!(eval("((x) => x % x) == ((x) => 0)").as_boolean(), Some(false));
 }
 
 #[test]
-fn polynomial_nf_equal_functions_compute_the_same() {
-    // Soundness sanity: the functions NF equates really are extensionally equal.
+fn narrow_slice_equal_functions_compute_the_same() {
+    // Soundness sanity: the functions the slice equates are extensionally equal.
     let src = "
         f = (x) => x + x
         g = (x) => 2 * x

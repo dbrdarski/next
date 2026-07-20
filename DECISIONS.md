@@ -43,6 +43,60 @@ green (hard rule 1).
 
 ---
 
+## 2026-07-20 — Reconcile with updated specs (μ v0.5 + recursive-contracts v0.2)
+
+The author replaced the μ spec (v0.1 → **v0.5**, four review rounds) and added
+`next-recursive-contracts-specification-v0-2.md` (the C§9 package), and amended
+the compendium (B1/B3/B4/C§9/C§11/C§12.3/F1–F3). Reviewed all; made the necessary
+fixes. Full suite 164, 0 ignored, clippy clean.
+
+### Fixed now (real conformance bug)
+- **Polynomial NF narrowed to the frozen `==`-slice (μ v0.5 §8).** My previous
+  poly-NF did full polynomial normalization, which **over-equated**: distribution,
+  cancellation (`x−x`), annihilation (`0*x`), and identity-elimination (`x+0`,
+  `x*1`) — all now **permanently excluded** because they change divergence and
+  operation-safety demands (`(x)=>x−x` demands `x` be a Number and traps
+  otherwise; `(x)=>0` does not — so they are *not* the same function). `poly.rs`
+  rewritten to the three permitted rewrites only — commutative/associative
+  reordering, literal folding (no variable erased), like-term combining where
+  every variable survives (`x+x → 2*x`, H-05 kept) — **aborting** (rebuild with
+  normalized children, otherwise unrewritten) whenever a rewrite would erase an
+  operand or drop a demand. No distribution. Verified: the four excluded
+  rewrites now compare `!=` (MU-10), H-05 and reordering/folding still `==`.
+- **MU-17** (mixed-aggregate flagships): the record self-reference variant
+  `r = { f: () => r }` interns equal like the tuple flagship — already handled by
+  algorithm B's bisimulation; added as a test.
+- **Docs:** CLAUDE.md now lists six normative docs (μ → v0.5, recursive-contracts
+  v0.2 added). μ-v0.1 kept on disk as history.
+
+### Deferred (flagged — not behavioral-correctness bugs)
+- **Universal interning restored (μ v0.5 §6 / B1 / F1–F3).** v0.5 *reverses* the
+  v0.1 "closures are plain allocations" amendment: closures now intern shallowly
+  (acyclic key = (canonical-code pointer, capture pointers); μ-group members at
+  window close by group fingerprint), so runtime `==` is a **pointer test** and
+  Algorithm B becomes canonicalization-internal. My current runtime `==` uses
+  Algorithm B (`values_equal`) directly — which I verified is **observably
+  equivalent** (intern-by-(shape,captures) yields the same `==` results). So this
+  is a **mechanism/performance** re-architecture, not a behavioral fix; it is
+  entangled with the construction-window machinery (§4), so it is deferred and
+  logged, not silently skipped.
+- **Open-value observation prohibition (μ v0.5 §4 / MU-09 / B4).** An *analyzer*
+  compile-error; it does not affect the oracle's runtime for accepted programs.
+  The "nominal while open" edge in `equal.rs` is withdrawn by the spec and is now
+  dead for accepted programs; it becomes moot under the interning re-architecture.
+- **Algorithm A capture routing + capture-space ordering + capture vector
+  (μ v0.5 laws 4/8, §5).** My `mu.rs` is the pre-routing core (laws 1/3/5);
+  MU-14/15/16 (the makePair code-vs-value distinction, the instantiated
+  group-value graph) need capture routing and the instantiated graph — layer-2,
+  deferred with the analyzer.
+
+### Newly unblocked (next)
+- **Recursive contracts (C§9)** are now fully specified (v0.2) — the C.1
+  `[ask-author]`-adjacent deferral. Buildable: admissibility, vector-lfp
+  denotation, progress-guarded subcontract, productivity emptiness.
+
+---
+
 ## 2026-07-19 — Algorithm A: eager code canonicalization of binding groups (μ spec §4A)
 
 `src/oracle/mu.rs` + `src/oracle/mu/tests.rs` (new). μ-Canonicalization Spec
