@@ -93,6 +93,9 @@ fn atom_provable(a: &Contract, b: &Contract) -> bool {
         (Kind(k1), Kind(k2)) => k1 == k2,
         // Every numeric atom is a Number.
         (Range(..) | Greater(_) | GreaterEq(_) | Less(_) | LessEq(_) | Mod { .. } | Geo { .. }, Kind(VKind::Number)) => true,
+        // A structured contract inhabits its kind.
+        (Tuple(_), Kind(VKind::Tuple)) => true,
+        (Record(_) | HasField(_), Kind(VKind::Record)) => true,
         (Mod { n: n1, r: r1 }, Mod { n: n2, r: r2 }) => mod_subset(n1, r1, n2, r2),
         (HasField(k1), HasField(k2)) => k1 == k2,
         // An exact record having field `k` is a subcontract of `HasField(k)`.

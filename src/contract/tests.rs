@@ -287,6 +287,9 @@ fn subcontract_soundness_sweep() {
         Contract::Intersection(Box::new(Contract::Range(r(0), r(20))), Box::new(Contract::Greater(r(5)))),
         Contract::Difference(Box::new(Contract::Range(r(0), r(10))), Box::new(Contract::Equals(i.integer(5)))),
         Contract::HasField("age".into()),
+        Contract::Kind(Kind::Tuple),
+        Contract::Kind(Kind::Record),
+        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
     ];
 
     // A diverse value pool (numbers, non-numbers).
@@ -300,6 +303,9 @@ fn subcontract_soundness_sweep() {
     pool.push(i.null());
     let age = i.integer(1);
     pool.push(i.record_str(vec![("age", age)]));
+    let one = i.integer(1);
+    pool.push(i.tuple(vec![one]));
+    pool.push(i.tuple(vec![]));
 
     for a in &contracts {
         for b in &contracts {

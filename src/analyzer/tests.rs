@@ -4,7 +4,7 @@
 //! soundness direction (`accepted ⇒ oracle never traps` over sampled inputs).
 
 use super::*;
-use crate::ast::{BindingRef, Element, Expr, Field, PrimOp, Ref};
+use crate::ast::{BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
 use crate::oracle::eval_expr;
 use crate::rational::Rational;
 
@@ -136,6 +136,14 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
     c.push(Expr::TupleCons(vec![Element::Expr(t1), Element::Expr(t2)]));
     let good = prim(PrimOp::Add, vec![n(i, 1), n(i, 2)]);
     c.push(Expr::RecordCons(vec![Field::Field { key: "k".into(), value: good }]));
+    // Templates: a printable interpolation, and a structure interpolation (trap).
+    let printable = prim(PrimOp::Add, vec![n(i, 1), n(i, 2)]);
+    c.push(Expr::Template(vec![
+        TemplatePart::Segment("v=".into()),
+        TemplatePart::Interp(printable),
+    ]));
+    let structure = Expr::TupleCons(vec![Element::Expr(n(i, 1)), Element::Expr(n(i, 2))]);
+    c.push(Expr::Template(vec![TemplatePart::Interp(structure)])); // trap: unprintable
     c
 }
 
@@ -165,6 +173,31 @@ fn closed_expression_concordance() {
             ),
         }
     }
+}
+
+#[test]
+fn template_structure_interpolation_is_rejected() {
+    let mut i = Interner::new();
+    // `{ (1, 2) }` interpolates a tuple → E11 trap-until-ruled, an error.
+    let tuple = Expr::TupleCons(vec![Element::Expr(konst(i.integer(1)))]);
+    let t = Expr::Template(vec![TemplatePart::Interp(tuple)]);
+    let a = analyze(&t, &empty(), &mut i);
+    assert!(!a.accepted());
+    assert_eq!(a.findings[0].class, TrapClass::UnprintableInterpolation);
+    assert_eq!(a.findings[0].severity, Severity::Error);
+}
+
+#[test]
+fn template_unknown_interpolation_warns_not_rejects() {
+    let mut i = Interner::new();
+    // An unconstrained `x` might or might not be printable → warning, still accepted.
+    let mut env = TypeEnv::new();
+    env.insert("x".into(), Contract::Top);
+    let t = Expr::Template(vec![TemplatePart::Interp(name("x"))]);
+    let a = analyze(&t, &env, &mut i);
+    assert!(a.accepted(), "unknown printability is a warning, not a rejection");
+    assert_eq!(a.findings[0].severity, Severity::Warning);
+    assert_eq!(a.findings[0].class, TrapClass::UnprintableInterpolation);
 }
 
 #[test]

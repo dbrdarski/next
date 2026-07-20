@@ -38,11 +38,42 @@ now that the oracle, normalization harness, and contracts C.1–C.3/C§9 are gre
   variable's contract never traps on sampled admitted values.
 - **Scope (this increment):** the pure expression fragment — `Const`, `Ref` (against
   a `TypeEnv`; unbound → `UnboundEvaluation` error), `PrimOp`, `TupleCons`,
-  `RecordCons`. Worlds, `Apply`, `Match`, `Access`, `Template`, `Write` type as
-  `Top` and are **not yet checked** — honest gap, not a false safety claim (the
-  brute-test only generates covered nodes). Next: access demands (E6 →
-  Null/AbsentField/IndexBounds), then application/`Match`.
-- **`// [ask-author]`:** none.
+  `RecordCons`, plus `Template` (added below). Next: access demands (E6 →
+  Null/AbsentField/IndexBounds), then `Match`, then application.
+
+- **Provenance of the not-yet-checked nodes (the honest three-way split).** The
+  remaining nodes are *not* a single "documented gap"; there are three distinct
+  statuses:
+  1. **Design decided, implementation owed by me** (an increment boundary, not a
+     spec gap): `Access` (E6 demands), `Match` (E9/E10: tested-seat, refuted-binding,
+     expecting-seat, arm narrowing via accumulated Difference), `Apply`
+     (`analyzeOperation(application)` — argument-obligation, world admission B5,
+     expecting-seat, spread-kind), `Write`/worlds (B5 matrix; mutator return-nothing).
+     The docs pin these; I simply haven't built them. They type as `Top`, unchecked.
+  2. **Doc-owed contract family**: `TupleCons`/`RecordCons` *spread* and
+     *tuple-length/concatenation* lean on **C§17 (owed)**; my `Top` for spread shapes
+     is backed by a genuine open in the spec.
+  3. **Doc-open (E11 print doctrine)**: `Template` structure interpolation is
+     *trap-until-ruled* — the correct behavior is to **reject**, not accept.
+
+- **`Template` implemented (correcting the earlier `Top`-as-accept).** Typing
+  `Template` as `Top` silently *accepted* structure interpolation — an unsound
+  acceptance against E11 (the oracle already traps `UnprintableInterpolation`). Now
+  `analyze_template` demands printability per interpolation, mirroring the oracle's
+  `stringify` (String/Number/Boolean/Null print; structures + Indeterminate trap):
+  singleton → exact; `⊑ {String,Number,Boolean,Null}` → accept; provably a
+  structure (`⊑ Kind(Tuple)∪Kind(Record)∪Kind(Function)`, or an `Indeterminate`) →
+  **error**; otherwise → warning. Template's result contract is `Kind(String)`.
+  Added to the closed-expression concordance corpus (printable + structure cases).
+- **C.2 gap this surfaced (fixed):** subcontract lacked "a structured contract
+  inhabits its kind" — added `Tuple(_) ⊑ Kind(Tuple)` and
+  `Record(_) | HasField(_) ⊑ Kind(Record)` to `atom_provable`, and extended the C.2
+  soundness sweep with `Kind(Tuple)`, `Kind(Record)`, a `Tuple([Number])` contract,
+  and tuple values. (Numeric atoms already had `⊑ Kind(Number)`; this closes the
+  structural analogue.)
+- **`// [ask-author]`:** none — the `Template` behavior follows E11's stated
+  "trap until ruled"; when the print doctrine is ruled, only `analyze_template`'s
+  accept/reject boundary moves.
 
 ---
 

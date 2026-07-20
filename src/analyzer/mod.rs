@@ -19,11 +19,11 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{BindingRef, Element, Expr, Field, PrimOp, Ref};
-use crate::contract::{Contract, OpSafety, analyze_operation};
+use crate::ast::{BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
+use crate::contract::{Contract, Kind, OpSafety, Verdict, analyze_operation, subcontract};
 use crate::interner::Interner;
 use crate::oracle::{TrapClass, eval_prim};
-use crate::value::ValueRef;
+use crate::value::{ValueData, ValueRef};
 
 #[cfg(test)]
 mod tests;
@@ -89,6 +89,7 @@ pub fn analyze(expr: &Expr, env: &TypeEnv, interner: &mut Interner) -> Analysis 
 
         Expr::TupleCons(elems) => analyze_tuple(elems, env, interner),
         Expr::RecordCons(fields) => analyze_record(fields, env, interner),
+        Expr::Template(parts) => analyze_template(parts, env, interner),
 
         // Not yet analyzed: conservatively typed `Top`, unchecked.
         _ => exact(Contract::Top),
@@ -206,4 +207,75 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, interner: &mut Interner) -> A
     }
     let contract = if exact_shape { Contract::Record(pairs) } else { Contract::Top };
     Analysis { contract, findings }
+}
+
+/// A template produces a String (when it does not trap). Each interpolation is a
+/// printability demand: the oracle's `stringify` prints only String/Number/
+/// Boolean/Null and **traps `UnprintableInterpolation` on structures** — the print
+/// doctrine for structures is deliberately open (E11: *trap until ruled*), so a
+/// structure interpolation is a rejection, not a silent accept.
+fn analyze_template(parts: &[TemplatePart], env: &TypeEnv, interner: &mut Interner) -> Analysis {
+    let mut findings = Vec::new();
+    for part in parts {
+        let TemplatePart::Interp(e) = part else { continue };
+        let mut r = analyze(e, env, interner);
+        findings.append(&mut r.findings);
+        match printability(&r.contract, interner) {
+            Printability::Printable => {}
+            Printability::Never => findings.push(Finding {
+                class: TrapClass::UnprintableInterpolation,
+                severity: Severity::Error,
+                message: "interpolating a structure is unruled (E11 — trap until ruled)".into(),
+            }),
+            Printability::Unknown => findings.push(Finding {
+                class: TrapClass::UnprintableInterpolation,
+                severity: Severity::Warning,
+                message: "cannot prove this interpolation is printable".into(),
+            }),
+        }
+    }
+    Analysis { contract: Contract::Kind(Kind::String), findings }
+}
+
+enum Printability {
+    Printable,
+    Never,
+    Unknown,
+}
+
+/// Whether the oracle's `stringify` accepts a value of this kind.
+fn printable_value(v: &ValueRef) -> bool {
+    matches!(
+        v.data(),
+        ValueData::Str(_) | ValueData::Number(_) | ValueData::Boolean(_) | ValueData::Null
+    )
+}
+
+fn printability(c: &Contract, interner: &mut Interner) -> Printability {
+    // A singleton decides exactly (mirrors the oracle on that value).
+    if let Contract::Equals(v) = c {
+        return if printable_value(v) { Printability::Printable } else { Printability::Never };
+    }
+    let printable = union([Kind::String, Kind::Number, Kind::Boolean, Kind::Null]);
+    if matches!(subcontract(c, &printable, interner), Verdict::Proven) {
+        return Printability::Printable;
+    }
+    // Provably a structure (or an Indeterminate) — every inhabitant traps.
+    let unprintable = union([Kind::Tuple, Kind::Record, Kind::Function]);
+    if matches!(c, Contract::Indeterminate(_))
+        || matches!(subcontract(c, &unprintable, interner), Verdict::Proven)
+    {
+        return Printability::Never;
+    }
+    Printability::Unknown
+}
+
+/// A right-folded union of the given kinds.
+fn union<const N: usize>(kinds: [Kind; N]) -> Contract {
+    kinds
+        .into_iter()
+        .rev()
+        .map(Contract::Kind)
+        .reduce(|acc, k| Contract::Union(Box::new(k), Box::new(acc)))
+        .expect("non-empty")
 }
