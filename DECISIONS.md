@@ -84,18 +84,30 @@ graph (never a materialized unfolding, §4):
   nothing — `contains` is `false`, `sample` empty — so non-recursive code is
   unaffected and recursive code resolves references first.
 
-**Scoped as owed (sound `Unproven`, matching spec §5.3/§6 "owed" rows), flagged for
-the author:**
-- **RC-14** recursive-`Intersection` emptiness over the finite *product graph* is
-  not built; exact intersection emptiness returns `Unproven` unless a side is
-  outright empty. `// [ask-author]`-class: the product-graph construction is
-  specified but deferred to keep this increment reviewable.
-- **§5.3 witness-assembled refutation** for recursive shapes is not built; the
-  recursive subcontract yields `Proven`/`Unproven`, delegating refutation to C.2 for
-  ref-free pairs only. Recursive mismatches never claim `Refuted` (sound).
+- **`// [ask-author]`:** none.
 
-- **`// [ask-author]`:** the two scoped-owed items above; no silent semantic
-  choices.
+### Follow-up (same day) — the two owed rows closed
+
+- **RC-14 recursive-`Intersection` emptiness over the finite product graph** is now
+  built (`intersection_emptiness`/`inter`): product states are pairs `(a, b)`,
+  Unions distribute, `Record`/`Tuple` descend into paired components, `Equals`
+  decides exactly by membership, `Ref` pairs form product states cut on revisit
+  (the least fixpoint — an intersection inhabited only *through* a cycle has no
+  finite witness, so is empty), and leaf pairs bottom out in the C.2 `disjoint`
+  check plus a sampled common witness. Wired into both `prod_eval` (witness) and
+  `exact_eval` (voice). Tests: two individually-inhabited recursive contracts whose
+  intersection is non-empty (shared base `1`) and empty (disjoint bases `1`/`2`).
+- **§5.3 witness-assembled refutation** is now built: after a failed proof,
+  `refute` enumerates finite inhabitants of the source at increasing unfolding
+  depth (`REFUTE_DEPTH = 4`, a bounded search — no proof is ever capped) and returns
+  the first re-verified `w ∈ ⟦A⟧ ∖ ⟦B⟧`. Sound (every witness re-checked), and
+  empty sources yield no inhabitants so are never wrongly refuted (they short-circuit
+  to `Proven` at step 0 first). Test: `NumList ⊄ StrList` refuted with a concrete
+  number-list witness.
+- **Remaining bounded-ness (sound, incomplete):** the refutation search and the
+  leaf-pair witness sampling are depth/fan-out bounded, so a counterexample that
+  only appears deeper than the bound stays `Unproven` rather than `Refuted`. No
+  proof path is bounded. `// [ask-author]`: none.
 
 ---
 

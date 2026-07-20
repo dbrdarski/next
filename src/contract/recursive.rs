@@ -236,13 +236,13 @@ struct EmptyEnv {
 impl EmptyEnv {
     fn analyze(group: &RecGroup, interner: &mut Interner) -> EmptyEnv {
         let productive = productivity(group, interner);
-        let verdict = exactness(group, &productive);
+        let verdict = exactness(group, &productive, interner);
         EmptyEnv { productive, verdict }
     }
 
     /// The emptiness voice of an arbitrary contract under this environment.
-    fn voice(&self, group: &RecGroup, c: &Contract) -> E3 {
-        exact_eval(group, c, &self.productive, &self.verdict)
+    fn voice(&self, group: &RecGroup, c: &Contract, interner: &mut Interner) -> E3 {
+        exact_eval(group, c, &self.productive, &self.verdict, interner)
     }
 }
 
@@ -297,14 +297,11 @@ fn prod_eval(
             prod_eval(group, a, states, interner).or_else(|| prod_eval(group, b, states, interner))
         }
         Contract::Intersection(a, b) => {
-            // A genuine common inhabitant: a witness of one side that the other admits.
-            let admits = |w: &ValueRef, other: &Contract| contains(group, other, w);
-            match prod_eval(group, a, states, interner) {
-                Some(w) if admits(&w, b) => Some(w),
-                _ => match prod_eval(group, b, states, interner) {
-                    Some(w) if admits(&w, a) => Some(w),
-                    _ => None,
-                },
+            // Non-emptiness of a recursive intersection = productivity over the
+            // finite product graph (§6). A `NonEmpty` verdict carries a witness.
+            match intersection_emptiness(group, a, b, interner) {
+                Emptiness::NonEmpty(w) => Some(w),
+                _ => None,
             }
         }
         Contract::Difference(b, e) => match prod_eval(group, b, states, interner) {
@@ -349,6 +346,7 @@ fn kind_witness(k: Kind, interner: &mut Interner) -> Option<ValueRef> {
 fn exactness(
     group: &RecGroup,
     productive: &BTreeMap<String, Option<ValueRef>>,
+    interner: &mut Interner,
 ) -> BTreeMap<String, E3> {
     let mut verdict: BTreeMap<String, E3> = productive
         .iter()
@@ -357,13 +355,14 @@ fn exactness(
 
     loop {
         let mut changed = false;
-        for name in group.defs.keys() {
-            if verdict[name] == E3::NonEmpty {
+        for name in group.defs.keys().cloned().collect::<Vec<_>>() {
+            if verdict[&name] == E3::NonEmpty {
                 continue;
             }
-            let v = exact_eval(group, group.get(name), productive, &verdict);
-            if v == E3::Unproven && verdict[name] != E3::Unproven {
-                verdict.insert(name.clone(), E3::Unproven);
+            let def = group.get(&name).clone();
+            let v = exact_eval(group, &def, productive, &verdict, interner);
+            if v == E3::Unproven && verdict[&name] != E3::Unproven {
+                verdict.insert(name, E3::Unproven);
                 changed = true;
             }
         }
@@ -375,14 +374,15 @@ fn exactness(
 }
 
 /// The emptiness voice of `c`, reading name states/verdicts (no recursion into
-/// reference bodies — references are leaves here).
+/// reference bodies — references are leaves here). `Intersection` bottoms out in
+/// the product-graph closure ([`intersection_emptiness`]).
 fn exact_eval(
     group: &RecGroup,
     c: &Contract,
     productive: &BTreeMap<String, Option<ValueRef>>,
     verdict: &BTreeMap<String, E3>,
+    interner: &mut Interner,
 ) -> E3 {
-    let go = |x: &Contract| exact_eval(group, x, productive, verdict);
     match c {
         Contract::Ref(name) if group.is_member(name) => {
             if productive[name].is_some() {
@@ -400,23 +400,35 @@ fn exact_eval(
                 E3::NonEmpty
             }
         }
-        Contract::Union(a, b) => join_union(go(a), go(b)),
-        Contract::Intersection(a, b) => {
-            if go(a) == E3::Empty || go(b) == E3::Empty {
-                E3::Empty
-            } else {
-                E3::Unproven // exact intersection emptiness (product graph) is owed
-            }
+        Contract::Union(a, b) => {
+            let va = exact_eval(group, a, productive, verdict, interner);
+            let vb = exact_eval(group, b, productive, verdict, interner);
+            join_union(va, vb)
         }
+        Contract::Intersection(a, b) => match intersection_emptiness(group, a, b, interner) {
+            Emptiness::Empty => E3::Empty,
+            Emptiness::NonEmpty(_) => E3::NonEmpty,
+            Emptiness::Unproven => E3::Unproven,
+        },
         Contract::Difference(b, _) => {
-            if go(b) == E3::Empty {
+            if exact_eval(group, b, productive, verdict, interner) == E3::Empty {
                 E3::Empty
             } else {
                 E3::Unproven
             }
         }
-        Contract::Tuple(elems) => join_product(elems.iter().map(&go)),
-        Contract::Record(fields) => join_product(fields.iter().map(|(_, e)| go(e))),
+        Contract::Tuple(elems) => {
+            let voices: Vec<E3> =
+                elems.iter().map(|e| exact_eval(group, e, productive, verdict, interner)).collect();
+            join_product(voices.into_iter())
+        }
+        Contract::Record(fields) => {
+            let voices: Vec<E3> = fields
+                .iter()
+                .map(|(_, e)| exact_eval(group, e, productive, verdict, interner))
+                .collect();
+            join_product(voices.into_iter())
+        }
         // Every remaining leaf (Top, non-Function Kind, bounds, Mod, Geo, Equals,
         // Indeterminate, HasField) is inhabited.
         _ => E3::NonEmpty,
@@ -465,11 +477,155 @@ pub fn emptiness(group: &RecGroup, interner: &mut Interner) -> BTreeMap<String, 
         .collect()
 }
 
+/// Emptiness of `⟦a⟧ ∩ ⟦b⟧` as *productivity over the finite product graph* (§6,
+/// RC-14). Product states are pairs `(a, b)`; a revisited pair is cut as not-yet
+/// productive (the least fixpoint — an intersection inhabited only *through* a
+/// cycle has no finite witness and is empty). Unions distribute, `Record`/`Tuple`
+/// descend into paired components, `Equals` decides exactly by membership, and
+/// leaf pairs bottom out in disjointness plus a sampled common witness.
+#[allow(clippy::mutable_key_type)] // keys embed immutable interned values (stable hash/eq)
+fn intersection_emptiness(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut Interner) -> Emptiness {
+    let mut visiting: HashSet<(Contract, Contract)> = HashSet::new();
+    inter(group, a, b, &mut visiting, interner)
+}
+
+#[allow(clippy::mutable_key_type)]
+fn inter(
+    group: &RecGroup,
+    a: &Contract,
+    b: &Contract,
+    visiting: &mut HashSet<(Contract, Contract)>,
+    interner: &mut Interner,
+) -> Emptiness {
+    use Contract::*;
+
+    // Singletons decide exactly: `Equals(v) ∩ B` is `{v}` if `v ∈ B`, else empty.
+    if let Equals(v) = a {
+        return if contains(group, b, v) { Emptiness::NonEmpty(v.clone()) } else { Emptiness::Empty };
+    }
+    if let Equals(v) = b {
+        return if contains(group, a, v) { Emptiness::NonEmpty(v.clone()) } else { Emptiness::Empty };
+    }
+
+    // Reference resolution introduces a product state; cut a revisited pair.
+    let is_ref = |c: &Contract| matches!(c, Ref(n) if group.is_member(n));
+    if is_ref(a) || is_ref(b) {
+        let key = (a.clone(), b.clone());
+        if visiting.contains(&key) {
+            return Emptiness::Empty; // cycle with no base case ⇒ no finite witness
+        }
+        visiting.insert(key.clone());
+        let ra = match a {
+            Ref(n) if group.is_member(n) => group.get(n),
+            _ => a,
+        };
+        let rb = match b {
+            Ref(n) if group.is_member(n) => group.get(n),
+            _ => b,
+        };
+        let r = inter(group, ra, rb, visiting, interner);
+        visiting.remove(&key);
+        return r;
+    }
+
+    match (a, b) {
+        // Union distributes over intersection.
+        (Union(a1, a2), _) => {
+            let r1 = inter(group, a1, b, visiting, interner);
+            if let Emptiness::NonEmpty(w) = r1 {
+                return Emptiness::NonEmpty(w);
+            }
+            let r2 = inter(group, a2, b, visiting, interner);
+            join_empty(r1, r2)
+        }
+        (_, Union(b1, b2)) => {
+            let r1 = inter(group, a, b1, visiting, interner);
+            if let Emptiness::NonEmpty(w) = r1 {
+                return Emptiness::NonEmpty(w);
+            }
+            let r2 = inter(group, a, b2, visiting, interner);
+            join_empty(r1, r2)
+        }
+        // Exact records: same key set, and each paired field-intersection inhabited.
+        (Record(fa), Record(fb)) => {
+            if fa.len() != fb.len() {
+                return Emptiness::Empty;
+            }
+            let mut pairs: Vec<(Vec<u16>, ValueRef)> = Vec::with_capacity(fa.len());
+            let mut any_unproven = false;
+            for (key, ca) in fa {
+                let Some((_, cb)) = fb.iter().find(|(k, _)| k == key) else {
+                    return Emptiness::Empty; // key absent on the other side
+                };
+                match inter(group, ca, cb, visiting, interner) {
+                    Emptiness::Empty => return Emptiness::Empty,
+                    Emptiness::Unproven => any_unproven = true,
+                    Emptiness::NonEmpty(w) => pairs.push((key.encode_utf16().collect(), w)),
+                }
+            }
+            if any_unproven {
+                Emptiness::Unproven
+            } else {
+                Emptiness::NonEmpty(interner.record(pairs))
+            }
+        }
+        (Tuple(ea), Tuple(eb)) => {
+            if ea.len() != eb.len() {
+                return Emptiness::Empty;
+            }
+            let mut items = Vec::with_capacity(ea.len());
+            let mut any_unproven = false;
+            for (ca, cb) in ea.iter().zip(eb) {
+                match inter(group, ca, cb, visiting, interner) {
+                    Emptiness::Empty => return Emptiness::Empty,
+                    Emptiness::Unproven => any_unproven = true,
+                    Emptiness::NonEmpty(w) => items.push(w),
+                }
+            }
+            if any_unproven {
+                Emptiness::Unproven
+            } else {
+                Emptiness::NonEmpty(interner.tuple(items))
+            }
+        }
+        // Leaf-ish pairs: exact disjointness, then a sampled common witness.
+        _ => {
+            if super::subcontract::disjoint(a, b) {
+                return Emptiness::Empty;
+            }
+            let common = super::subcontract::sample(a, interner)
+                .into_iter()
+                .chain(super::subcontract::sample(b, interner))
+                .find(|v| contains(group, a, v) && contains(group, b, v));
+            match common {
+                Some(w) => Emptiness::NonEmpty(w),
+                None => Emptiness::Unproven,
+            }
+        }
+    }
+}
+
+/// Combine two emptiness verdicts disjunctively (a union of the two sides).
+fn join_empty(a: Emptiness, b: Emptiness) -> Emptiness {
+    match (a, b) {
+        (Emptiness::NonEmpty(w), _) | (_, Emptiness::NonEmpty(w)) => Emptiness::NonEmpty(w),
+        (Emptiness::Empty, Emptiness::Empty) => Emptiness::Empty,
+        _ => Emptiness::Unproven,
+    }
+}
+
 // ── 4. Subcontract (§5) — progress-guarded pair induction ─────────────────────
 
+/// Bound on how deep the refutation search unfolds recursive references. A
+/// counterexample to `A ⊑ B`, if one exists, is a finite source value; the
+/// minimal one is shallow, so a small bound suffices in practice (§5.3: no
+/// derivable bound ⇒ unproven, never a cap on a *proof*).
+const REFUTE_DEPTH: usize = 4;
+
 /// Decide `A ⊑ B` over the recursive group. Sound: `Proven` only when
-/// `⟦A⟧ ⊆ ⟦B⟧`. Recursive non-proofs are `Unproven`; ref-free leaf pairs delegate
-/// to the C.2 check (which can additionally `Refute` with a witness).
+/// `⟦A⟧ ⊆ ⟦B⟧`; `Refuted(w)` only with a finite `w ∈ ⟦A⟧ ∖ ⟦B⟧` (§5.3 — an
+/// assembled source witness, never a bare component mismatch). Empty sources are
+/// `Proven` (step 0) and yield no inhabitants, so are never refuted.
 // `Contract` keys embed interned `ValueRef`s. Interned values are immutable, so
 // their hash/eq are stable — the `mutable_key_type` lint's concern does not apply.
 #[allow(clippy::mutable_key_type)]
@@ -479,9 +635,112 @@ pub fn subcontract(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut 
     if prove(group, &env, a, b, 0, &mut assumed, interner) {
         return Verdict::Proven;
     }
-    // Fall back to the non-recursive check — sound (Unproven for recursive shapes,
-    // possibly Refuted for concrete ones).
+    // Refutation: assemble a finite inhabitant of A that B rejects.
+    if let Some(w) = refute(group, a, b, interner) {
+        return Verdict::Refuted(w);
+    }
+    // Otherwise unproven — deferred to the non-recursive check, which is sound
+    // (Unproven for recursive shapes, and complete for concrete ref-free pairs).
     super::subcontract(a, b, interner)
+}
+
+/// Search for a finite `w ∈ ⟦A⟧ ∖ ⟦B⟧` by enumerating inhabitants of `A` at
+/// increasing unfolding depth. Every returned witness is re-checked against both
+/// sides, so the verdict is sound (bounded, hence incomplete — a deeper-only
+/// counterexample stays `Unproven`).
+fn refute(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut Interner) -> Option<ValueRef> {
+    for depth in 0..=REFUTE_DEPTH {
+        let candidates = inhabitants(group, a, depth, interner);
+        if let Some(w) = candidates.into_iter().find(|w| contains(group, a, w) && !contains(group, b, w)) {
+            return Some(w);
+        }
+    }
+    None
+}
+
+/// A bounded set of finite inhabitants of `c`, unfolding references up to `depth`.
+/// References past the budget contribute nothing (that branch simply yields fewer
+/// witnesses — soundness is unaffected because every witness is re-verified).
+fn inhabitants(group: &RecGroup, c: &Contract, depth: usize, interner: &mut Interner) -> Vec<ValueRef> {
+    // Keep the per-node fan-out small; a counterexample needs only one witness.
+    const FANOUT: usize = 3;
+    match c {
+        Contract::Ref(name) if group.is_member(name) => {
+            if depth == 0 {
+                vec![]
+            } else {
+                inhabitants(group, group.get(name), depth - 1, interner)
+            }
+        }
+        Contract::Union(a, b) => {
+            let mut v = inhabitants(group, a, depth, interner);
+            v.extend(inhabitants(group, b, depth, interner));
+            v
+        }
+        Contract::Difference(base, ex) => {
+            let mut v = inhabitants(group, base, depth, interner);
+            v.retain(|w| !contains(group, ex, w));
+            v
+        }
+        Contract::Intersection(a, b) => {
+            let mut v = inhabitants(group, a, depth, interner);
+            v.retain(|w| contains(group, b, w));
+            v
+        }
+        Contract::Tuple(elems) => {
+            let per: Vec<Vec<ValueRef>> =
+                elems.iter().map(|e| take(inhabitants(group, e, depth, interner), FANOUT)).collect();
+            product_values(&per, interner, false, &[])
+        }
+        Contract::Record(fields) => {
+            let keys: Vec<Vec<u16>> = fields.iter().map(|(k, _)| k.encode_utf16().collect()).collect();
+            let per: Vec<Vec<ValueRef>> =
+                fields.iter().map(|(_, e)| take(inhabitants(group, e, depth, interner), FANOUT)).collect();
+            product_values(&per, interner, true, &keys)
+        }
+        // Leaves — a few concrete samples, re-filtered by membership.
+        _ => take(super::subcontract::sample(c, interner).into_iter().filter(|v| c.contains(v)).collect(), FANOUT),
+    }
+}
+
+fn take(mut v: Vec<ValueRef>, n: usize) -> Vec<ValueRef> {
+    v.truncate(n);
+    v
+}
+
+/// Assemble tuple/record values from a per-component inhabitant grid (bounded
+/// cartesian product). If any component is empty, there are no inhabitants.
+fn product_values(per: &[Vec<ValueRef>], interner: &mut Interner, record: bool, keys: &[Vec<u16>]) -> Vec<ValueRef> {
+    const CAP: usize = 12;
+    if per.iter().any(|c| c.is_empty()) {
+        return vec![];
+    }
+    let mut combos: Vec<Vec<ValueRef>> = vec![vec![]];
+    for column in per {
+        let mut next = Vec::new();
+        for prefix in &combos {
+            for item in column {
+                let mut row = prefix.clone();
+                row.push(item.clone());
+                next.push(row);
+                if next.len() >= CAP {
+                    break;
+                }
+            }
+        }
+        combos = next;
+    }
+    combos
+        .into_iter()
+        .map(|row| {
+            if record {
+                let pairs: Vec<(Vec<u16>, ValueRef)> = keys.iter().cloned().zip(row).collect();
+                interner.record(pairs)
+            } else {
+                interner.tuple(row)
+            }
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments, clippy::mutable_key_type)]
@@ -495,7 +754,7 @@ fn prove(
     interner: &mut Interner,
 ) -> bool {
     // Step 0: an empty source is a subcontract of everything.
-    if env.voice(group, a) == E3::Empty {
+    if env.voice(group, a, interner) == E3::Empty {
         return true;
     }
 

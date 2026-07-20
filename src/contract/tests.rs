@@ -677,6 +677,84 @@ mod rec {
         assert!(matches!(v, Verdict::Proven), "NumList ⊑ AnyList, got {v:?}");
     }
 
+    fn equals(i: &mut Interner, v: i64) -> Contract {
+        Contract::Equals(i.integer(v))
+    }
+    fn intersection(a: Contract, b: Contract) -> Contract {
+        Contract::Intersection(Box::new(a), Box::new(b))
+    }
+
+    #[test]
+    fn rc14_recursive_intersection_nonempty() {
+        // A = Union(Equals(1), Record({next: A})); B = Union(Equals(1), Record({next: B})).
+        // They share the base `1`, so the intersection is inhabited by `1`.
+        let mut i = Interner::new();
+        let one = equals(&mut i, 1);
+        let g = group(&[
+            ("A", union(one.clone(), record(&[("next", rec_ref("A"))]))),
+            ("B", union(one, record(&[("next", rec_ref("B"))]))),
+        ]);
+        assert!(recursive::admissible(&g).is_ok());
+        // Add the intersection as a member so emptiness reports on it.
+        let g2 = group(&[
+            ("A", g.defs["A"].clone()),
+            ("B", g.defs["B"].clone()),
+            ("AB", intersection(rec_ref("A"), rec_ref("B"))),
+        ]);
+        let e = recursive::emptiness(&g2, &mut i);
+        match &e["AB"] {
+            recursive::Emptiness::NonEmpty(w) => {
+                assert!(recursive::contains(&g2, &rec_ref("A"), w));
+                assert!(recursive::contains(&g2, &rec_ref("B"), w));
+            }
+            other => panic!("expected NonEmpty, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rc14_recursive_intersection_empty() {
+        // A carries `1` at every base; B carries `2`. Disjoint singletons, and the
+        // recursive branch bottoms out through the product cut ⇒ intersection empty.
+        let mut i = Interner::new();
+        let one = equals(&mut i, 1);
+        let two = equals(&mut i, 2);
+        let g = group(&[
+            ("A", union(one, record(&[("next", rec_ref("A"))]))),
+            ("B", union(two, record(&[("next", rec_ref("B"))]))),
+            ("AB", intersection(rec_ref("A"), rec_ref("B"))),
+        ]);
+        assert!(recursive::admissible(&g).is_ok());
+        let e = recursive::emptiness(&g, &mut i);
+        // A and B are individually inhabited, but their intersection is empty.
+        assert!(matches!(e["A"], recursive::Emptiness::NonEmpty(_)));
+        assert!(matches!(e["B"], recursive::Emptiness::NonEmpty(_)));
+        assert!(matches!(e["AB"], recursive::Emptiness::Empty), "got {:?}", e["AB"]);
+    }
+
+    #[test]
+    fn recursive_subcontract_refuted_with_witness() {
+        // NumList ⊄ StringList: a number-list like [1] inhabits NumList but not
+        // StringList. §5.3 — the verdict is a witness, not a bare mismatch.
+        let mut i = Interner::new();
+        let num_list = union(
+            Contract::Kind(Kind::Null),
+            record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("NumList"))]),
+        );
+        let str_list = union(
+            Contract::Kind(Kind::Null),
+            record(&[("head", Contract::Kind(Kind::String)), ("tail", rec_ref("StrList"))]),
+        );
+        let g = group(&[("NumList", num_list), ("StrList", str_list)]);
+        assert!(recursive::admissible(&g).is_ok());
+        match recursive::subcontract(&g, &rec_ref("NumList"), &rec_ref("StrList"), &mut i) {
+            Verdict::Refuted(w) => {
+                assert!(recursive::contains(&g, &rec_ref("NumList"), &w), "witness ∈ NumList");
+                assert!(!recursive::contains(&g, &rec_ref("StrList"), &w), "witness ∉ StrList");
+            }
+            other => panic!("expected Refuted, got {other:?}"),
+        }
+    }
+
     #[test]
     fn recursive_subcontract_soundness() {
         // Whatever the recursive subcontract proves, no sampled inhabitant of the

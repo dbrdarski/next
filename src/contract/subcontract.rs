@@ -201,7 +201,9 @@ fn bound_parts(b: &Bound) -> (&Rational, bool) {
 
 // ── Disjointness and emptiness (sound; `true` only when provable) ─────────────
 
-fn disjoint(a: &Contract, b: &Contract) -> bool {
+/// Shared with the recursive layer (C§9), which needs leaf-level disjointness to
+/// bottom out product-graph intersection emptiness.
+pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
     use Contract::*;
     match (a, b) {
         (Bottom, _) | (_, Bottom) => true,
