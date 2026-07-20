@@ -5,11 +5,27 @@
 
 use super::*;
 use crate::ast::{
-    AccessForm, Arm, Bind, BindTarget, BindingRef, Element, Expr, Field, Match, MatchItem, Pat,
-    PatElem, PrimOp, Ref, TemplatePart,
+    AccessForm, ActKind, Arg, Arm, Bind, BindTarget, BindingRef, Element, Expr, Field, Lambda,
+    Match, MatchItem, Pat, PatElem, PrimOp, Ref, TemplatePart,
 };
-use crate::oracle::eval_expr;
+use crate::oracle::{Outcome, eval_expr};
 use crate::rational::Rational;
+
+/// Evaluate a lambda expression to a concrete closure value.
+fn closure(i: &mut Interner, params: Pat, body: Expr, act_kind: ActKind) -> ValueRef {
+    let lam = Expr::Lambda(Lambda { params, body: Box::new(body), act_kind });
+    match eval_expr(&lam, i) {
+        Ok(Outcome::Produced(v)) => v,
+        other => panic!("lambda did not produce a closure: {other:?}"),
+    }
+}
+/// A one-parameter pattern `(x)` over the argument tuple.
+fn one_param(name: &str) -> Pat {
+    Pat::Tuple(vec![PatElem::Pat(Pat::Bind(name.into()))])
+}
+fn apply(callee: Expr, args: Vec<Expr>) -> Expr {
+    Expr::Apply { callee: Box::new(callee), args: args.into_iter().map(Arg::Expr).collect() }
+}
 
 fn matchx(scrut: Option<Expr>, items: Vec<MatchItem>) -> Expr {
     Expr::Match(Match { scrutinee: scrut.map(Box::new), items })
@@ -193,6 +209,19 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
         None,
         vec![MatchItem::Bind(Bind { target: BindTarget::Pattern(pair), value: n(i, 5), exported: false }), MatchItem::Stmt(name("a"))],
     )); // refuted-binding trap
+
+    // Apply (C§7/B5), closed → exact against the oracle.
+    let id = konst(closure(i, one_param("x"), name("x"), ActKind::Pure));
+    c.push(apply(id.clone(), vec![n(i, 7)])); // → 7
+    c.push(apply(id.clone(), vec![n(i, 1), n(i, 2)])); // argument-obligation (arity)
+    c.push(apply(n(i, 5), vec![n(i, 1)])); // operation-safety: callee not a function
+    let eff = konst(closure(i, one_param("x"), name("x"), ActKind::Effect));
+    c.push(apply(eff, vec![n(i, 1)])); // world-admission: Effect call in pure world
+    // Spread of a non-Tuple (open path — has a spread).
+    c.push(Expr::Apply {
+        callee: Box::new(id),
+        args: vec![Arg::Spread(n(i, 5))],
+    }); // spread-kind
     c
 }
 
@@ -361,6 +390,37 @@ fn match_arm_narrows_scrutinee() {
     let m = matchx(Some(name("x")), vec![arm(Some(pat), None, body)]);
     let a = analyze(&m, &env, &mut i);
     assert!(a.accepted() && a.findings.is_empty(), "narrowing should prove a+b safe: {:?}", a.findings);
+}
+
+#[test]
+fn apply_known_callee_argument_obligation() {
+    let mut i = Interner::new();
+    // A one-parameter pure function, with an open (Number) argument.
+    let f = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
+    let mut env = TypeEnv::new();
+    env.insert("f".into(), Contract::Equals(f));
+    env.insert("n".into(), Contract::Kind(Kind::Number));
+
+    // f(n) — one argument, matches the one parameter → accepted.
+    let ok = apply(name("f"), vec![name("n")]);
+    let a = analyze(&ok, &env, &mut i);
+    assert!(a.accepted(), "f(n) should be accepted: {:?}", a.findings);
+
+    // f(n, n) — two arguments against one parameter → argument-obligation.
+    let bad = apply(name("f"), vec![name("n"), name("n")]);
+    let a = analyze(&bad, &env, &mut i);
+    assert!(!a.accepted());
+    assert!(a.findings.iter().any(|f| f.class == TrapClass::ArgumentObligation));
+}
+
+#[test]
+fn apply_non_function_callee_rejected() {
+    let mut i = Interner::new();
+    let mut env = TypeEnv::new();
+    env.insert("x".into(), Contract::Kind(Kind::Number)); // definitely not a function
+    let a = analyze(&apply(name("x"), vec![]), &env, &mut i);
+    assert!(!a.accepted());
+    assert_eq!(a.findings[0].class, TrapClass::OperationSafety);
 }
 
 #[test]

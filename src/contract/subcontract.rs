@@ -220,6 +220,8 @@ pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
         (Kind(k), Tuple(_)) | (Tuple(_), Kind(k)) if *k != VKind::Tuple => true,
         // An exact record lacking field `k` can never have it.
         (Record(fields), HasField(k)) | (HasField(k), Record(fields)) => !fields.iter().any(|(key, _)| key == k),
+        // Tuples of different arity, or with a disjoint position, never coincide.
+        (Tuple(pa), Tuple(pb)) => pa.len() != pb.len() || pa.iter().zip(pb).any(|(x, y)| disjoint(x, y)),
         (Union(a1, a2), other) | (other, Union(a1, a2)) => disjoint(a1, other) && disjoint(a2, other),
         (Intersection(a1, a2), other) | (other, Intersection(a1, a2)) => {
             disjoint(a1, other) || disjoint(a2, other)

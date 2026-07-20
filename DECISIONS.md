@@ -6,6 +6,39 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-20 — Analyzer: `Apply` (C§7 / B5 / E10 — application)
+
+`src/analyzer/mod.rs` `analyze_apply` + a Tuple-arity disjoint rule + 2 tests and
+closed `Apply` concordance rows. Full suite 204, 0 ignored, clippy clean.
+
+- **Closed calls fold exactly.** Known callee value (`Equals(closure/native)`) plus
+  singleton plain args → reconstruct `Apply(Const, [Const…])` and run `eval_expr`,
+  predicting world-admission / argument-obligation / spread-kind / not-a-function /
+  expecting-seat exactly. Corpus gained an identity call (produces), an arity
+  mismatch (argument-obligation), a non-function callee (operation-safety), an
+  Effect call in the pure world (world-admission), and a non-Tuple spread
+  (spread-kind).
+- **Open calls, reasoned:** each `Spread` arg must be `⊑ Kind(Tuple)` (else
+  spread-kind error / warning); a callee provably disjoint from `Kind(Function)` is
+  operation-safety; and when the callee value is **known** (`Equals`), its act-kind
+  is admission-checked and the argument tuple `Tuple([arg contracts])` is checked
+  against `pattern_contract(params)` (argument-obligation, reusing the `Match`
+  pattern machinery). A mutator callee `may_complete` (returns discarded).
+- **World context = pure** (matching the `eval_expr` truth source). World threading
+  and `Lambda`-body / function-shape analysis (C§13.2) are later increments, so:
+  an **open** call's *return* types as `Top`, an unknown callee's act-kind/arg
+  obligation is **not** checked (Unproven, silent), and a `Pure`/`Effect` body's
+  completion is not derived (`may_complete = false` for non-mutators). All sound —
+  no false accept in the tested pure-world concordance; the gaps are the honest
+  cost of not yet analyzing function bodies.
+- **C.2 rule added:** `Tuple(pa) ⌢ Tuple(pb)` disjoint when arities differ or any
+  position is disjoint — the basis of the arity-mismatch argument-obligation.
+- **`// [ask-author]`:** none. Owed for a later increment: a function-shape contract
+  (C§13.2) to give open calls a return contract and to check unknown-callee
+  admission; world threading via `Lambda`-body analysis.
+
+---
+
 ## 2026-07-20 — Analyzer: `Match` (E9/E10 — the sole control node)
 
 `src/analyzer/mod.rs` `analyze_match` + pattern machinery + `Analysis.may_complete`

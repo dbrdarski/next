@@ -10,17 +10,18 @@
 //! safe (a *warning*, from an unproven demand). The soundness contract (§6): an
 //! expression the analyzer accepts with no error never traps in the oracle.
 //!
-//! **Scope so far:** the pure expression fragment plus `Template` (E11 printability)
-//! and `Access` (E6 demands) — `Const`, `Ref` (against a contract environment),
-//! `PrimOp`, `TupleCons`, `RecordCons`, `Template`, `Access`. Closed expressions are
-//! constant-folded through the oracle (`eval_prim`/`eval_expr`), so the concordance
-//! is *exact*. Index/slice *bounds* reasoning on open receivers awaits the
-//! tuple-length family (C§17 owed — see `OwedItems.md`). Worlds, application,
-//! `Match`, and mutation are later increments — those nodes type as `Top`, unchecked.
+//! **Scope so far:** `Const`, `Ref`, `PrimOp`, `TupleCons`, `RecordCons`,
+//! `Template` (E11), `Access` (E6), `Match` (E9/E10), and `Apply` (C§7/B5/E10).
+//! Closed expressions are constant-folded through the oracle (`eval_prim` /
+//! `eval_expr`), so the concordance is *exact*. Analysis runs in the **pure world**
+//! (matching the `eval_expr` truth source); world threading and `Lambda`-body /
+//! function-shape analysis (C§13.2) are later increments, so an open call's return
+//! types as `Top`. Index/slice bounds await C§17 (see `OwedItems.md`). `Write` and
+//! mutation are unanalyzed (type as `Top`).
 
 use std::collections::HashMap;
 
-use crate::ast::{AccessForm, BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
+use crate::ast::{AccessForm, ActKind, Arg, BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
 use crate::contract::{Contract, Kind, OpSafety, Verdict, analyze_operation, disjoint, subcontract};
 use crate::interner::Interner;
 use crate::oracle::{Outcome, TrapClass, eval_expr, eval_prim};
@@ -113,6 +114,7 @@ pub fn analyze(expr: &Expr, env: &TypeEnv, interner: &mut Interner) -> Analysis 
         Expr::Template(parts) => analyze_template(parts, env, interner),
         Expr::Access { target, form, total } => analyze_access(target, form, *total, env, interner),
         Expr::Match(m) => analyze_match(m, env, interner),
+        Expr::Apply { callee, args } => analyze_apply(callee, args, env, interner),
 
         // Not yet analyzed: conservatively typed `Top`, unchecked.
         _ => exact(Contract::Top),
@@ -445,6 +447,164 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
         message: "cannot prove receiver sliceable / bounds integer (C§17 owed)".into(),
     });
     Contract::Top
+}
+
+// ── Apply (C§7 / B5 / E10) — application ──────────────────────────────────────
+
+/// Analyze an application. Closed calls (known callee value + singleton plain
+/// args) fold through the oracle (`eval_expr`) for an exact verdict. Otherwise:
+/// each argument spread must be a Tuple (`spread-kind`); the callee must be a
+/// function (else operation-safety); and when the callee value is known, its
+/// act-kind is checked against the analysis world (`world-admission`) and the
+/// argument tuple against its parameter pattern (`argument-obligation`).
+///
+/// **World context.** This increment analyzes in the **pure world** (matching the
+/// `eval_expr` truth source); world threading arrives with `Lambda`-body analysis.
+/// The callee's *return* shape and a `Pure`/`Effect` body's completion are not yet
+/// derived (no function-shape contract — C§13.2), so an open call types as `Top`.
+fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, interner: &mut Interner) -> Analysis {
+    let mut findings = Vec::new();
+
+    let ca = analyze(callee, env, interner);
+    demand(&ca, &mut findings); // the callee is an expecting seat
+    let cc = ca.contract.clone();
+    findings.extend(ca.findings);
+
+    let mut arg_contracts: Vec<Contract> = Vec::new();
+    let mut arg_vals: Vec<ValueRef> = Vec::new();
+    let mut foldable = true;
+    let mut has_spread = false;
+    for a in args {
+        match a {
+            Arg::Expr(e) => {
+                let aa = analyze(e, env, interner);
+                demand(&aa, &mut findings);
+                match &aa.contract {
+                    Contract::Equals(v) => arg_vals.push(v.clone()),
+                    _ => foldable = false,
+                }
+                arg_contracts.push(aa.contract.clone());
+                findings.extend(aa.findings);
+            }
+            Arg::Spread(e) => {
+                has_spread = true;
+                foldable = false;
+                let aa = analyze(e, env, interner);
+                demand(&aa, &mut findings);
+                check_spread_kind(&aa.contract, &mut findings, interner);
+                findings.extend(aa.findings);
+            }
+        }
+    }
+
+    // Fold a fully-known call through the oracle for an exact verdict.
+    let fold_callee = match &cc {
+        Contract::Equals(cv) if foldable && !has_spread => Some(cv.clone()),
+        _ => None,
+    };
+    if let Some(cv) = fold_callee {
+        let node = Expr::Apply {
+            callee: Box::new(Expr::Const(cv)),
+            args: arg_vals.into_iter().map(|v| Arg::Expr(Expr::Const(v))).collect(),
+        };
+        return match eval_expr(&node, interner) {
+            Ok(Outcome::Produced(v)) => Analysis::produced(Contract::Equals(v), findings),
+            Ok(Outcome::CompletedWithoutValue) => Analysis { contract: Contract::Top, findings, may_complete: true },
+            Err(trap) => {
+                findings.push(Finding { class: trap.class, severity: Severity::Error, message: trap.message });
+                Analysis::produced(Contract::Bottom, findings)
+            }
+        };
+    }
+
+    // A non-function callee always traps operation-safety.
+    if disjoint(&cc, &Contract::Kind(Kind::Function)) {
+        findings.push(Finding {
+            class: TrapClass::OperationSafety,
+            severity: Severity::Error,
+            message: "callee is not a function".into(),
+        });
+        return Analysis::produced(Contract::Bottom, findings);
+    }
+
+    // With a known callee value, check its act-kind and parameter obligation.
+    let may_complete = match &cc {
+        Contract::Equals(cv) => analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, interner),
+        _ => false, // unknown callee: shape not derivable yet (owed)
+    };
+    Analysis { contract: Contract::Top, findings, may_complete }
+}
+
+/// Check a known callee's act-kind (world admission) and argument obligation.
+/// Returns whether the call `may_complete` without a value.
+fn analyze_known_callee(
+    cv: &ValueRef,
+    arg_contracts: &[Contract],
+    has_spread: bool,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) -> bool {
+    // Analysis world is pure (see `analyze_apply`); only pure callees are admitted.
+    let admit = |kind: ActKind, findings: &mut Vec<Finding>| {
+        if !matches!(kind, ActKind::Pure) {
+            findings.push(Finding {
+                class: TrapClass::WorldAdmission,
+                severity: Severity::Error,
+                message: format!("a {kind:?} call is not admitted in the pure world"),
+            });
+        }
+    };
+
+    if let Some(closure) = cv.as_closure() {
+        admit(closure.lambda.act_kind, findings);
+        // Argument obligation: the argument tuple must match the parameter pattern.
+        if !has_spread {
+            let arg_tuple = Contract::Tuple(arg_contracts.to_vec());
+            let params = pattern_contract(&closure.lambda.params);
+            if matches!(subcontract(&arg_tuple, &params, interner), Verdict::Proven) {
+                // obligation met
+            } else if disjoint(&arg_tuple, &params) {
+                findings.push(Finding {
+                    class: TrapClass::ArgumentObligation,
+                    severity: Severity::Error,
+                    message: "arguments cannot match the parameter pattern".into(),
+                });
+            } else {
+                findings.push(Finding {
+                    class: TrapClass::ArgumentObligation,
+                    severity: Severity::Warning,
+                    message: "cannot prove the arguments match the parameter pattern".into(),
+                });
+            }
+        }
+        // A mutator's return is discarded — the call completes without a value.
+        return matches!(closure.lambda.act_kind, ActKind::Mutator);
+    }
+    if let Some(native) = cv.as_native() {
+        admit(native.get().act_kind, findings);
+    }
+    false
+}
+
+/// An argument spread must evaluate to a Tuple (E3) — else the spread-kind trap.
+fn check_spread_kind(c: &Contract, findings: &mut Vec<Finding>, interner: &mut Interner) {
+    let tuple = Contract::Kind(Kind::Tuple);
+    if matches!(subcontract(c, &tuple, interner), Verdict::Proven) {
+        return;
+    }
+    if disjoint(c, &tuple) {
+        findings.push(Finding {
+            class: TrapClass::SpreadKind,
+            severity: Severity::Error,
+            message: "argument spread of a non-Tuple".into(),
+        });
+    } else {
+        findings.push(Finding {
+            class: TrapClass::SpreadKind,
+            severity: Severity::Warning,
+            message: "cannot prove this argument spread is a Tuple".into(),
+        });
+    }
 }
 
 // ── Match (E9/E10) — the sole control node ────────────────────────────────────
