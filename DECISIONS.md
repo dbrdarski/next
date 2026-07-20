@@ -42,6 +42,39 @@ green (hard rule 1).
 
 ---
 
+## 2026-07-20 — Contracts C.2: three-valued subcontract `A ⊑ B`
+
+`src/contract/subcontract.rs` (new) + tests. Compendium C§8. 7 subcontract seeds
+incl. an O(n²) soundness sweep; full suite 169, 0 ignored, clippy clean.
+
+- **`subcontract(A, B) → Verdict`**: `Proven` (`⟦A⟧ ⊆ ⟦B⟧`), `Refuted(witness ∈
+  ⟦A⟧ \ ⟦B⟧)`, or `Unproven`. Soundness is the invariant.
+- **Proof side (sound):** structural rules — `A\E ⊑ B` from `A ⊑ B`; `A ⊑ B∩C` iff
+  both; `A∪B ⊑ C` iff both; `A ⊑ B\E` iff `A ⊑ B` and `A ⌢ E` disjoint; the
+  sound-but-incomplete "or" rules (`A ⊑ B∪C`, `A∩B ⊑ C`). Atom rules: `Kind`
+  equality, numeric-atom ⊑ `Kind(Number)`, `Mod` lattice (`n2|n1` ∧ `r1≡r2 mod
+  n2`), exact `Record` fieldwise, `Tuple` positional, `Equals(v)` via membership,
+  and **interval containment with intersection meet** — so landing zones
+  (`Intersection(Greater(T), LessEq(T+d))`, C§4) prove.
+- **Refutation side (sound):** sample members of `A` and return the first that
+  fails `B`. Interval sampling includes a **fractional near-bound point** (the
+  rationals are dense, so a half-step witnesses gaps integer steps miss).
+- **Brute-tested against membership** (the truth source): over a contract × contract
+  sweep with a diverse value pool, every `Proven` has no counterexample in the pool
+  and every `Refuted(w)` has `w ∈ ⟦A⟧ \ ⟦B⟧`. This is Part I's "per-pair rules
+  brute-tested against the oracle."
+- **Two dense-rationals subtleties surfaced** (my test expectations, not the
+  checker): over rationals `(10,20] ⊄ [11,20]` (10.5 is the gap), and the
+  landing-zone containment needs the interval *meet* (the conjunct-wise or-rule is
+  incomplete). Both fixed — the checker was right.
+- **Known incompleteness → `Unproven`** (never guessed): `Geo` subcontract rows,
+  non-interval intersections/unions beyond the or-rules, and recursion. **Recursive
+  contracts (C§9)** are the next layer, built directly on this pair-check as the
+  progress-guarded induction (recursive-contracts spec §5).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-20 — RULING [user]: function `==` and analyzer function-equality are ONE truth
 
 A foundational ruling from the author, superseding the μ v0.5 §8 / recursive-

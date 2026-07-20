@@ -202,3 +202,124 @@ fn function_kind_and_equality() {
     assert!(Contract::Kind(Kind::Function).contains(&v));
     assert!(!Contract::Kind(Kind::Number).contains(&v));
 }
+
+// ── Three-valued subcontract (C.2) ───────────────────────────────────────────
+
+use super::{Verdict, subcontract};
+
+fn proven(a: &Contract, b: &Contract, i: &mut Interner) {
+    assert!(matches!(subcontract(a, b, i), Verdict::Proven), "expected {a:?} ⊑ {b:?} proven");
+}
+fn refuted(a: &Contract, b: &Contract, i: &mut Interner) {
+    match subcontract(a, b, i) {
+        Verdict::Refuted(w) => {
+            assert!(a.contains(&w) && !b.contains(&w), "witness {w:?} must be in A\\B");
+        }
+        v => panic!("expected {a:?} ⊑ {b:?} refuted, got {v:?}"),
+    }
+}
+
+#[test]
+fn subcontract_intervals() {
+    let mut i = Interner::new();
+    proven(&Contract::Range(r(0), r(10)), &Contract::Range(r(0), r(100)), &mut i);
+    refuted(&Contract::Range(r(0), r(100)), &Contract::Range(r(0), r(10)), &mut i);
+    proven(&Contract::Range(r(0), r(10)), &Contract::Kind(Kind::Number), &mut i);
+    proven(&Contract::Greater(r(5)), &Contract::GreaterEq(r(5)), &mut i);
+    refuted(&Contract::GreaterEq(r(5)), &Contract::Greater(r(5)), &mut i);
+    // landing zone (10, 20] ⊑ [10, 20] (dense rationals: not ⊑ [11, 20]).
+    let lz = Contract::Intersection(
+        Box::new(Contract::Greater(r(10))),
+        Box::new(Contract::LessEq(r(20))),
+    );
+    proven(&lz, &Contract::Range(r(10), r(20)), &mut i);
+    refuted(&lz, &Contract::Range(r(11), r(20)), &mut i); // 10.5 witnesses the gap
+}
+
+#[test]
+fn subcontract_equals_and_kind() {
+    let mut i = Interner::new();
+    let five = i.integer(5);
+    proven(&Contract::Equals(five.clone()), &Contract::Range(r(0), r(10)), &mut i);
+    let fifty = i.integer(50);
+    refuted(&Contract::Equals(fifty), &Contract::Range(r(0), r(10)), &mut i);
+    proven(&Contract::Kind(Kind::Number), &Contract::Top, &mut i);
+    refuted(&Contract::Kind(Kind::Number), &Contract::Kind(Kind::String), &mut i);
+    proven(&Contract::Bottom, &Contract::Kind(Kind::String), &mut i);
+}
+
+#[test]
+fn subcontract_union_and_mod() {
+    let mut i = Interner::new();
+    let split = Contract::Union(
+        Box::new(Contract::Range(r(0), r(5))),
+        Box::new(Contract::Range(r(6), r(10))),
+    );
+    proven(&split, &Contract::Range(r(0), r(10)), &mut i);
+    // multiples of 4 ⊑ evens; evens ⋢ multiples of 4
+    let mult4 = Contract::Mod { n: BigInt::from(4), r: BigInt::from(0) };
+    let even = Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) };
+    proven(&mult4, &even, &mut i);
+    refuted(&even, &mult4, &mut i);
+}
+
+#[test]
+fn subcontract_soundness_sweep() {
+    // Brute-force: over a pool of values and a set of contracts, every verdict
+    // must be sound against denotational membership (the truth source).
+    let mut i = Interner::new();
+    let five = i.integer(5);
+
+    let contracts = vec![
+        Contract::Top,
+        Contract::Bottom,
+        Contract::Kind(Kind::Number),
+        Contract::Kind(Kind::String),
+        Contract::Range(r(0), r(10)),
+        Contract::Range(r(0), r(100)),
+        Contract::Range(r(5), r(15)),
+        Contract::Greater(r(0)),
+        Contract::LessEq(r(10)),
+        Contract::Equals(five),
+        Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) },
+        Contract::Mod { n: BigInt::from(4), r: BigInt::from(0) },
+        Contract::Union(Box::new(Contract::Range(r(0), r(5))), Box::new(Contract::Range(r(6), r(10)))),
+        Contract::Intersection(Box::new(Contract::Range(r(0), r(20))), Box::new(Contract::Greater(r(5)))),
+        Contract::Difference(Box::new(Contract::Range(r(0), r(10))), Box::new(Contract::Equals(i.integer(5)))),
+        Contract::HasField("age".into()),
+    ];
+
+    // A diverse value pool (numbers, non-numbers).
+    let mut pool: Vec<ValueRef> = Vec::new();
+    for n in [-5, 0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 15, 20, 50, 100, 101] {
+        pool.push(i.integer(n));
+    }
+    pool.push(i.number(rat(1, 2)));
+    pool.push(i.string("x"));
+    pool.push(i.boolean(true));
+    pool.push(i.null());
+    let age = i.integer(1);
+    pool.push(i.record_str(vec![("age", age)]));
+
+    for a in &contracts {
+        for b in &contracts {
+            match subcontract(a, b, &mut i) {
+                Verdict::Proven => {
+                    for v in &pool {
+                        assert!(
+                            !(a.contains(v) && !b.contains(v)),
+                            "UNSOUND Proven: {a:?} ⊑ {b:?} but {v:?} ∈ A∖B",
+                        );
+                    }
+                }
+                Verdict::Refuted(w) => {
+                    assert!(
+                        a.contains(&w) && !b.contains(&w),
+                        "UNSOUND Refuted: {a:?} ⊑ {b:?} witness {w:?} not in A∖B",
+                    );
+                }
+                Verdict::Unproven => {}
+            }
+        }
+    }
+}
