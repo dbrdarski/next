@@ -43,6 +43,88 @@ green (hard rule 1).
 
 ---
 
+## 2026-07-20 — RULING [user]: function `==` and analyzer function-equality are ONE truth
+
+A foundational ruling from the author, superseding the μ v0.5 §8 / recursive-
+contracts §2 framing where runtime `==` (syntactic, frozen) and analyzer
+contract-equality (contract-directed, versioned) are *separate*. For **function
+values** they must be a single notion. Recorded here; flagged for the spec author
+(the two docs need a small amendment — see below).
+
+### The principle
+The whole premise of NEXT is that the contract system prevents runtime bugs. If
+the contract system concludes `f == g` while the runtime computes `f != g`, the
+contract system has lied about runtime reality at that point — the premise breaks.
+So there must be **one** notion of function equality, used both statically
+(analyzer) and dynamically (runtime `==`). Not "equal in the contract system but
+not at runtime." This is a soundness/consistency requirement, not aesthetics.
+
+### The mechanism (how one truth is realized)
+There is a compilation step; canonicalize there.
+1. **Compile time:** canonicalize every function to a canonical form.
+   Canonicalization includes **both** the syntactic μ-laws (α, reorder, `x+x→2x`,
+   μ-binder laws) **and** **contract-directed collapse** — e.g. `0*x → 0` fired
+   *only* where the analyzer has proven the precondition (`x: Number`), carrying
+   the domain forward so the collapsed form has the same accepted domain.
+2. **Intern** functions by that canonical form.
+3. **Runtime `==`** is a pointer test on the canonical form — still O(1).
+4. The **analyzer** reasons about the *same* canonical form.
+
+Consequence: `(x:Number)=>0*x` and `(x:Number)=>0` collapse to one canonical form
+⇒ they are `==` at runtime *and* in the analyzer. One artifact, one truth, no
+discrepancy. (No circularity: the analyzer *produces* canonical forms; the runtime
+*compares* them. No non-termination: the analysis is bounded, Principle 7.)
+
+### The "syntactic floor + contract-directed rules" model
+- The μ §8 syntactic slice is **not** the permanent definition of `==`. It is the
+  **floor** — what is provable with *zero* contract information.
+- Contract-directed collapses are **additional canonicalization rules** that fire
+  when the analyzer proves their preconditions, folding into the *same* canonical
+  form.
+- `==` therefore **strengthens** as the prover improves (a semantics-version
+  event; the language already versions its semantics). Within a compiler version
+  it is fixed and deterministic; across versions it moves *closer* to true
+  equality — the right direction, and one truth at every version.
+
+### The one hard limit (a boundary, not a discrepancy)
+True extensional function equality is **undecidable** (Rice's theorem) — no
+procedure decides it for arbitrary functions. So `==`, unified or not, is
+necessarily **sound but incomplete**: it may fail to notice some genuinely-equal
+pairs, but it never calls distinct functions equal. Crucially, when the two
+systems are unified this incompleteness is **shared** — `f == g` (runtime) ⟺
+analyzer-proves-`f == g` ⟺ same canonical form, always the same answer. No runtime
+bug slips through a spot where the contract system said "equal," because it is
+literally the same decision. The gap that remains is the shared floor of
+decidability, not a rift between analyzer and runtime.
+
+### Consequences for this implementation
+- **`==` is defined architecturally as "canonical-form equality," open to
+  contract-directed rules** — *not* "syntactic-only equality." The current code
+  already computes `==` on the canonical shape (`equal.rs` / `canon.rs`), so this
+  is forward-compatible: today `==` = the syntactic floor (`0*x != 0`, since
+  nothing has proven `x: Number`); when the analyzer lands, its proven equalities
+  join the canonical form and `==` strengthens, staying one truth.
+- This **aligns with the deferred "universal interning" re-architecture** (μ v0.5
+  §6): interning functions by canonical form + a pointer-test `==` *is* the
+  mechanism above. So that deferred item and this ruling are the same work.
+- **Contract-directed collapse requires the analyzer** (domain inference), which
+  isn't built yet — so no code change now; the ruling fixes the *definition* and
+  the forward path.
+
+### Flagged for the spec author (small amendments)
+- **μ §8:** reframe the "frozen syntactic ==-set" as the *floor* of a canonical
+  form that contract-directed rules extend (each extension a semantics-version
+  event) — rather than a permanently-syntactic `==`.
+- **Recursive-contracts §2:** the line *"contract equality is analyzer identity,
+  **not** runtime value equality"* reads as a permanent *separation*. For
+  **function-value** `==` that separation is the discrepancy being rejected — it
+  should read "function `==` is canonical-form equality, computed at compile time,
+  shared by analyzer and runtime." (That line may have meant *contract-expression*
+  equality — `Range==Range` — which is genuinely analyzer-internal; but for
+  function values, unify.)
+
+---
+
 ## 2026-07-20 — Reconcile with updated specs (μ v0.5 + recursive-contracts v0.2)
 
 The author replaced the μ spec (v0.1 → **v0.5**, four review rounds) and added
