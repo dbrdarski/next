@@ -74,13 +74,14 @@ impl Norm<'_> {
             }
         }
 
-        // Abort on cancellation/annihilation (a base combined to zero).
+        // Abort on cancellation (a base combined to zero) — but still reorder, so
+        // commutative spellings (`x - x` vs `-x + x`) stay equal.
         if groups.values().any(|(c, _)| c.is_zero()) {
-            return self.norm_children(e);
+            return self.reorder_only_add(e);
         }
         // Abort if the result would be a single bare base (demand drop).
         if groups.len() == 1 && !had_constant && is_one(&groups.values().next().unwrap().0) {
-            return self.norm_children(e);
+            return self.reorder_only_add(e);
         }
 
         // Emit: variable terms (canonical key order) then the constant.
@@ -115,36 +116,78 @@ impl Norm<'_> {
         let mut factors: Vec<Expr> = Vec::new();
         self.flatten_mul(e, &mut factors);
 
-        // Split literal coefficient from non-literal factors.
+        // Fold literal factors into one coefficient; reorder the rest.
         let mut coeff = Rational::from(1);
+        let mut had_literal = false;
         let mut rest: Vec<Expr> = Vec::new();
         for f in factors {
             match &f {
                 Expr::Const(v) if v.as_number().is_some() => {
                     coeff = coeff * v.as_number().unwrap().clone();
+                    had_literal = true;
                 }
                 _ => rest.push(f),
             }
         }
-
-        // Abort: annihilation (0·x), or a bare-base identity elimination (x·1).
-        if coeff.is_zero() {
-            return self.norm_children(e);
-        }
-        if rest.len() == 1 && is_one(&coeff) {
-            return self.norm_children(e);
-        }
-
         rest.sort_by_cached_key(key);
         if rest.is_empty() {
             return Expr::Const(self.interner.number(coeff));
         }
         let product = rest.into_iter().reduce(|a, b| prim(PrimOp::Mul, a, b)).unwrap();
-        if is_one(&coeff) {
-            product
-        } else {
+        // Keep the coefficient as a factor even when 0 or 1 — dropping it would
+        // annihilate (`0·x`) or drop a demand (`x·1`), both excluded. Omit it only
+        // when there was no literal factor at all.
+        if had_literal {
             prim(PrimOp::Mul, Expr::Const(self.interner.number(coeff)), product)
+        } else {
+            product
         }
+    }
+
+    /// Reorder (and fold literal constants) an additive chain without combining
+    /// like terms — the abort fallback, so commutative spellings stay equal.
+    fn reorder_only_add(&mut self, e: &Expr) -> Expr {
+        let mut flat: Vec<(bool, Expr)> = Vec::new();
+        self.flatten_add(e, true, &mut flat);
+        let mut pos: Vec<Expr> = Vec::new();
+        let mut neg: Vec<Expr> = Vec::new();
+        let mut constant = Rational::from(0);
+        let mut had_constant = false;
+        for (positive, t) in flat {
+            match &t {
+                Expr::Const(v) if v.as_number().is_some() => {
+                    let n = v.as_number().unwrap().clone();
+                    constant = if positive { constant + n } else { constant - n };
+                    had_constant = true;
+                }
+                _ if positive => pos.push(t),
+                _ => neg.push(t),
+            }
+        }
+        pos.sort_by_cached_key(key);
+        neg.sort_by_cached_key(key);
+
+        let mut result: Option<Expr> = None;
+        for p in pos {
+            result = Some(match result {
+                None => p,
+                Some(acc) => prim(PrimOp::Add, acc, p),
+            });
+        }
+        for n in neg {
+            result = Some(match result {
+                None => Expr::PrimOp { op: PrimOp::Neg, args: vec![n] },
+                Some(acc) => prim(PrimOp::Sub, acc, n),
+            });
+        }
+        if had_constant {
+            let c = Expr::Const(self.interner.number(constant));
+            result = Some(match result {
+                None => c,
+                Some(acc) => prim(PrimOp::Add, acc, c),
+            });
+        }
+        result.unwrap_or_else(|| Expr::Const(self.interner.number(Rational::from(0))))
     }
 
     fn flatten_mul(&mut self, e: &Expr, out: &mut Vec<Expr>) {

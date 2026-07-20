@@ -641,6 +641,15 @@ fn mu10_excluded_rewrites_do_not_fire() {
 }
 
 #[test]
+fn excluded_forms_still_obey_commutativity() {
+    // Reordering is *always* allowed, even for forms whose simplification is
+    // excluded: `x*0` and `0*x` are the same function, as are `x-x` and `-x+x`.
+    assert!(is_true(&eval("((x) => x * 0) == ((x) => 0 * x)")));
+    assert!(is_true(&eval("((x) => x * 1) == ((x) => 1 * x)")));
+    assert!(is_true(&eval("((x) => -x + x) == ((x) => x - x)")));
+}
+
+#[test]
 fn narrow_slice_equal_functions_compute_the_same() {
     // Soundness sanity: the functions the slice equates are extensionally equal.
     let src = "
