@@ -28,14 +28,13 @@ green (hard rule 1).
     `r>1` shrinks the quotient.
   - `NotEquals` is **not** a constructor — it is `Difference(Top, Equals(v))`
     (C§4), and tests exercise it that way.
-- **`// [ask-author]` — one judgment call:** **`Record(fields)` field-openness.**
-  C§4 lists `Record(fields)` and `HasField(key)` without stating whether a
-  `Record` contract is *open* (the listed fields must be present and satisfy their
-  contracts; extra fields allowed) or *exact* (no other fields). I implemented it
-  **open** (HasField-style), which is the conservative reading and composes with
-  `HasField`; the pattern layer's `exact`/rest distinction (E9) suggests an
-  `exact` record contract may also be wanted. Flagging for confirmation; changing
-  it is a one-line predicate tweak.
+- **`Record(fields)` field-openness — RESOLVED [user, 2026-07-20]: exact.**
+  (Was flagged `[ask-author]`.) A `Record` contract denotes a record with
+  **exactly** those fields (no others), each satisfying its contract — matching
+  the pattern layer's exact-by-default `PRecord(fields, rest?, exact)` (E9) and
+  full-keyed records (E11). `HasField(key)` is the open "at least this field"
+  form. Membership updated: `record_contains` now also checks the key set matches
+  (equal counts + all listed fields present ⇒ equal key sets).
 - **Deferred:** named recursive contracts (C§9 `[owed]`) — no constructor yet;
   they need the certified-unfolding doctrine + μ-binder contract canonicalization.
 - **Next (C.2):** three-valued subcontract `A ⊑ B` (proven/refuted/unproven),

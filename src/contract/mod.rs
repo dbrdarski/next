@@ -63,10 +63,11 @@ pub enum Contract {
     Union(Box<Contract>, Box<Contract>),
     Intersection(Box<Contract>, Box<Contract>),
     Difference(Box<Contract>, Box<Contract>),
-    /// A record having (at least) the named fields, each satisfying its contract
-    /// (open — see the field-openness note in DECISIONS.md).
+    /// A record having **exactly** the named fields (no others), each satisfying
+    /// its contract (exact — matching exact-by-default patterns, E9). The open
+    /// "has at least this field" case is [`HasField`].
     Record(Vec<(String, Contract)>),
-    /// A record having a given field (any value).
+    /// A record having a given field (any value) — the open partial form.
     HasField(String),
     /// A tuple of exactly these element contracts, positionally.
     Tuple(Vec<Contract>),
@@ -158,13 +159,17 @@ fn has_field(v: &ValueRef, key: &str) -> bool {
 
 fn record_contains(v: &ValueRef, fields: &[(String, Contract)]) -> bool {
     let Some(entries) = v.as_record() else { return false };
-    fields.iter().all(|(key, contract)| {
-        let ku: Vec<u16> = key.encode_utf16().collect();
-        match entries.iter().find(|e| e.key == ku) {
-            Some(e) => contract.contains(&e.value),
-            None => false,
-        }
-    })
+    // Exact: the record's key set equals the contract's, and each field's value
+    // satisfies its contract. Keys are unique on both sides, so equal counts plus
+    // all-fields-present ⇒ equal key sets (no un-listed fields).
+    entries.len() == fields.len()
+        && fields.iter().all(|(key, contract)| {
+            let ku: Vec<u16> = key.encode_utf16().collect();
+            match entries.iter().find(|e| e.key == ku) {
+                Some(e) => contract.contains(&e.value),
+                None => false,
+            }
+        })
 }
 
 fn tuple_contains(v: &ValueRef, elems: &[Contract]) -> bool {

@@ -150,18 +150,31 @@ fn record_and_tuple_and_field() {
     let name = i.string("ann");
     let rec = i.record_str(vec![("age", age), ("name", name)]);
 
+    // HasField is the OPEN partial form — it ignores extra fields.
     assert!(Contract::HasField("age".into()).contains(&rec));
     assert!(!Contract::HasField("email".into()).contains(&rec));
 
-    // Record contract with a field-contract, open (extra fields allowed)
-    let c = Contract::Record(vec![("age".into(), Contract::Range(r(0), r(120)))]);
-    assert!(c.contains(&rec));
-    let two_hundred = i.integer(200);
-    let too_old = i.record_str(vec![("age", two_hundred)]);
-    assert!(!c.contains(&too_old));
+    // Record is EXACT — the key set must match exactly.
+    let exact = Contract::Record(vec![
+        ("age".into(), Contract::Range(r(0), r(120))),
+        ("name".into(), Contract::Kind(Kind::String)),
+    ]);
+    assert!(exact.contains(&rec), "exact match of {{age, name}}");
+    // an extra field is rejected (this is the exact-vs-open distinction)
+    let (a1, n1, e1) = (i.integer(30), i.string("ann"), i.string("x"));
+    let extra = i.record_str(vec![("age", a1), ("name", n1), ("email", e1)]);
+    assert!(!exact.contains(&extra), "an un-listed field is rejected");
+    // a missing field is rejected
+    let a2 = i.integer(30);
+    let missing = i.record_str(vec![("age", a2)]);
+    assert!(!exact.contains(&missing), "a missing field is rejected");
+    // a field failing its contract is rejected
+    let (a3, n3) = (i.integer(200), i.string("ann"));
+    let too_old = i.record_str(vec![("age", a3), ("name", n3)]);
+    assert!(!exact.contains(&too_old));
     // a non-record fails
     let thirty = i.integer(30);
-    assert!(!c.contains(&thirty));
+    assert!(!exact.contains(&thirty));
 
     // Tuple contract, exact length + positional contracts
     let (one, sx) = (i.integer(1), i.string("x"));
