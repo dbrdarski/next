@@ -107,6 +107,13 @@ fn apply_contract(callee: &Expr, args: &[Arg], env: &ContractEnv) -> Option<Cont
         }
         // `Tuple(A, B, …)` — a variadic tuple contract.
         ("Tuple", elems) => Some(Contract::Tuple(elems.iter().map(|e| eval_contract(e, env)).collect::<Option<_>>()?)),
+        // `Concat(S₁, S₂, …)` — tuple concatenation (tuple family §1), through the
+        // normalizing smart constructor.
+        ("Concat", segs) => {
+            let segs: Vec<Contract> =
+                segs.iter().map(|e| eval_contract(e, env)).collect::<Option<_>>()?;
+            Some(Contract::concat(segs))
+        }
         _ => None,
     }
 }

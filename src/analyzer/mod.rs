@@ -196,25 +196,47 @@ fn analyze_primop(op: PrimOp, args: &[Expr], env: &TypeEnv, cenv: &ContractEnv, 
 
 fn analyze_tuple(elems: &[Element], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
     let mut findings = Vec::new();
-    let mut parts = Vec::new();
-    let mut exact_shape = true;
+    let mut segments: Vec<Contract> = Vec::new();
+    let mut run: Vec<Contract> = Vec::new(); // the current spread-free element run
     for el in elems {
         match el {
             Element::Expr(e) => {
                 let mut r = analyze(e, env, cenv, interner);
                 demand(&r, &mut findings); // elements are expecting seats
                 findings.append(&mut r.findings);
-                parts.push(r.contract);
+                run.push(r.contract);
             }
-            // A spread widens the shape beyond what this increment models.
+            // A spread must be a Tuple (E5 — else the spread-kind trap); the
+            // result shape is a Concat with the spread's contract as a segment
+            // (the tuple family's constructor, §1).
             Element::Spread(e) => {
-                findings.append(&mut analyze(e, env, cenv, interner).findings);
-                exact_shape = false;
+                let mut r = analyze(e, env, cenv, interner);
+                demand(&r, &mut findings); // the spread operand is an expecting seat
+                check_spread_kind(&r.contract, Kind::Tuple, "tuple spread of a non-Tuple", &mut findings, interner);
+                findings.append(&mut r.findings);
+                if !run.is_empty() {
+                    segments.push(Contract::Tuple(std::mem::take(&mut run)));
+                }
+                segments.push(tuple_shaped(&r.contract));
             }
         }
     }
-    let contract = if exact_shape { Contract::Tuple(parts) } else { Contract::Top };
-    Analysis::produced(contract, findings)
+    if !run.is_empty() {
+        segments.push(Contract::Tuple(run));
+    }
+    // With no spreads this normalizes straight back to the exact Tuple.
+    Analysis::produced(Contract::concat(segments), findings)
+}
+
+/// The spread operand's contract as a Concat segment. On the non-trapping path
+/// the value *is* a Tuple, so widening anything non-tuple-shaped to `Kind(Tuple)`
+/// is sound.
+fn tuple_shaped(c: &Contract) -> Contract {
+    match c {
+        Contract::Tuple(_) | Contract::Concat(_) | Contract::Kind(Kind::Tuple) => c.clone(),
+        Contract::Equals(v) if v.as_tuple().is_some() => c.clone(),
+        _ => Contract::Kind(Kind::Tuple),
+    }
 }
 
 fn analyze_record(fields: &[Field], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
@@ -229,14 +251,25 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, cenv: &ContractEnv, interner:
                 findings.append(&mut r.findings);
                 pairs.push((key.clone(), r.contract));
             }
-            // Computed keys (E5 finite-key obligation) and spreads widen the shape.
+            // A computed key must be a String at runtime (the computed-key trap)
+            // and a **proven-finite string set** for the analyzer (E5, fork 12 = R;
+            // A-VER: `Kind(String)` REJECTs). Both key and value are expecting seats.
             Field::Computed { key, value } => {
-                findings.append(&mut analyze(key, env, cenv, interner).findings);
-                findings.append(&mut analyze(value, env, cenv, interner).findings);
+                let mut ka = analyze(key, env, cenv, interner);
+                demand(&ka, &mut findings);
+                findings.append(&mut ka.findings);
+                check_computed_key(&ka.contract, &mut findings);
+                let mut va = analyze(value, env, cenv, interner);
+                demand(&va, &mut findings);
+                findings.append(&mut va.findings);
                 exact_shape = false;
             }
+            // A record spread must be a Record (else the spread-kind trap).
             Field::Spread(e) => {
-                findings.append(&mut analyze(e, env, cenv, interner).findings);
+                let mut r = analyze(e, env, cenv, interner);
+                demand(&r, &mut findings);
+                check_spread_kind(&r.contract, Kind::Record, "record spread of a non-Record", &mut findings, interner);
+                findings.append(&mut r.findings);
                 exact_shape = false;
             }
         }
@@ -486,7 +519,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                 foldable = false;
                 let aa = analyze(e, env, cenv, interner);
                 demand(&aa, &mut findings);
-                check_spread_kind(&aa.contract, &mut findings, interner);
+                check_spread_kind(&aa.contract, Kind::Tuple, "argument spread of a non-Tuple", &mut findings, interner);
                 findings.extend(aa.findings);
             }
         }
@@ -582,24 +615,65 @@ fn analyze_known_callee(
     false
 }
 
-/// An argument spread must evaluate to a Tuple (E3) — else the spread-kind trap.
-fn check_spread_kind(c: &Contract, findings: &mut Vec<Finding>, interner: &mut Interner) {
-    let tuple = Contract::Kind(Kind::Tuple);
-    if matches!(subcontract(c, &tuple, interner), Verdict::Proven) {
+/// A spread must evaluate to the expected kind — Tuple for argument/tuple spreads
+/// (E3/E5), Record for record spreads — else the spread-kind trap.
+fn check_spread_kind(
+    c: &Contract,
+    expected: Kind,
+    what: &str,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) {
+    let want = Contract::Kind(expected);
+    if matches!(subcontract(c, &want, interner), Verdict::Proven) {
         return;
     }
-    if disjoint(c, &tuple) {
+    if disjoint(c, &want) {
         findings.push(Finding {
             class: TrapClass::SpreadKind,
             severity: Severity::Error,
-            message: "argument spread of a non-Tuple".into(),
+            message: what.into(),
         });
     } else {
         findings.push(Finding {
             class: TrapClass::SpreadKind,
             severity: Severity::Warning,
-            message: "cannot prove this argument spread is a Tuple".into(),
+            message: format!("cannot prove this spread is a {expected:?}"),
         });
+    }
+}
+
+/// The computed-key obligation (E5). Runtime face: a non-String key traps
+/// `computed-key`. Analyzer face (fork 12 = R; A-VER): the key must be a
+/// **proven-finite string set** — `Kind(String)` alone REJECTs. The finiteness
+/// rejection is a *domain demand*, not a trap prediction: a `Kind(String)` key
+/// never traps, but the record's shape would be unanalyzable.
+fn check_computed_key(c: &Contract, findings: &mut Vec<Finding>) {
+    if disjoint(c, &Contract::Kind(Kind::String)) {
+        findings.push(Finding {
+            class: TrapClass::ComputedKey,
+            severity: Severity::Error,
+            message: "computed record key is not a String".into(),
+        });
+        return;
+    }
+    if finite_string_set(c) {
+        return;
+    }
+    findings.push(Finding {
+        class: TrapClass::ComputedKey,
+        severity: Severity::Error,
+        message: "computed keys demand a proven-finite string set (E5)".into(),
+    });
+}
+
+/// A contract denoting a provably **finite set of Strings**.
+fn finite_string_set(c: &Contract) -> bool {
+    match c {
+        Contract::Bottom => true,
+        Contract::Equals(v) => v.as_str_units().is_some(),
+        Contract::Union(a, b) => finite_string_set(a) && finite_string_set(b),
+        _ => false,
     }
 }
 

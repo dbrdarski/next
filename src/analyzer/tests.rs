@@ -227,6 +227,19 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
         callee: Box::new(id),
         args: vec![Arg::Spread(n(i, 5))],
     }); // spread-kind
+
+    // AUDIT S4 rows — constructor spreads and computed keys (previously unchecked).
+    c.push(Expr::TupleCons(vec![Element::Spread(n(i, 5))])); // spread-kind: [...5]
+    let one_v = i.integer(1);
+    let one_tuple = konst(i.tuple(vec![one_v]));
+    c.push(Expr::TupleCons(vec![Element::Expr(n(i, 9)), Element::Spread(one_tuple.clone())])); // [9, ...[1]] — fine
+    c.push(Expr::RecordCons(vec![Field::Spread(one_tuple)])); // spread-kind: {...[1]}
+    let a_v = i.integer(1);
+    let rec_ok = konst(i.record_str(vec![("a", a_v)]));
+    c.push(Expr::RecordCons(vec![Field::Spread(rec_ok)])); // {...{a:1}} — fine
+    c.push(Expr::RecordCons(vec![Field::Computed { key: n(i, 5), value: n(i, 1) }])); // computed-key: {[5]: v}
+    let key_k = konst(i.string("k"));
+    c.push(Expr::RecordCons(vec![Field::Computed { key: key_k, value: n(i, 1) }])); // {["k"]: v} — fine
     c
 }
 
@@ -494,6 +507,73 @@ fn user_contract_binding_can_be_refuted() {
     // Control: without the contract env the name is Top, so nothing is refuted.
     let a = analyze(&m, &empty(), &nc(), &mut i);
     assert!(a.accepted());
+}
+
+#[test]
+fn computed_key_finiteness_demand() {
+    // A-VER: computed keys demand a proven-finite string set (E5, fork 12 = R) —
+    // a finite union accepts, `Kind(String)` REJECTs.
+    let mut i = Interner::new();
+    let mut env = TypeEnv::new();
+    env.insert("k".into(), Contract::Kind(Kind::String));
+    let open_key = Expr::RecordCons(vec![Field::Computed {
+        key: name("k"),
+        value: konst(i.integer(1)),
+    }]);
+    let a = analyze(&open_key, &env, &nc(), &mut i);
+    assert!(!a.accepted(), "Kind(String) computed key must REJECT (finite-set demand)");
+    assert_eq!(a.findings[0].class, TrapClass::ComputedKey);
+
+    // A finite union of string singletons accepts.
+    let ka = i.string("a");
+    let kb = i.string("b");
+    let mut fenv = TypeEnv::new();
+    fenv.insert(
+        "k".into(),
+        Contract::Union(Box::new(Contract::Equals(ka)), Box::new(Contract::Equals(kb))),
+    );
+    let finite = Expr::RecordCons(vec![Field::Computed {
+        key: name("k"),
+        value: konst(i.integer(1)),
+    }]);
+    let a = analyze(&finite, &fenv, &nc(), &mut i);
+    assert!(a.accepted(), "a finite string set is admitted: {:?}", a.findings);
+}
+
+#[test]
+fn tuple_spread_produces_concat_shape() {
+    // The tuple family's constructor: [1, ...t] with t : Tuple([Number]) fuses to
+    // the exact 2-tuple Tuple([Equals(1), Number]) — no more Top for spreads.
+    let mut i = Interner::new();
+    let mut env = TypeEnv::new();
+    env.insert("t".into(), Contract::Tuple(vec![Contract::Kind(Kind::Number)]));
+    let e = Expr::TupleCons(vec![
+        Element::Expr(konst(i.integer(1))),
+        Element::Spread(name("t")),
+    ]);
+    let a = analyze(&e, &env, &nc(), &mut i);
+    assert!(a.accepted(), "{:?}", a.findings);
+    assert_eq!(
+        a.contract,
+        Contract::Tuple(vec![Contract::Equals(i.integer(1)), Contract::Kind(Kind::Number)]),
+    );
+
+    // An unknown-shape spread survives as a Concat with a Kind(Tuple) tail.
+    let mut wide = TypeEnv::new();
+    wide.insert("t".into(), Contract::Kind(Kind::Tuple));
+    let e = Expr::TupleCons(vec![
+        Element::Expr(konst(i.integer(1))),
+        Element::Spread(name("t")),
+    ]);
+    let a = analyze(&e, &wide, &nc(), &mut i);
+    assert!(a.accepted());
+    assert_eq!(
+        a.contract,
+        Contract::Concat(vec![
+            Contract::Tuple(vec![Contract::Equals(i.integer(1))]),
+            Contract::Kind(Kind::Tuple),
+        ]),
+    );
 }
 
 #[test]

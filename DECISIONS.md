@@ -6,6 +6,79 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-22 — AUDIT: full codebase check against the evolved docs
+
+A systematic walk of every module against the current normative set (compendium
+1.0.8, RC 0.2.2, tuple family 0.3.1, app-induction 0.8.1, test suite v0.1, μ v0.5,
+grammar/kernel-AST/semantics v0.1). Four bug classes found and fixed — three of
+them introduced by `Concat` landing after older exhaustive logic, one a
+day-one analyzer gap. Full suite 230, 0 ignored, clippy clean.
+
+**Fixed — soundness:**
+- **S1** `recursive::exact_eval` had no `Concat` arm, so a Concat definition fell to
+  the `NonEmpty` leaf default. Consequence: `L = Union(Function, Concat(Tuple(E), L))`
+  was voiced NonEmpty at the def while unproductive, so the exactness pass left it
+  **proven Empty** — and emptiness feeds subcontract step 0, so `L ⊑ Number` would
+  falsely prove. Fixed: Concat joins segments by the product rule (as Tuple).
+  Regression: `audit_concat_emptiness_voice_is_sound` (plus the genuinely-empty
+  no-base control).
+- **S2** `contains_tuple_window` / `window_contains` had no `Equals` arm —
+  `Concat(Equals([1]), Tuple(Number))` wrongly rejected `[1, 5]`. Membership is the
+  denotational truth source; a false negative there is a bug, not conservatism.
+  Fixed with elementwise `values_equal` (no interner needed). Regression:
+  `audit_equals_segment_membership`.
+- **S3** `length::classify` recursed `len → solve → classify` unboundedly when an
+  own-SCC reference sat *nested inside* a segment (e.g. under a Union) — stack
+  overflow. Fixed with `length_path_hits`: own-SCC refs on **length-relevant**
+  paths (Union/Concat/Intersection/Difference/Ref) decline to `Opaque`; refs inside
+  Tuple elements / Record fields stay admissible because arity never recurses into
+  element lengths (`N = Tuple(E, N-or-base)` stays exactly 2 — asserted in the
+  regression's control).
+- **S4** analyzer concordance holes: closed `[...5]`, `{...[1]}`, `{[5]: v}` were
+  **accepted** while the oracle traps (spread-kind / computed-key). `Apply` had the
+  spread check; the constructors never did — and the concordance corpus never
+  generated those forms, so the sweep couldn't catch it (test-coverage gap
+  compounding the code gap). Fixed: `check_spread_kind` generalized over the
+  expected kind and applied at TupleCons/RecordCons spreads; `check_computed_key`
+  added; computed/spread subexpressions now sit in expecting seats (`demand`).
+  Corpus gained all six rows (three trapping, three fine).
+- **Bonus precision (family §1):** a `TupleCons` with spreads now types as a
+  **Concat** instead of `Top` — `[1, ...t]` with `t : Tuple([Number])` fuses to the
+  exact `Tuple([Equals(1), Number])`; an unknown spread keeps a `Kind(Tuple)`
+  segment (sound: on the non-trapping path the spread value *is* a tuple).
+- **A-VER computed-key demand implemented:** a computed key must be a
+  **proven-finite string set** (E5, fork 12 = R) — finite unions accept,
+  `Kind(String)` REJECTs. Recorded nuance: that rejection is a *domain demand*
+  (analyzability), not a trap prediction — noted in the code.
+- **`Concat` added to the C§12.2 constructor list** (`expr.rs`), through the
+  normalizing smart constructor.
+
+**Registered, not rebuilt (OwedItems "Registered implementation drift"):** C§16's
+upgraded `OperationOutcome` interface [1.0.7] (needs the app-induction package's
+`AnalysisContract`); `Record(Exact | Open)` [1.0.7] (open patterns lose per-field
+contracts); μ v0.5 §6 universal interning vs bisimulation-at-compare (equal on all
+`==` results; `equal.rs` header now carries the architecture note — its stale v0.1
+citation fixed); missing `Concat` C.2 rows (all `Unproven`, sound — §4 alignment is
+the scheduled fix).
+
+**Doc errata flagged to the author:** the semantics companion still carries the
+deleted `unprintable-interpolation` trap row.
+
+**Checked clean:** poly.rs against μ v0.5 §8 (the narrow slice, abort semantics);
+B2 printing (N-03 rows); expecting-seat `eval_value`; `eval_record`'s
+computed-key/spread traps; PR-01…05; RC guardedness/positivity Concat arms;
+`structurally_uninhabited`; no test asserts a PENDING-§5 interim inequality as
+desired behavior.
+
+**Known coverage gaps (staged work, not staleness):** suite IDs not aligned to the
+spec's stable names; Phase A `#[ignore]` stubs absent; `String.length/units/points`
+prelude functions missing (S-01…03 blocked); MOD-01…05 module-system semantics
+partial (imports are link-metadata only; no module-header world distinction).
+
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-21 — Tuple family §2: `len` — Λ-semantics with exactness stamps
 
 `src/contract/length.rs` (new) + `recursive::contract_emptiness` + 6 TL cases.

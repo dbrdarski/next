@@ -75,6 +75,36 @@ templates.
 
 ---
 
+## Registered implementation drift (audit 2026-07-22 — specified, awaiting rebuild)
+
+Items where the *docs* are settled but the implementation still carries an older
+shape. Sound today; tracked here so the rebuild is deliberate.
+
+- **C§16 obligation 3 upgraded [1.0.7]:** every transfer rule's interface is
+  `analyzeOperation(op, jointOperands: Correlated<AnalysisContract>, seatContext) →
+  OperationOutcome { safety, produced: AnalysisContract, completion }`. Our
+  `OpResult { safety, output: Contract }` is the pre-upgrade degenerate shape; the
+  reshape lands with the application/induction package (which supplies
+  `AnalysisContract` and `CompletionEvidence`).
+- **`Record(fields, Exact | Open)` [1.0.7]:** openness is a Record-contract
+  parameter (analyzer-internal; surface writes exact only). We model exact `Record`
+  + bare `HasField`, so open record *patterns* lose per-field contracts (they narrow
+  to `∩ HasField` only). Sound, precision-lossy.
+- **μ v0.5 §6 universal interning:** closures should intern shallowly with runtime
+  `==` a pointer test and Algorithm B canonicalization-internal; we run Algorithm B
+  at compare time over plain allocations. Equal on every `==` result; differs in
+  harness pointer observability (suite register PENDING-§5). Noted in
+  `src/oracle/equal.rs`.
+- **`Concat` C.2 rows:** `Concat ⊑ Kind(Tuple)`, kind-vs-Concat disjointness, and
+  unequal-segment-count alignment (family §4) are absent — all land `Unproven`
+  (sound). The §4 alignment procedure is the scheduled fix.
+
+## Doc errata (for the author)
+
+- The **semantics companion v0.1** still lists the deleted `unprintable-interpolation`
+  trap (§3 Template row and the §6 concordance table) — superseded by the
+  interpolation-total ruling [user, 2026-07-18] and test-suite line 57.
+
 ## Author-flagged opens (implemented per their stated law)
 
 - **Mutator returns** — return-nothing is **[decided]** and implemented; the

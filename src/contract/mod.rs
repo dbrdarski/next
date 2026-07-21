@@ -338,8 +338,13 @@ impl Contract {
             Contract::Top => true,
             Contract::Bottom => false,
             Contract::Kind(Kind::Tuple) => true,
-            // Any other contract can only admit a window by naming the tuple value
-            // itself; `contains` decides that once the window is materialized.
+            // A singleton admits exactly the window equal to it, elementwise —
+            // no interner needed to materialize the window as a tuple.
+            Contract::Equals(t) => t.as_tuple().is_some_and(|items| {
+                items.len() == window.len()
+                    && items.iter().zip(window).all(|(x, y)| values_equal(x, y))
+            }),
+            // Any other contract admits no tuple window.
             _ => false,
         }
     }

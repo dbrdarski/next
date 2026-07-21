@@ -269,6 +269,11 @@ fn window_contains(group: &RecGroup, c: &Contract, window: &[ValueRef]) -> bool 
             window_contains(group, b, window) && !window_contains(group, e, window)
         }
         Contract::Top | Contract::Kind(Kind::Tuple) => true,
+        // A singleton admits exactly the window equal to it, elementwise.
+        Contract::Equals(t) => t.as_tuple().is_some_and(|items| {
+            items.len() == window.len()
+                && items.iter().zip(window).all(|(x, y)| crate::oracle::values_equal(x, y))
+        }),
         _ => false,
     }
 }
@@ -498,6 +503,15 @@ fn exact_eval(
         Contract::Tuple(elems) => {
             let voices: Vec<E3> =
                 elems.iter().map(|e| exact_eval(group, e, productive, verdict, interner)).collect();
+            join_product(voices.into_iter())
+        }
+        // Every Concat segment is required, so the product join applies — exactly
+        // as for Tuple. (Falling to the leaf default would voice an unproven or
+        // empty Concat as NonEmpty: unsound, since emptiness feeds subcontract
+        // step 0.)
+        Contract::Concat(segs) => {
+            let voices: Vec<E3> =
+                segs.iter().map(|s| exact_eval(group, s, productive, verdict, interner)).collect();
             join_product(voices.into_iter())
         }
         Contract::Record(fields) => {

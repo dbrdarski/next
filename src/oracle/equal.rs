@@ -1,13 +1,24 @@
-//! Value equality — algorithm B (μ-Canonicalization Spec v0.1, §4B).
+//! Value equality — Algorithm B (μ-Canonicalization Spec **v0.5**, where it is
+//! rescoped as *canonicalization-internal*; see the architecture note below).
 //!
 //! `==` on values is a **bisimulation over value graphs** with a visited-pair
 //! set: node labels are canonical-code (shape) and atom labels; children are
 //! compared positionally; a **revisited pair is assumed equal** (the coinductive
-//! step that terminates `y == z` and makes `a == y` true — §3 law 6).
+//! step that terminates `y == z` and makes `a == y` true).
 //!
 //! Data `==` stays a pure pointer test (interned values): only comparisons that
 //! transitively involve a function ever walk. Locations are **nominal** atoms
 //! (binding identity) — same-body closures over distinct slots stay distinct.
+//!
+//! **Architecture note (known interim deviation, logged in DECISIONS):** μ v0.5 §6
+//! rules *universal interning* — closures intern shallowly (key = canonical-code
+//! pointer + capture pointers) and runtime `==` is a pointer test, with Algorithm B
+//! running only inside the canonicalizer. This module instead runs Algorithm B at
+//! compare time over plainly-allocated closures. The two agree on every `==`
+//! *result* (bisimulation equality coincides with canonical-form pointer equality);
+//! they differ only in harness-level pointer observability for functions. The
+//! re-architecture lands with the §5 canonicalizer wiring (suite register
+//! PENDING-§5).
 
 use std::collections::HashSet;
 

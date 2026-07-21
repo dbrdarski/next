@@ -322,6 +322,16 @@ fn classify(group: &RecGroup, scc: &BTreeSet<String>, alt: &Contract, interner: 
                 target = Some(n.clone());
             }
             other => {
+                // An own-SCC reference on a **length-relevant** path inside the
+                // segment (under Union/Concat/Intersection/Difference — where
+                // `len` recurses) is outside the linear fragment, and following it
+                // would re-enter `solve` on this SCC without progress. Decline to
+                // Opaque. Refs inside Tuple elements / Record fields are harmless:
+                // arity never recurses into element lengths (`R = Tuple(E, Ref R)`
+                // stays exactly 2).
+                if length_path_hits(other, scc) {
+                    return Alt::Opaque;
+                }
                 let l = len(group, other, interner);
                 if !l.is_exact() {
                     return Alt::Opaque; // label outside the finite-exact boundary
@@ -336,6 +346,20 @@ fn classify(group: &RecGroup, scc: &BTreeSet<String>, alt: &Contract, interner: 
     match target {
         None => Alt::Base(weights),
         Some(to) => Alt::Edge { to, weights },
+    }
+}
+
+/// Whether an own-SCC reference is reachable along a path `len` itself recurses
+/// through (Union/Concat/Intersection/Difference/Ref) — the paths where following
+/// it would loop. Tuple elements and Record fields are *not* length-relevant.
+fn length_path_hits(c: &Contract, scc: &BTreeSet<String>) -> bool {
+    match c {
+        Contract::Ref(n) => scc.contains(n),
+        Contract::Union(a, b) | Contract::Intersection(a, b) | Contract::Difference(a, b) => {
+            length_path_hits(a, scc) || length_path_hits(b, scc)
+        }
+        Contract::Concat(segs) => segs.iter().any(|s| length_path_hits(s, scc)),
+        _ => false,
     }
 }
 

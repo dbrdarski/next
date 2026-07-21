@@ -793,6 +793,69 @@ mod rec {
     }
 
     #[test]
+    fn audit_concat_emptiness_voice_is_sound() {
+        // AUDIT S1 regression: exact_eval lacked a Concat arm, so a Concat def fell
+        // to the NonEmpty leaf default — and an opaque-dependent group could be
+        // proven Empty, which feeds subcontract step 0 (empty ⊑ anything).
+        let mut i = Interner::new();
+
+        // L = Union(Function, Concat(Tuple(Number), L)) — a function value
+        // inhabits L, but no witness is constructible: emptiness must be
+        // Unproven, never Empty.
+        let g = group(&[(
+            "L",
+            union(
+                Contract::Kind(Kind::Function),
+                Contract::concat([Contract::Tuple(vec![Contract::Kind(Kind::Number)]), rec_ref("L")]),
+            ),
+        )]);
+        assert!(recursive::admissible(&g).is_ok());
+        let e = recursive::emptiness(&g, &mut i);
+        assert!(
+            matches!(e["L"], recursive::Emptiness::Unproven),
+            "opaque-dependent Concat group must stay Unproven, got {:?}",
+            e["L"],
+        );
+        // And the false Empty must not leak into a subcontract proof.
+        let v = recursive::subcontract(&g, &rec_ref("L"), &Contract::Kind(Kind::Number), &mut i);
+        assert!(!matches!(v, Verdict::Proven), "L ⊑ Number must not prove, got {v:?}");
+
+        // Control: a Concat cycle with no base really is empty.
+        let dead = group(&[(
+            "D",
+            Contract::concat([Contract::Tuple(vec![Contract::Kind(Kind::Number)]), rec_ref("D")]),
+        )]);
+        assert!(recursive::admissible(&dead).is_ok());
+        let e = recursive::emptiness(&dead, &mut i);
+        assert!(matches!(e["D"], recursive::Emptiness::Empty), "got {:?}", e["D"]);
+    }
+
+    #[test]
+    fn audit_equals_segment_membership() {
+        // AUDIT S2 regression: an Equals segment in a Concat window was rejected
+        // outright (membership false negative — the truth source must be exact).
+        let mut i = Interner::new();
+        let one = i.integer(1);
+        let inner = i.tuple(vec![one]);
+        let c = Contract::Concat(vec![
+            Contract::Equals(inner),
+            Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+        ]);
+        let (a, b) = (i.integer(1), i.integer(5));
+        let val = i.tuple(vec![a, b]);
+        assert!(c.contains(&val), "[1, 5] splits as [1] ++ [5]");
+        let (x, y) = (i.integer(2), i.integer(5));
+        let miss = i.tuple(vec![x, y]);
+        assert!(!c.contains(&miss), "[2, 5] does not start with [1]");
+
+        // Group-aware path agrees.
+        let g = group(&[("C", c.clone())]);
+        let (a2, b2) = (i.integer(1), i.integer(5));
+        let val2 = i.tuple(vec![a2, b2]);
+        assert!(recursive::contains(&g, &rec_ref("C"), &val2));
+    }
+
+    #[test]
     fn rc15_opaque_leaf_stays_unproven() {
         // L = Union(Function, Record({next: L})). The Function leaf is opaque —
         // recursion never settles what its leaves cannot; emptiness is Unproven.
@@ -1283,6 +1346,47 @@ mod tl {
         let l = len(&g, &rec_ref("R"), &mut i);
         assert_eq!(l.stamp, Stamp::Approx, "nonlinear alternatives forfeit exactness");
         assert!(l.contract.contains(&i.integer(0)));
+    }
+
+    #[test]
+    fn audit_nested_own_scc_ref_in_label_terminates() {
+        // AUDIT S3 regression: an own-SCC reference nested *inside* a segment
+        // (here under a Union) sent classify → len → solve → classify into
+        // unbounded recursion. It must decline to Approx — and terminate.
+        let mut i = Interner::new();
+        let e = || Contract::Kind(Kind::Number);
+        let g = group(&[(
+            "R",
+            union(
+                Contract::Tuple(vec![]),
+                Contract::concat([
+                    union(Contract::Tuple(vec![e()]), rec_ref("R")),
+                    Contract::Tuple(vec![e()]),
+                ]),
+            ),
+        )]);
+        assert!(recursive::admissible(&g).is_ok());
+        let l = len(&g, &rec_ref("R"), &mut i); // must not overflow the stack
+        assert_eq!(l.stamp, Stamp::Approx, "a nested own-SCC label declines exactness");
+        assert!(l.contract.contains(&i.integer(0)), "soundness: 0 is realizable");
+
+        // Control: a ref nested in a *tuple element* is arity-irrelevant and must
+        // stay exact — N = Tuple(E, Ref N) is always a 2-tuple... but wait, that
+        // group is empty (no base), so its length is Bottom. Use the inhabited
+        // variant: N = Union(Null-free base) — a 2-tuple whose element nests N or
+        // terminates.
+        let g2 = group(&[(
+            "N",
+            union(
+                Contract::Tuple(vec![e(), Contract::Kind(Kind::Null)]),
+                Contract::Tuple(vec![e(), rec_ref("N")]),
+            ),
+        )]);
+        assert!(recursive::admissible(&g2).is_ok());
+        let l2 = len(&g2, &rec_ref("N"), &mut i);
+        assert!(l2.is_exact(), "element-nested refs never affect arity: {l2:?}");
+        assert!(l2.contract.contains(&i.integer(2)));
+        assert!(!l2.contract.contains(&i.integer(3)));
     }
 
     #[test]
