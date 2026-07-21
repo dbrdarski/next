@@ -283,10 +283,83 @@ fn template_stringifies_by_b2_rules() {
     assert_eq!(eval("`n = ${1 / 3}`").as_string_lossy().unwrap(), "n = 1/3");
 }
 
+// ── PR-01…05 — structure interpolation is total [user, 2026-07-18] ───────────
+
+/// Evaluate a program to a String value.
+fn eval_str(src: &str) -> String {
+    let v = eval(src);
+    let units = v.as_str_units().expect("a string");
+    String::from_utf16_lossy(units)
+}
+
+/// Evaluate in a **caller-supplied** interner, so values from separate programs are
+/// comparable by pointer (interning is per-interner).
+fn eval_in(interner: &mut Interner, src: &str) -> ValueRef {
+    use crate::desugar::Desugarer;
+    use crate::lex::lex;
+    use crate::parse::parse_program;
+
+    let toks = lex(src).expect("lex ok");
+    let sprogram = parse_program(toks).expect("parse ok");
+    let module = Desugarer::new(interner).program(&sprogram).expect("desugar ok");
+    let mut oracle = Oracle::new(interner);
+    oracle.run_module(&module).expect("evaluated without trapping")
+}
+
 #[test]
-fn template_structure_interpolation_traps() {
-    // Structure printing is deliberately unruled — it traps (E11).
-    assert_eq!(trap_class("`v = ${[1, 2]}`"), TrapClass::UnprintableInterpolation);
+fn pr01_tuple_renders_as_literal_with_b2_numbers() {
+    assert_eq!(eval_str("`${[1, 1/3]}`"), "[1, 1/3]");
+}
+
+#[test]
+fn pr02_record_renders_in_canonical_sorted_key_order() {
+    assert_eq!(eval_str("`${{b: 2, a: 1}}`"), "{a: 1, b: 2}");
+}
+
+#[test]
+fn pr03_inner_strings_are_quoted_and_escaped() {
+    assert_eq!(eval_str(r#"`${["x"]}`"#), r#"["x"]"#);
+    // A top-level string interpolates raw; only strings *inside* structures quote.
+    assert_eq!(eval_str(r#"`${"x"}`"#), "x");
+    // Escaping keeps the literal fragment round-trippable.
+    assert_eq!(eval_str(r#"`${["a\"b"]}`"#), r#"["a\"b"]"#);
+}
+
+#[test]
+fn pr04_functions_and_indeterminates_render_non_parseably() {
+    assert_eq!(eval_str("f = x => x\n`${f}`"), "<Function>");
+    // The *form* only — never the operands, so these are indistinguishable
+    // (interning forbids remembering them).
+    assert_eq!(eval_str("`${1/0}`"), "<Indeterminate _/0>");
+    assert_eq!(eval_str("`${2/0}`"), "<Indeterminate _/0>");
+    assert_eq!(eval_str("`${0/0}`"), "<Indeterminate 0/0>");
+}
+
+#[test]
+fn pr05_parse_print_is_identity_on_the_literal_fragment() {
+    // The harness law: rendering a literal-formed value and re-evaluating that
+    // rendering yields the same value. Everything runs in ONE interner, so
+    // "same value" is the pointer test (interning is per-interner).
+    for src in [
+        "[1, 2, 3]",
+        "[1, 1/3, -2]",
+        "{a: 1, b: 2}",
+        "{b: 2, a: 1}",
+        r#"["x", "a\"b"]"#,
+        r#"[[1, 2], {k: "v"}]"#,
+        "{outer: {inner: [true, false, null]}}",
+        "[]",
+    ] {
+        let mut i = Interner::new();
+        let original = eval_in(&mut i, src);
+        let rendered = eval_in(&mut i, &format!("`${{{src}}}`"));
+        let printed = String::from_utf16_lossy(rendered.as_str_units().expect("a string"));
+        let reparsed = eval_in(&mut i, &printed);
+        assert!(
+            original.ptr_eq(&reparsed),
+            "parse ∘ print ≠ identity for {src}: printed {printed:?}",
+        );
+    }
 }
 
 // ── Interning through evaluation ─────────────────────────────────────────────

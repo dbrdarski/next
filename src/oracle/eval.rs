@@ -569,7 +569,7 @@ impl<'a> Oracle<'a> {
                 TemplatePart::Segment(s) => out.extend(s.encode_utf16()),
                 TemplatePart::Interp(e) => {
                     let v = self.eval_value(e, env, world)?;
-                    let s = self.stringify(&v)?;
+                    let s = self.stringify(&v);
                     out.extend(s.encode_utf16());
                 }
             }
@@ -577,17 +577,15 @@ impl<'a> Oracle<'a> {
         Ok(Outcome::Produced(self.interner.string_units(out)))
     }
 
-    fn stringify(&self, v: &ValueRef) -> Result<String, Trap> {
-        match v.data() {
-            ValueData::Str(u) => Ok(String::from_utf16_lossy(u)),
-            ValueData::Number(n) => Ok(n.to_string()),
-            ValueData::Boolean(b) => Ok(b.to_string()),
-            ValueData::Null => Ok("null".to_string()),
-            _ => Self::trap(
-                TrapClass::UnprintableInterpolation,
-                "structure interpolation is unruled (deliberately trapped — E11)",
-            ),
-        }
+    /// **Structure interpolation is total** [user, 2026-07-18]: every value renders.
+    /// A top-level String interpolates raw; strings *inside* structures are quoted
+    /// and escaped, so literal-formed values round-trip (`parse ∘ print = identity`,
+    /// the PR-05 harness law). Functions and Indeterminates render as visibly
+    /// non-parseable angle-bracket forms — the Indeterminate shows only its *form*,
+    /// never its operands (interning forbids remembering them), so `1/0` and `2/0`
+    /// render identically (PR-04).
+    fn stringify(&self, v: &ValueRef) -> String {
+        render_value(v, false)
     }
 
     // ── Application (pure fragment; worlds/staging in 3c) ─────────────────────
@@ -749,4 +747,59 @@ fn clamp_window(lo: Option<i64>, hi: Option<i64>, len: usize) -> (usize, usize) 
 fn grapheme_slices(units: &[u16]) -> Vec<Vec<u16>> {
     let s = String::from_utf16_lossy(units);
     s.graphemes(true).map(|g| g.encode_utf16().collect()).collect()
+}
+
+// ── Value rendering (structure interpolation is total — [user, 2026-07-18]) ───
+
+/// Render `v` as its canonical literal form. `nested` is true inside a Tuple or
+/// Record, where Strings are quoted and escaped so the form round-trips; a
+/// top-level String renders raw.
+fn render_value(v: &ValueRef, nested: bool) -> String {
+    match v.data() {
+        ValueData::Str(u) => {
+            let s = String::from_utf16_lossy(u);
+            if nested { quote_string(&s) } else { s }
+        }
+        ValueData::Number(n) => n.to_string(), // B2 printing
+        ValueData::Boolean(b) => b.to_string(),
+        ValueData::Null => "null".to_string(),
+        ValueData::Tuple(items) => {
+            let parts: Vec<String> = items.iter().map(|x| render_value(x, true)).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        ValueData::Record(entries) => {
+            // Canonical order: sorted by key (field order ∉ identity, I-02).
+            let mut fields: Vec<(String, &ValueRef)> = entries
+                .iter()
+                .map(|e| (String::from_utf16_lossy(&e.key), &e.value))
+                .collect();
+            fields.sort_by(|a, b| a.0.cmp(&b.0));
+            let parts: Vec<String> =
+                fields.iter().map(|(k, val)| format!("{k}: {}", render_value(val, true))).collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        // Visibly non-parseable forms.
+        ValueData::Function(_) | ValueData::Native(_) => "<Function>".to_string(),
+        // The *form* only — never the operands (interning forbids remembering them),
+        // so `1/0` and `2/0` render identically (PR-04).
+        ValueData::Indeterminate(f) => format!("<Indeterminate {}>", f.label()),
+    }
+}
+
+/// Quote and escape a string for the literal fragment (the JS standard escapes).
+fn quote_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }

@@ -33,7 +33,7 @@ use crate::contract::{
 };
 use crate::interner::Interner;
 use crate::oracle::{Outcome, TrapClass, eval_expr, eval_prim};
-use crate::value::{ValueData, ValueRef};
+use crate::value::ValueRef;
 
 #[cfg(test)]
 mod tests;
@@ -245,11 +245,11 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, cenv: &ContractEnv, interner:
     Analysis::produced(contract, findings)
 }
 
-/// A template produces a String (when it does not trap). Each interpolation is a
-/// printability demand: the oracle's `stringify` prints only String/Number/
-/// Boolean/Null and **traps `UnprintableInterpolation` on structures** — the print
-/// doctrine for structures is deliberately open (E11: *trap until ruled*), so a
-/// structure interpolation is a rejection, not a silent accept.
+/// A template always produces a String. **Structure interpolation is total**
+/// [user, 2026-07-18]: every value renders (canonical literal forms for data,
+/// `<Function>`, `<Indeterminate …>`), so an interpolation carries **no
+/// printability demand** — there is nothing here to reject. Interpolations remain
+/// ordinary expecting seats, and their subexpressions are analyzed as usual.
 fn analyze_template(parts: &[TemplatePart], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
     let mut findings = Vec::new();
     for part in parts {
@@ -257,19 +257,6 @@ fn analyze_template(parts: &[TemplatePart], env: &TypeEnv, cenv: &ContractEnv, i
         let mut r = analyze(e, env, cenv, interner);
         demand(&r, &mut findings); // interpolations are expecting seats
         findings.append(&mut r.findings);
-        match printability(&r.contract, interner) {
-            Printability::Printable => {}
-            Printability::Never => findings.push(Finding {
-                class: TrapClass::UnprintableInterpolation,
-                severity: Severity::Error,
-                message: "interpolating a structure is unruled (E11 — trap until ruled)".into(),
-            }),
-            Printability::Unknown => findings.push(Finding {
-                class: TrapClass::UnprintableInterpolation,
-                severity: Severity::Warning,
-                message: "cannot prove this interpolation is printable".into(),
-            }),
-        }
     }
     Analysis::produced(Contract::Kind(Kind::String), findings)
 }
@@ -887,45 +874,3 @@ fn union_of(mut contracts: Vec<Contract>) -> Contract {
     }
 }
 
-enum Printability {
-    Printable,
-    Never,
-    Unknown,
-}
-
-/// Whether the oracle's `stringify` accepts a value of this kind.
-fn printable_value(v: &ValueRef) -> bool {
-    matches!(
-        v.data(),
-        ValueData::Str(_) | ValueData::Number(_) | ValueData::Boolean(_) | ValueData::Null
-    )
-}
-
-fn printability(c: &Contract, interner: &mut Interner) -> Printability {
-    // A singleton decides exactly (mirrors the oracle on that value).
-    if let Contract::Equals(v) = c {
-        return if printable_value(v) { Printability::Printable } else { Printability::Never };
-    }
-    let printable = union([Kind::String, Kind::Number, Kind::Boolean, Kind::Null]);
-    if matches!(subcontract(c, &printable, interner), Verdict::Proven) {
-        return Printability::Printable;
-    }
-    // Provably a structure (or an Indeterminate) — every inhabitant traps.
-    let unprintable = union([Kind::Tuple, Kind::Record, Kind::Function]);
-    if matches!(c, Contract::Indeterminate(_))
-        || matches!(subcontract(c, &unprintable, interner), Verdict::Proven)
-    {
-        return Printability::Never;
-    }
-    Printability::Unknown
-}
-
-/// A right-folded union of the given kinds.
-fn union<const N: usize>(kinds: [Kind; N]) -> Contract {
-    kinds
-        .into_iter()
-        .rev()
-        .map(Contract::Kind)
-        .reduce(|acc, k| Contract::Union(Box::new(k), Box::new(acc)))
-        .expect("non-empty")
-}

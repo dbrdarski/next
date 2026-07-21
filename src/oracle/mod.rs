@@ -48,6 +48,11 @@ pub struct Trap {
 }
 
 /// The trap classes and their analyzer-obligation mirrors (§6 concordance).
+///
+/// Thirteen classes, bijective with suite cases T-01…T-14 (the ID range is stable;
+/// one case is superseded). The former fourteenth, `unprintable-interpolation`, is
+/// **deleted** — structure interpolation was ruled *total* [user, 2026-07-18], so
+/// every value renders and no interpolation can halt (suite PR-01…05).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrapClass {
     UnboundEvaluation,
@@ -63,7 +68,6 @@ pub enum TrapClass {
     RefutedBinding,
     SpreadKind,
     ComputedKey,
-    UnprintableInterpolation,
 }
 
 /// The completion triple for a body/expression (§1). `DidNotComplete`

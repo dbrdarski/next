@@ -6,6 +6,51 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-21 — CORRECTION: structure interpolation is total (the trap is deleted)
+
+**I implemented a ruling that had already been reversed.** Structure interpolation
+was ruled **total [user, 2026-07-18]**; I was working from a stale CLAUDE.md that
+still read *"trap, per spec — the print doctrine is deliberately open"*, and this
+session I built, defended in conversation, and documented the *opposite* of the
+ruling — including telling the author the doctrine was doc-open when it had been
+closed three days earlier. Root cause: I trusted the CLAUDE.md snapshot in my
+session context instead of re-reading the file from disk. Full suite 212, clippy
+clean.
+
+Authority: compendium 1.0.8 — *"Structure interpolation is total: every value
+renders — Tuple/Record as canonical literal forms (sorted-key records; inner
+strings quoted), `<Function>`, `<Indeterminate _/0>`/`<Indeterminate 0/0>` (the
+form, never operands); literal-formed values round-trip (parse ∘ print = identity,
+a harness law); angle-bracket forms are visibly non-parseable."* Test-suite spec
+line 57 makes the deletion explicit: *"The former fourteenth class,
+unprintable-interpolation, is deleted."*
+
+- **Oracle `stringify` is now total** (`render_value`): Tuple → `[a, b]`; Record →
+  `{k: v}` **sorted by key**; nested Strings quoted and JS-escaped while a
+  *top-level* String interpolates raw; Numbers via B2; `<Function>` for closures and
+  natives; `<Indeterminate _/0>`/`<Indeterminate 0/0>` — the **form only**, so `1/0`
+  and `2/0` are indistinguishable (interning forbids remembering operands, PR-04).
+- **`TrapClass::UnprintableInterpolation` removed.** Thirteen classes remain,
+  bijective with suite T-01…T-14 (the ID range is stable; one case superseded —
+  "never delete a case").
+- **Analyzer `analyze_template`**: the printability demand is gone entirely — a
+  template always yields `Kind(String)` and carries **no** finding. Interpolations
+  remain expecting seats, so a genuinely trapping subexpression still reports.
+  Deleted the now-dead `Printability`/`printable_value`/`printability`/`union`
+  helpers.
+- **Suite PR-01…05 implemented** as named cases. PR-05 (parse ∘ print = identity)
+  initially failed for a methodological reason worth recording: `run_program_value`
+  builds a **fresh interner per call**, so comparing values across two calls by
+  pointer is meaningless. Added `eval_in(interner, src)` so the original, its
+  rendering, and the re-parse all share one interner — then the law is the pointer
+  test it should be. Also: `;` is not a statement separator (L1 — newline-separated).
+- **`OwedItems.md` rewritten** against C§17 patch 1.0.8: every item it previously
+  listed has been discharged by the author (tuple family and application/induction
+  now **specified**; print doctrine **ruled**; arrow contract **superseded** by
+  `AnalysisContract`). It now indexes what C§17 still owes.
+
+---
+
 ## 2026-07-21 — Named contracts: static contract-expression evaluation (C§12.2) + patterns
 
 `src/contract/expr.rs` (new) + a `ContractEnv` threaded through the analyzer + 5

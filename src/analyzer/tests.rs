@@ -259,28 +259,31 @@ fn closed_expression_concordance() {
 }
 
 #[test]
-fn template_structure_interpolation_is_rejected() {
+fn template_interpolation_is_total_never_rejected() {
+    // Structure interpolation is total [user, 2026-07-18]: every value renders, so
+    // no interpolation carries a printability demand and none can be rejected.
     let mut i = Interner::new();
-    // `{ (1, 2) }` interpolates a tuple → E11 trap-until-ruled, an error.
+
+    // A tuple interpolation — previously a rejection, now simply a String.
     let tuple = Expr::TupleCons(vec![Element::Expr(konst(i.integer(1)))]);
     let t = Expr::Template(vec![TemplatePart::Interp(tuple)]);
     let a = analyze(&t, &empty(), &nc(), &mut i);
-    assert!(!a.accepted());
-    assert_eq!(a.findings[0].class, TrapClass::UnprintableInterpolation);
-    assert_eq!(a.findings[0].severity, Severity::Error);
-}
+    assert!(a.accepted() && a.findings.is_empty(), "got {:?}", a.findings);
+    assert_eq!(a.contract, Contract::Kind(Kind::String));
 
-#[test]
-fn template_unknown_interpolation_warns_not_rejects() {
-    let mut i = Interner::new();
-    // An unconstrained `x` might or might not be printable → warning, still accepted.
+    // An unconstrained receiver likewise carries no finding.
     let mut env = TypeEnv::new();
     env.insert("x".into(), Contract::Top);
     let t = Expr::Template(vec![TemplatePart::Interp(name("x"))]);
     let a = analyze(&t, &env, &nc(), &mut i);
-    assert!(a.accepted(), "unknown printability is a warning, not a rejection");
-    assert_eq!(a.findings[0].severity, Severity::Warning);
-    assert_eq!(a.findings[0].class, TrapClass::UnprintableInterpolation);
+    assert!(a.accepted() && a.findings.is_empty(), "got {:?}", a.findings);
+
+    // Real findings inside an interpolation still surface (it is an expecting seat).
+    let bad = prim(PrimOp::Add, vec![konst(i.integer(1)), konst(i.string("x"))]);
+    let t = Expr::Template(vec![TemplatePart::Interp(bad)]);
+    let a = analyze(&t, &empty(), &nc(), &mut i);
+    assert!(!a.accepted(), "a trapping subexpression must still be reported");
+    assert_eq!(a.findings[0].class, TrapClass::OperationSafety);
 }
 
 #[test]
