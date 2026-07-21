@@ -1,6 +1,6 @@
 # CLAUDE.md — NEXT Language Implementation
 
-You are implementing **NEXT**, a language whose design is complete and recorded in six normative documents in this repository. Your job is implementation, not design.
+You are implementing **NEXT**, a language whose design is complete and recorded in four normative documents in this repository. Your job is implementation, not design.
 
 ## Normative documents (read in this order)
 
@@ -8,8 +8,6 @@ You are implementing **NEXT**, a language whose design is complete and recorded 
 2. `next-grammar-specification-v0-1.md` — what parses. Final; no throwaway notation.
 3. `next-kernel-ast-specification-v0-1.md` — what exists after parsing: node inventory + the **closed desugaring catalog** (§4). The analyzer-facing form.
 4. `next-semantics-companion-v0-1.md` — what running means: per-node evaluation rules, **oracle traps**, the trap↔compile-error concordance (§6).
-5. `next-mu-canonicalization-specification-v0-5.md` — value/function identity: two graph domains (code vs value); Algorithm A (eager per-SCC code canonicalization, capture routing); Algorithm B (value-graph bisimulation, canonicalization-internal); **universal interning restored** (closures intern shallowly; runtime `==` is a pointer test); the enumerated, frozen `==`-slice (§8). Supersedes v0.1 (kept on disk as history).
-6. `next-recursive-contracts-specification-v0-2.md` — C§9: named recursive contracts; admissibility (positivity + structural guardedness); vector-lfp denotation; progress-guarded pair-induction subcontract; productivity-closure emptiness.
 
 Status vocabulary matters: [decided]/[owed]/[open]/[parked]/[leaning]/[fenced]. Nothing is [verified]. Fenced subsystems (reactive layer, concurrency, UI) are **not** in scope.
 
@@ -19,7 +17,7 @@ Status vocabulary matters: [decided]/[owed]/[open]/[parked]/[leaning]/[fenced]. 
 2. **Implement the semantics companion exactly** — including oracle traps as a distinct, non-value, non-catchable halt per §6. Traps are the executable surface for later soundness claims.
 3. **Do not invent semantics.** Any gap is either an extension point (AST spec §7), a tagged [open], or a question for the author. Stop and ask; never fill silently. Mark any unavoidable judgment call with an `// [ask-author]` comment and surface it in your session summary.
 4. **Property harness from day one of normalization:** `eval ∘ normalize = eval`, idempotence, brute-forced per-rule checks against the oracle.
-5. Values are immutable and **interned**: same value = same pointer; `==` is pointer comparison. Numbers are exact `BigRational` (num-rational). Fixed-precision decimal crates are explicitly rejected.
+5. All values are immutable and **interned**: same value = same pointer; `==` is pointer comparison, universally. Closures intern **shallowly** — key = (code pointer, capture pointers), small-tuple cost (interim: the parsed-code object serves as the code pointer until the canonicalizer lands; spelling-variant duplicates compare unequal until then — false negatives only). **Calls are never memoized**; only construction dedups. No runtime code analysis exists. Numbers are exact `BigRational` (num-rational). Fixed-precision decimal crates are explicitly rejected.
 
 ## Build order (Compendium Part I; do not reorder)
 
@@ -29,12 +27,16 @@ Status vocabulary matters: [decided]/[owed]/[open]/[parked]/[leaning]/[fenced]. 
 4. **Normalization + harness** in the same sitting as 3's completion.
 5. Stop. Contracts/analysis are a later phase, gated on the above being green.
 
+## Test suite
+
+The full suite is specified in `next-test-suite-specification-v0-1.md` — stable IDs, per-phase, with expected outcomes and the PENDING/PIN/PROVISIONAL/RECOVER registers. Implement phases 0–4 alongside their build-order steps; Phase A ships as ignored stubs with recorded verdicts. The list below is the short form:
+
 ## Conformance seeds (initial test suite)
 
 - One program per §6 trap class (must trap; will later double as analyzer-rejection cases).
 - The desugar-equivalence rows (AST §4) and worked parses (Compendium E2).
 - Exactness flagship: `0.1 + 0.2 == 0.3` is `true`.
-- Interning: `y = [() => y]` / `z = [() => z]` intern equal; the §7 group-identity pair (provisional strict-openness default — flagged, not ruled).
+- Function equality: `y = [() => y]` / `z = [() => z]` compare equal (via canonical code — pending-§5); the §7 group-identity pair (provisional strict-openness default — flagged, not ruled).
 - `??` vs `~a || b` differing exactly on `false`.
 - Nested-mutator join: inner writes invisible until outermost completion; equality-guard no-op write.
 - Grapheme index/slice cases pinned to the Unicode table version.
@@ -42,9 +44,9 @@ Status vocabulary matters: [decided]/[owed]/[open]/[parked]/[leaning]/[fenced]. 
 ## Known opens you will meet (implement as stated; do not resolve)
 
 - **Mutator returns**: current law is return-nothing — implement it; the returns-leaning is an extension point.
-- **Open-value group identity**: implement the semantics §7 provisional default; keep it isolated behind one module so a ruling flips it cheaply.
+- **Open-value group identity — RULED (shape, via strict openness)**: semantics §7 as written is normative; the group-canonicalization mechanism lands with §5; FE-05/FE-06 expectations are fixed (pending-§5 for mechanism only).
 - **Module in a value seat**: unimplemented; a clear error is correct.
-- **Template interpolation of structures**: trap, per spec — the print doctrine is deliberately open.
+- **Template interpolation — RULED total [user, 2026-07-18]**: the trap is deleted; render literal forms for data (sorted-key records, B2 numbers, quoted inner strings), `<Function>` for functions, `<Indeterminate form>` for Indeterminates; parse∘print = identity on the literal fragment is a harness law (suite PR-01…05).
 
 ## Process
 
