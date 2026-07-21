@@ -2,6 +2,9 @@
 name = "next"
 version = "0.1.0"
 edition = "2024"
+authors = ["Dane Brdarski"]
+license = "MIT"
+description = "Reference implementation of NEXT — a contract language with exact rationals, interned immutable values, and an oracle-first analyzer."
 
 [dependencies]
 # Must match num-rational's BigRational = Ratio<BigInt> (num-bigint 0.4);
