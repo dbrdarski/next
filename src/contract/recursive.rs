@@ -98,6 +98,11 @@ fn check_positive(group: &RecGroup, c: &Contract, positive: bool) -> Result<(), 
         Contract::Record(fields) => {
             fields.iter().try_for_each(|(_, e)| check_positive(group, e, positive))
         }
+        // `Concat` is positive in every segment (declared by the tuple family per
+        // §1a's future-constructor rule).
+        Contract::Concat(segs) => {
+            segs.iter().try_for_each(|s| check_positive(group, s, positive))
+        }
         _ => Ok(()),
     }
 }
@@ -137,6 +142,24 @@ fn collect_unguarded(group: &RecGroup, c: &Contract, out: &mut HashSet<String>) 
         }
         // Only B is reachable without a constructor; E is recursion-free (§1a).
         Contract::Difference(b, _) => collect_unguarded(group, b, out),
+        // A `Concat` edge guards a segment when some *sibling* segment has a
+        // permanently proven structural minimum length ≥ 1 — the traversal then
+        // consumes at least one element (RC §1b, integration). The proof is
+        // segment-local (`min_extent`), never the productivity of the group being
+        // admitted, so it stays non-circular.
+        Contract::Concat(segs) => {
+            for (i, s) in segs.iter().enumerate() {
+                let sibling_extent: usize = segs
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, other)| super::min_extent(other))
+                    .sum();
+                if sibling_extent == 0 {
+                    collect_unguarded(group, s, out); // nothing certainly consumed
+                }
+            }
+        }
         // Tuple / Record are structural progress — stop; references beneath them
         // are guarded.
         _ => {}
@@ -202,8 +225,51 @@ pub fn contains(group: &RecGroup, c: &Contract, v: &ValueRef) -> bool {
             }
             None => false,
         },
+        Contract::Concat(segs) => match v.as_tuple() {
+            Some(items) => concat_contains(group, segs, items),
+            None => false,
+        },
         // Non-recursive leaves: the ordinary denotational membership.
         _ => c.contains(v),
+    }
+}
+
+/// Group-aware Concat membership: does `items` split into consecutive windows
+/// satisfying `segs` in order? References resolve against the group, so a
+/// recursive segment (`Repeat`) is followed. Terminates on admissible groups —
+/// guardedness makes every reference cycle consume at least one element.
+fn concat_contains(group: &RecGroup, segs: &[Contract], items: &[ValueRef]) -> bool {
+    match segs.split_first() {
+        None => items.is_empty(),
+        Some((first, rest)) => (0..=items.len()).any(|k| {
+            window_contains(group, first, &items[..k]) && concat_contains(group, rest, &items[k..])
+        }),
+    }
+}
+
+/// Whether the tuple formed from `window` satisfies `c`, resolving group
+/// references. Structural, so no interner is needed to materialize the window.
+fn window_contains(group: &RecGroup, c: &Contract, window: &[ValueRef]) -> bool {
+    match c {
+        Contract::Ref(name) if group.is_member(name) => {
+            window_contains(group, group.get(name), window)
+        }
+        Contract::Tuple(elems) => {
+            elems.len() == window.len()
+                && elems.iter().zip(window).all(|(e, v)| contains(group, e, v))
+        }
+        Contract::Concat(segs) => concat_contains(group, segs, window),
+        Contract::Union(a, b) => {
+            window_contains(group, a, window) || window_contains(group, b, window)
+        }
+        Contract::Intersection(a, b) => {
+            window_contains(group, a, window) && window_contains(group, b, window)
+        }
+        Contract::Difference(b, e) => {
+            window_contains(group, b, window) && !window_contains(group, e, window)
+        }
+        Contract::Top | Contract::Kind(Kind::Tuple) => true,
+        _ => false,
     }
 }
 
@@ -308,6 +374,18 @@ fn prod_eval(
             Some(w) if !contains(group, e, &w) => Some(w),
             _ => None,
         },
+        // Every segment is required, so a Concat is productive exactly when all of
+        // them are; the witness is their concatenation. An uninhabited segment
+        // therefore makes the whole Concat empty (it never erases — family §1).
+        Contract::Concat(segs) => {
+            let mut items: Vec<ValueRef> = Vec::new();
+            for s in segs {
+                let w = prod_eval(group, s, states, interner)?;
+                let part = w.as_tuple()?.to_vec();
+                items.extend(part);
+            }
+            Some(interner.tuple(items))
+        }
         Contract::Tuple(elems) => {
             let mut items = Vec::with_capacity(elems.len());
             for ce in elems {
@@ -692,6 +770,31 @@ fn inhabitants(group: &RecGroup, c: &Contract, depth: usize, interner: &mut Inte
                 elems.iter().map(|e| take(inhabitants(group, e, depth, interner), FANOUT)).collect();
             product_values(&per, interner, false, &[])
         }
+        // A Concat inhabitant is a segment-wise choice, concatenated.
+        Contract::Concat(segs) => {
+            let per: Vec<Vec<ValueRef>> =
+                segs.iter().map(|s| take(inhabitants(group, s, depth, interner), FANOUT)).collect();
+            if per.iter().any(|c| c.is_empty()) {
+                return vec![];
+            }
+            let mut out = Vec::new();
+            for combo in product_values(&per, interner, false, &[]) {
+                // Each component is itself a tuple; splice them.
+                let parts = combo.as_tuple().expect("tuple of segments").to_vec();
+                let mut items: Vec<ValueRef> = Vec::new();
+                let mut ok = true;
+                for p in parts {
+                    match p.as_tuple() {
+                        Some(t) => items.extend_from_slice(t),
+                        None => ok = false,
+                    }
+                }
+                if ok {
+                    out.push(interner.tuple(items));
+                }
+            }
+            out
+        }
         Contract::Record(fields) => {
             let keys: Vec<Vec<u16>> = fields.iter().map(|(k, _)| k.encode_utf16().collect()).collect();
             let per: Vec<Vec<ValueRef>> =
@@ -749,7 +852,7 @@ fn prove(
     env: &EmptyEnv,
     a: &Contract,
     b: &Contract,
-    depth: usize,
+    source_progress: usize,
     assumed: &mut HashMap<(Contract, Contract), usize>,
     interner: &mut Interner,
 ) -> bool {
@@ -761,12 +864,12 @@ fn prove(
     // Progress-guarded hypothesis: a revisit closes only at strictly greater
     // source depth (per-pair, depth-stamped — RC-16).
     let key = (a.clone(), b.clone());
-    if let Some(&assumed_depth) = assumed.get(&key) {
-        return depth > assumed_depth;
+    if let Some(&assumed_progress) = assumed.get(&key) {
+        return source_progress > assumed_progress;
     }
-    assumed.insert(key.clone(), depth);
+    assumed.insert(key.clone(), source_progress);
 
-    let result = prove_body(group, env, a, b, depth, assumed, interner);
+    let result = prove_body(group, env, a, b, source_progress, assumed, interner);
 
     // Only the winning-path assumption persists; a failed pair must not poison a
     // sibling branch that could still close.
@@ -782,20 +885,20 @@ fn prove_body(
     env: &EmptyEnv,
     a: &Contract,
     b: &Contract,
-    depth: usize,
+    source_progress: usize,
     assumed: &mut HashMap<(Contract, Contract), usize>,
     interner: &mut Interner,
 ) -> bool {
     // μ-head traversal — resolve references without incrementing depth.
     match a {
         Contract::Ref(name) if group.is_member(name) => {
-            return prove(group, env, group.get(name), b, depth, assumed, interner);
+            return prove(group, env, group.get(name), b, source_progress, assumed, interner);
         }
         _ => {}
     }
     match b {
         Contract::Ref(name) if group.is_member(name) => {
-            return prove(group, env, a, group.get(name), depth, assumed, interner);
+            return prove(group, env, a, group.get(name), source_progress, assumed, interner);
         }
         _ => {}
     }
@@ -804,34 +907,50 @@ fn prove_body(
         (_, Contract::Top) => true,
         // And-like rows on B (complete).
         (_, Contract::Intersection(b1, b2)) => {
-            prove(group, env, a, b1, depth, assumed, interner)
-                && prove(group, env, a, b2, depth, assumed, interner)
+            prove(group, env, a, b1, source_progress, assumed, interner)
+                && prove(group, env, a, b2, source_progress, assumed, interner)
         }
         // Or/and rows on A (complete for Union-left).
         (Contract::Union(a1, a2), _) => {
-            prove(group, env, a1, b, depth, assumed, interner)
-                && prove(group, env, a2, b, depth, assumed, interner)
+            prove(group, env, a1, b, source_progress, assumed, interner)
+                && prove(group, env, a2, b, source_progress, assumed, interner)
         }
         (_, Contract::Union(b1, b2)) => {
-            prove(group, env, a, b1, depth, assumed, interner)
-                || prove(group, env, a, b2, depth, assumed, interner)
+            prove(group, env, a, b1, source_progress, assumed, interner)
+                || prove(group, env, a, b2, source_progress, assumed, interner)
         }
         (Contract::Intersection(a1, a2), _) => {
-            prove(group, env, a1, b, depth, assumed, interner)
-                || prove(group, env, a2, b, depth, assumed, interner)
+            prove(group, env, a1, b, source_progress, assumed, interner)
+                || prove(group, env, a2, b, source_progress, assumed, interner)
         }
-        // Structural descent — increments source depth (the induction measure).
+        // Aligned concatenation: compare segment-wise, and carry the source's
+        // **consumed extent** as progress (RC §5, 0.2.2 — flat sequence recursion
+        // licenses reuse by what the traversal consumed, not by nesting). This is
+        // the aligned case only; the family's general alignment procedure (§4,
+        // forced-boundary peeling over unequal segment counts) is a later increment,
+        // and lands `unproven` here rather than guessing a split.
+        (Contract::Concat(sa), Contract::Concat(sb)) if sa.len() == sb.len() => {
+            let mut consumed = 0;
+            for (x, y) in sa.iter().zip(sb) {
+                if !prove(group, env, x, y, source_progress + consumed, assumed, interner) {
+                    return false;
+                }
+                consumed += super::min_extent(x);
+            }
+            true
+        }
+        // Structural descent — increments source progress (the induction measure).
         (Contract::Tuple(ea), Contract::Tuple(eb)) => {
             ea.len() == eb.len()
                 && ea
                     .iter()
                     .zip(eb)
-                    .all(|(x, y)| prove(group, env, x, y, depth + 1, assumed, interner))
+                    .all(|(x, y)| prove(group, env, x, y, source_progress + 1, assumed, interner))
         }
         (Contract::Record(fa), Contract::Record(fb)) => {
             fa.len() == fb.len()
                 && fa.iter().all(|(key, ca)| match fb.iter().find(|(k, _)| k == key) {
-                    Some((_, cb)) => prove(group, env, ca, cb, depth + 1, assumed, interner),
+                    Some((_, cb)) => prove(group, env, ca, cb, source_progress + 1, assumed, interner),
                     None => false,
                 })
         }

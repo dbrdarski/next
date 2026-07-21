@@ -334,6 +334,19 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
             vec![interner.number(b.clone()), interner.number(b.clone() * r.clone())]
         }
         Indeterminate(f) => vec![interner.indeterminate(*f)],
+        // A Concat sample is the concatenation of one sample per segment.
+        Concat(segs) => {
+            let mut items: Vec<ValueRef> = Vec::new();
+            for s in segs {
+                let Some(w) = sample(s, interner).into_iter().find(|v| v.as_tuple().is_some())
+                else {
+                    return vec![];
+                };
+                let part = w.as_tuple().expect("checked").to_vec();
+                items.extend(part);
+            }
+            vec![interner.tuple(items)]
+        }
         // A bare reference is unsampleable without its group; recursive sampling
         // lives in `recursive`.
         Ref(_) => vec![],

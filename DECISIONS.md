@@ -6,6 +6,47 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-21 — `Concat` + `sourceProgress` (tuple family §1; RC patch 0.2.2)
+
+The algebra prerequisites for the tuple-length family. Full suite 219, 0 ignored,
+clippy clean.
+
+- **`Contract::Concat(segments)`** — a tuple that splits into consecutive segments,
+  positive in every segment. Smart constructor `Contract::concat(..)` applies §1's
+  normal forms: nested Concats **flatten** associatively; the canonical empty-tuple
+  segment **erases**; adjacent exact segments **fuse**; and an **uninhabited segment
+  never erases** — it Bottom-normalizes the whole Concat, since erasing it would
+  turn an empty contract into an inhabited one. Uninhabitance there uses only
+  *permanent structural* facts (`structurally_uninhabited`), never temporary
+  analysis state, exactly as §1 requires.
+- **Membership** is the denotational reference: a backtracking split over
+  consecutive windows, with fixed-arity segments consuming exactly their arity. The
+  analyzer's alignment procedure (§4) decides the *contract* question without
+  enumerating and is a later increment.
+- **Recursive layer (RC 0.2.2):**
+  - positivity now descends through `Concat` segments;
+  - **guardedness**: a `Concat` edge guards a segment when some *sibling* has a
+    permanently proven structural minimum length ≥ 1 (`min_extent`) — segment-local,
+    so the proof never consults the productivity of the group under admission (the
+    non-circularity clause). This is what admits `Repeat`;
+  - **`sourceDepth` → `sourceProgress`**, and the subcontract gained an aligned
+    `Concat ⊑ Concat` row that carries the source's **consumed extent** as progress
+    — flat sequence recursion licenses reuse by what was consumed, not by nesting;
+  - group-aware `Concat` membership and inhabitant enumeration (a bare
+    `Contract::contains` cannot resolve `Ref`s inside segments).
+- **RC-17/18/19 implemented.** RC-17 `Repeat(Number) ⊑ Repeat(Top)` proves *only*
+  through consumed-extent progress (the revisited pair closes at advanced progress).
+  RC-18 `Repeat(Number) ⊄ Repeat(String)` is refuted with a **complete finite tuple**
+  witness `[1]` — asserted to be a whole tuple, not a naked element (§5.3). RC-19's
+  mutual Record/Concat cycle terminates and stays inhabited.
+- **Scope:** only the *aligned* `Concat ⊑ Concat` case (equal segment counts) is
+  decided; the general alignment procedure (§4 forced-boundary peeling over unequal
+  counts) lands `unproven` rather than guessing a split. Sound. `len` with its
+  `Exact | Approx` stamps (§2) is the next increment.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-21 — CORRECTION: structure interpolation is total (the trap is deleted)
 
 **I implemented a ruling that had already been reversed.** Structure interpolation

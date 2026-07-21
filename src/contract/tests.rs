@@ -695,6 +695,103 @@ mod rec {
         assert!(matches!(e["B"], recursive::Emptiness::Empty));
     }
 
+    /// `Repeat(E)` — a flat sequence, derived from Concat (tuple family §1):
+    /// `R = Union(Tuple(), Concat(Tuple(E), R))`.
+    fn repeat_group(name: &str, element: Contract) -> RecGroup {
+        let body = union(
+            Contract::Tuple(vec![]),
+            Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)]),
+        );
+        group(&[(name, body)])
+    }
+
+    /// Merge two groups so both `Repeat`s are comparable in one namespace.
+    fn merge(a: RecGroup, b: RecGroup) -> RecGroup {
+        RecGroup::new(a.defs.into_iter().chain(b.defs))
+    }
+
+    #[test]
+    fn concat_guardedness_admits_repeat() {
+        // The recursive segment is guarded by a sibling of proven minimum extent 1.
+        let g = repeat_group("R", Contract::Kind(Kind::Number));
+        assert_eq!(recursive::admissible(&g), Ok(()));
+
+        // With no consuming sibling, the same shape is unguarded and rejected.
+        let bad = group(&[("U", Contract::concat([Contract::Kind(Kind::Tuple), rec_ref("U")]))]);
+        assert!(matches!(recursive::admissible(&bad), Err(recursive::DefError::Unguarded { .. })));
+    }
+
+    #[test]
+    fn concat_membership_splits_the_tuple() {
+        let mut i = Interner::new();
+        let g = repeat_group("R", Contract::Kind(Kind::Number));
+        let r = rec_ref("R");
+
+        let empty = i.tuple(vec![]);
+        assert!(recursive::contains(&g, &r, &empty));
+        let one = i.integer(1);
+        let two = i.integer(2);
+        let nums = i.tuple(vec![one, two]);
+        assert!(recursive::contains(&g, &r, &nums));
+        let s = i.string("x");
+        let mixed = i.tuple(vec![s]);
+        assert!(!recursive::contains(&g, &r, &mixed));
+    }
+
+    #[test]
+    fn rc17_repeat_covariance_proven_by_consumed_extent() {
+        // Repeat(E) ⊑ Repeat(Top) — closes only because traversing the Concat
+        // consumes ≥ 1 element, so the revisited pair advances source progress.
+        let mut i = Interner::new();
+        let g = merge(
+            repeat_group("RN", Contract::Kind(Kind::Number)),
+            repeat_group("RT", Contract::Top),
+        );
+        assert!(recursive::admissible(&g).is_ok());
+        let v = recursive::subcontract(&g, &rec_ref("RN"), &rec_ref("RT"), &mut i);
+        assert!(matches!(v, Verdict::Proven), "Repeat(Number) ⊑ Repeat(Top), got {v:?}");
+    }
+
+    #[test]
+    fn rc18_repeat_mismatch_refuted_with_complete_witness() {
+        // Repeat(Number) ⊄ Repeat(String) — refuted only with a *complete* finite
+        // tuple witness (`[1]`), never a bare positional mismatch (§5.3).
+        let mut i = Interner::new();
+        let g = merge(
+            repeat_group("RN", Contract::Kind(Kind::Number)),
+            repeat_group("RS", Contract::Kind(Kind::String)),
+        );
+        assert!(recursive::admissible(&g).is_ok());
+        match recursive::subcontract(&g, &rec_ref("RN"), &rec_ref("RS"), &mut i) {
+            Verdict::Refuted(w) => {
+                assert!(recursive::contains(&g, &rec_ref("RN"), &w), "witness ∈ Repeat(Number)");
+                assert!(!recursive::contains(&g, &rec_ref("RS"), &w), "witness ∉ Repeat(String)");
+                // A complete tuple, not a naked element.
+                assert!(w.as_tuple().is_some(), "the witness is a whole tuple: {w:?}");
+            }
+            other => panic!("expected Refuted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rc19_mutual_cycle_over_record_and_concat_terminates() {
+        // A cycle crossing Record descent *and* Concat consumption terminates under
+        // the combined source-progress rule.
+        let mut i = Interner::new();
+        let g = group(&[
+            ("A", record(&[("seq", rec_ref("B"))])),
+            ("B", union(Contract::Tuple(vec![]), Contract::concat([Contract::Tuple(vec![rec_ref("A")]), rec_ref("B")]))),
+        ]);
+        assert!(recursive::admissible(&g).is_ok());
+        // Both directions terminate and stay sound; reflexivity must hold.
+        let v = recursive::subcontract(&g, &rec_ref("B"), &rec_ref("B"), &mut i);
+        assert!(matches!(v, Verdict::Proven), "reflexive B ⊑ B, got {v:?}");
+        // The group is inhabited (B via the empty tuple, then A via {seq: []}).
+        let e = recursive::emptiness(&g, &mut i);
+        assert!(matches!(e["A"], recursive::Emptiness::NonEmpty(_)), "got {:?}", e["A"]);
+        assert!(matches!(e["B"], recursive::Emptiness::NonEmpty(_)));
+    }
+
     #[test]
     fn rc15_opaque_leaf_stays_unproven() {
         // L = Union(Function, Record({next: L})). The Function leaf is opaque —
@@ -839,6 +936,70 @@ mod rec {
             }
         }
     }
+}
+
+// ── Concat: normal forms and membership (tuple family §1) ────────────────────
+
+#[test]
+fn concat_normal_forms() {
+    let num = || Contract::Kind(Kind::Number);
+    let str_ = || Contract::Kind(Kind::String);
+    let t = |e: Vec<Contract>| Contract::Tuple(e);
+
+    // Nested Concats flatten associatively.
+    let inner = Contract::concat([Contract::Kind(Kind::Tuple), Contract::Kind(Kind::Tuple)]);
+    let flat = Contract::concat([inner, Contract::Kind(Kind::Tuple)]);
+    assert_eq!(flat, Contract::Concat(vec![Contract::Kind(Kind::Tuple); 3]));
+
+    // The empty-tuple segment erases (a structural fact).
+    assert_eq!(Contract::concat([t(vec![]), Contract::Kind(Kind::Tuple)]), Contract::Kind(Kind::Tuple));
+    // …and a Concat of nothing is the empty tuple.
+    assert_eq!(Contract::concat([]), t(vec![]));
+    assert_eq!(Contract::concat([t(vec![]), t(vec![])]), t(vec![]));
+
+    // Adjacent exact segments fuse.
+    assert_eq!(Contract::concat([t(vec![num()]), t(vec![str_()])]), t(vec![num(), str_()]));
+
+    // An uninhabited segment NEVER erases — it empties the whole Concat (erasing
+    // it would turn an empty contract into an inhabited one).
+    assert_eq!(Contract::concat([Contract::Bottom, t(vec![num()])]), Contract::Bottom);
+    assert_eq!(
+        Contract::concat([t(vec![Contract::Bottom]), Contract::Kind(Kind::Tuple)]),
+        Contract::Bottom,
+    );
+
+    // A single segment collapses to itself.
+    assert_eq!(Contract::concat([t(vec![num()])]), t(vec![num()]));
+}
+
+#[test]
+fn concat_membership_matches_denotation() {
+    let mut i = Interner::new();
+    // Concat(Tuple(Number), Tuple(String)) — fused to an exact 2-tuple.
+    let c = Contract::concat([
+        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+        Contract::Tuple(vec![Contract::Kind(Kind::String)]),
+    ]);
+    let one = i.integer(1);
+    let sx = i.string("x");
+    let ok = i.tuple(vec![one.clone(), sx.clone()]);
+    assert!(c.contains(&ok));
+    let swapped = i.tuple(vec![sx, one.clone()]);
+    assert!(!c.contains(&swapped));
+    let short = i.tuple(vec![one]);
+    assert!(!c.contains(&short));
+
+    // A variable head segment is searched over: Concat(Kind(Tuple), Tuple(Number)).
+    let v = Contract::Concat(vec![
+        Contract::Kind(Kind::Tuple),
+        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+    ]);
+    let (a, b) = (i.string("a"), i.integer(9));
+    let ends_num = i.tuple(vec![a, b]);
+    assert!(v.contains(&ends_num), "any prefix, then a Number");
+    let s2 = i.string("s");
+    let ends_str = i.tuple(vec![s2]);
+    assert!(!v.contains(&ends_str));
 }
 
 // ── Contract expressions (C§12.2) ─────────────────────────────────────────────

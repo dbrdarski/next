@@ -86,6 +86,13 @@ pub enum Contract {
     HasField(String),
     /// A tuple of exactly these element contracts, positionally.
     Tuple(Vec<Contract>),
+    /// **Tuple concatenation** — a tuple that splits into consecutive segments,
+    /// each satisfying its segment contract (tuple-length family §1). Positive in
+    /// every segment. `Concat()` denotes the empty tuple; normal forms flatten
+    /// nested Concats, erase the empty-tuple segment, and Bottom-normalize when any
+    /// segment is uninhabited (erasing an uninhabited segment would turn an empty
+    /// contract into an inhabited one).
+    Concat(Vec<Contract>),
     /// An Indeterminate value of a given form.
     Indeterminate(crate::value::IndetForm),
     /// A late-bound reference to a named contract in the ambient recursive group
@@ -109,6 +116,51 @@ fn value_kind(v: &ValueRef) -> Option<Kind> {
 }
 
 impl Contract {
+    /// Smart constructor for [`Contract::Concat`], applying the family's normal
+    /// forms (§1): nested Concats flatten associatively; the canonical empty-tuple
+    /// segment **erases** (a structural fact); an **uninhabited segment never
+    /// erases** — it Bottom-normalizes the whole Concat, since erasing it would
+    /// turn an empty contract into an inhabited one; adjacent exact segments fuse.
+    ///
+    /// Uninhabitance here uses only *permanent* structural facts, never temporary
+    /// analysis state (family §1; RC §6 supplies the productivity verdicts).
+    pub fn concat(segments: impl IntoIterator<Item = Contract>) -> Contract {
+        // Flatten associatively.
+        let mut flat: Vec<Contract> = Vec::new();
+        for s in segments {
+            match s {
+                Contract::Concat(inner) => flat.extend(inner),
+                other => flat.push(other),
+            }
+        }
+        // An uninhabited segment empties the whole concatenation.
+        if flat.iter().any(structurally_uninhabited) {
+            return Contract::Bottom;
+        }
+        // Erase empty-tuple segments.
+        flat.retain(|s| !matches!(s, Contract::Tuple(e) if e.is_empty()));
+
+        // Fuse adjacent exact segments.
+        let mut out: Vec<Contract> = Vec::with_capacity(flat.len());
+        for s in flat {
+            let fused = match (out.last_mut(), s) {
+                (Some(Contract::Tuple(prev)), Contract::Tuple(cur)) => {
+                    prev.extend(cur);
+                    None
+                }
+                (_, s) => Some(s),
+            };
+            if let Some(s) = fused {
+                out.push(s);
+            }
+        }
+        match out.len() {
+            0 => Contract::Tuple(vec![]), // the empty tuple
+            1 => out.pop().expect("length 1"),
+            _ => Contract::Concat(out),
+        }
+    }
+
     /// Denotational membership (C§16): whether `v ∈ ⟦self⟧`.
     pub fn contains(&self, v: &ValueRef) -> bool {
         match self {
@@ -129,6 +181,10 @@ impl Contract {
             Contract::Record(fields) => record_contains(v, fields),
             Contract::HasField(key) => has_field(v, key),
             Contract::Tuple(elems) => tuple_contains(v, elems),
+            Contract::Concat(segs) => match v.as_tuple() {
+                Some(items) => concat_matches(segs, items),
+                None => false,
+            },
             Contract::Indeterminate(f) => v.as_indeterminate() == Some(*f),
             // A bare reference has no ambient group to resolve against; recursive
             // membership goes through `recursive::contains`.
@@ -192,6 +248,99 @@ fn record_contains(v: &ValueRef, fields: &[(String, Contract)]) -> bool {
                 None => false,
             }
         })
+}
+
+/// Whether `items` splits into consecutive windows satisfying `segs` in order.
+///
+/// A segment with a **proven exact arity** consumes exactly that many positions;
+/// anything else is variable and is searched over. The search is a straightforward
+/// backtrack — the denotational reference, not the analyzer's alignment procedure
+/// (tuple-family §4), which decides the *contract* question without enumerating.
+fn concat_matches(segs: &[Contract], items: &[ValueRef]) -> bool {
+    match segs.split_first() {
+        None => items.is_empty(),
+        Some((first, rest)) => {
+            // A fixed-arity segment admits exactly one split; otherwise try each.
+            if let Some(k) = exact_arity(first) {
+                return k <= items.len()
+                    && first.contains_tuple_window(&items[..k])
+                    && concat_matches(rest, &items[k..]);
+            }
+            (0..=items.len()).any(|k| {
+                first.contains_tuple_window(&items[..k]) && concat_matches(rest, &items[k..])
+            })
+        }
+    }
+}
+
+/// Uninhabited by **structure alone** — sound and permanent, so it is safe for the
+/// Concat normal form (which may not consult temporary analysis state).
+fn structurally_uninhabited(c: &Contract) -> bool {
+    match c {
+        Contract::Bottom => true,
+        Contract::Range(lo, hi) => lo > hi,
+        Contract::Tuple(elems) => elems.iter().any(structurally_uninhabited),
+        Contract::Concat(segs) => segs.iter().any(structurally_uninhabited),
+        Contract::Record(fields) => fields.iter().any(|(_, c)| structurally_uninhabited(c)),
+        Contract::Union(a, b) => structurally_uninhabited(a) && structurally_uninhabited(b),
+        Contract::Intersection(a, b) => {
+            structurally_uninhabited(a) || structurally_uninhabited(b)
+        }
+        _ => false,
+    }
+}
+
+/// A proven lower bound on the tuple length a contract admits, from **segment-local
+/// structure only** — exact-tuple arities and non-recursive minima, never the
+/// productivity of a group under admission (the family's non-circularity clause,
+/// §1). A reference contributes `0`, so the bound stays valid.
+pub(crate) fn min_extent(c: &Contract) -> usize {
+    match c {
+        Contract::Tuple(elems) => elems.len(),
+        Contract::Concat(segs) => segs.iter().map(min_extent).sum(),
+        Contract::Union(a, b) => min_extent(a).min(min_extent(b)),
+        Contract::Intersection(a, b) => min_extent(a).max(min_extent(b)),
+        Contract::Equals(v) => v.as_tuple().map(|t| t.len()).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// The arity a segment always consumes, when that is structurally fixed.
+fn exact_arity(c: &Contract) -> Option<usize> {
+    match c {
+        Contract::Tuple(elems) => Some(elems.len()),
+        Contract::Concat(segs) => segs.iter().map(exact_arity).sum::<Option<usize>>(),
+        _ => None,
+    }
+}
+
+impl Contract {
+    /// Whether the tuple formed from `window` satisfies this contract. Segments are
+    /// contracts over *tuples*, so a window is re-wrapped before testing.
+    fn contains_tuple_window(&self, window: &[ValueRef]) -> bool {
+        match self {
+            Contract::Tuple(elems) => {
+                elems.len() == window.len()
+                    && elems.iter().zip(window).all(|(c, v)| c.contains(v))
+            }
+            Contract::Concat(segs) => concat_matches(segs, window),
+            Contract::Union(a, b) => {
+                a.contains_tuple_window(window) || b.contains_tuple_window(window)
+            }
+            Contract::Intersection(a, b) => {
+                a.contains_tuple_window(window) && b.contains_tuple_window(window)
+            }
+            Contract::Difference(base, ex) => {
+                base.contains_tuple_window(window) && !ex.contains_tuple_window(window)
+            }
+            Contract::Top => true,
+            Contract::Bottom => false,
+            Contract::Kind(Kind::Tuple) => true,
+            // Any other contract can only admit a window by naming the tuple value
+            // itself; `contains` decides that once the window is materialized.
+            _ => false,
+        }
+    }
 }
 
 fn tuple_contains(v: &ValueRef, elems: &[Contract]) -> bool {
