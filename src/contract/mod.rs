@@ -20,10 +20,12 @@ use crate::rational::Rational;
 use crate::value::{ValueData, ValueRef};
 
 mod expr;
+pub mod length;
 mod operation;
 pub mod recursive;
 mod subcontract;
 pub use expr::{ContractEnv, build_contract_env, eval_contract};
+pub use length::{Len, Stamp, len};
 pub use operation::{OpResult, OpSafety, analyze_operation};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};
 pub use subcontract::{Verdict, subcontract};

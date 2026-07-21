@@ -6,6 +6,56 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-21 — Tuple family §2: `len` — Λ-semantics with exactness stamps
+
+`src/contract/length.rs` (new) + `recursive::contract_emptiness` + 6 TL cases.
+Full suite 225, 0 ignored, clippy clean.
+
+- **`len(group, c) → Len { contract, stamp }`** with `Stamp = Exact | Approx`. The
+  soundness law `Λ(T) ⊆ ⟦contract⟧` holds always; `Exact` additionally claims
+  `⟦contract⟧ = Λ(T)`, provenly. An **uninhabited shape yields `(Bottom, Exact)`** —
+  impossible shapes are never realizable lengths, and this is checked *first*, so it
+  governs every other row.
+- **Non-recursive rows:** exact tuples/records → `Equals(k)` stamped by the
+  inhabitation triage (proven-inhabited → `Exact`; unproven → `Approx`, since an
+  unproven shape may be empty); open records → `GE(n)`; `Concat` → the C§7 sum;
+  `Union` → the union of branch lengths (`Exact` iff all branches are — the union of
+  exact sets is exact). Summation is exact only when **both operands are finite
+  exact sets**; a `GE` operand pushes the rule to the minima and stamps `Approx`,
+  which is the "approximate *rule*" half of §2's condition, not just approximate
+  operands.
+- **Recursion — the weighted-graph solver.** SCC members are states; each recursive
+  alternative is an edge weighted by its nonrecursive length contribution; base
+  alternatives contribute accepting lengths. Achievable sets are saturated to a bound
+  **computed in advance** from the finite label sets (Principle 7), then rendered as
+  an ultimately-periodic contract: per residue class, the smallest point from which
+  the class is complete becomes a `Mod ∩ GE` tail, and anything below stays an
+  explicit `Equals` exception.
+- **The period is the gcd of CLOSED-WALK weights**, computed by edge potentials
+  (`pot[u] + w − pot[v]` per edge), *never* the gcd of individual transition weights.
+  TL-19 is the test that separates them: `R = Tuple() | Tuple(E)++S; S = Tuple(E)++R`
+  has two weight-1 edges but cycle weight 2, so `Λ(R)` is the evens and `Λ(S)` the
+  odds; an edge-gcd of 1 would erase the parity. The test asserts both directions
+  (R rejects every odd, S rejects every even).
+- **Exactness is forfeited**, dropping to `(GE(minimum), Approx)`, when an
+  alternative is **nonlinear** (>1 own-SCC reference — TL-15) or a label falls
+  outside the **finite-exact boundary** (TL-22's infinite increment language). Both
+  sound.
+- **TL cases:** TL-13 `Repeat(Bottom)` → `(Equals(0), Exact)`, never `GE(0)` — the
+  recursive branch Bottom-normalizes through `Contract::concat`'s §1 rule, so the
+  base alone survives. TL-14 increments {2,3} over {0} → `{0} ∪ [2,∞)` exact, with
+  **length 1 unrealizable** (the semigroup gap — the naive "smallest element of the
+  residue class" rendering would have wrongly admitted it). TL-19, TL-15, TL-22 as
+  above, plus the non-recursive rows.
+- **Scope:** §3's refutation discipline (Approx may refute *intersection emptiness*
+  by disjoint uppers, but may **never** supply a subcontract refutation witness),
+  `restrictLen`/`LengthRestricted` (§3), the alignment procedure (§4), and the
+  grapheme seam summaries (§5) are the remaining family pieces. `len` is not yet
+  wired into `subcontract`, so no verdict currently depends on a stamp.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-21 — `Concat` + `sourceProgress` (tuple family §1; RC patch 0.2.2)
 
 The algebra prerequisites for the tuple-length family. Full suite 219, 0 ignored,

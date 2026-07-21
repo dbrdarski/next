@@ -1110,3 +1110,209 @@ mod contract_expr {
         assert!(!g.contains(&i.integer(500)));
     }
 }
+
+// ── Length derivation Λ with exactness stamps (tuple family §2) ──────────────
+
+mod tl {
+    use super::*;
+    use crate::contract::length::{Stamp, len};
+    use crate::contract::recursive::RecGroup;
+
+    fn rec_ref(n: &str) -> Contract {
+        Contract::Ref(n.into())
+    }
+    fn union(a: Contract, b: Contract) -> Contract {
+        Contract::Union(Box::new(a), Box::new(b))
+    }
+    fn group(defs: &[(&str, Contract)]) -> RecGroup {
+        RecGroup::new(defs.iter().map(|(n, c)| (n.to_string(), c.clone())))
+    }
+    fn empty_group() -> RecGroup {
+        RecGroup::new(std::iter::empty())
+    }
+    /// `Equals(k)` as a length contract.
+    fn eq(k: i64) -> Contract {
+        Contract::Range(r(k), r(k))
+    }
+    fn ge(k: i64) -> Contract {
+        Contract::GreaterEq(r(k))
+    }
+    /// `Repeat(E) = Union(Tuple(), Concat(Tuple(E), R))`.
+    fn repeat(name: &str, element: Contract) -> RecGroup {
+        group(&[(
+            name,
+            union(
+                Contract::Tuple(vec![]),
+                Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)]),
+            ),
+        )])
+    }
+
+    #[test]
+    fn exact_shapes_are_exactly_counted() {
+        let mut i = Interner::new();
+        let g = empty_group();
+        let num = || Contract::Kind(Kind::Number);
+
+        // A proven-inhabited exact tuple: (Equals(k), Exact).
+        let t = Contract::Tuple(vec![num(), num()]);
+        assert_eq!(len(&g, &t, &mut i), crate::contract::Len { contract: eq(2), stamp: Stamp::Exact });
+
+        // An exact record counts its fields.
+        let rec = Contract::Record(vec![("a".into(), num()), ("b".into(), num())]);
+        assert_eq!(len(&g, &rec, &mut i).contract, eq(2));
+
+        // An uninhabited shape has NO realizable length: (Bottom, Exact) —
+        // impossible shapes are never realizable lengths.
+        let dead = Contract::Tuple(vec![num(), Contract::Bottom]);
+        let l = len(&g, &dead, &mut i);
+        assert_eq!(l.contract, Contract::Bottom);
+        assert!(l.is_exact());
+
+        // Concat sums segment lengths. A `GE` operand is outside the finite-exact
+        // label boundary, so the sum coarsens to the minima and stamps Approx.
+        let c = Contract::Concat(vec![
+            Contract::Tuple(vec![num()]),
+            Contract::Kind(Kind::Tuple),
+        ]);
+        let l = len(&g, &c, &mut i);
+        assert_eq!(l.contract, ge(1), "one element, then any tail");
+        assert_eq!(l.stamp, Stamp::Approx, "a coarsening rule forfeits the stamp");
+
+        // Two finite exact segments sum exactly.
+        let both = Contract::Concat(vec![
+            Contract::Tuple(vec![num()]),
+            Contract::Tuple(vec![num(), num()]),
+        ]);
+        assert_eq!(
+            len(&g, &both, &mut i),
+            crate::contract::Len { contract: eq(3), stamp: Stamp::Exact },
+        );
+
+        // Union takes the union of branch lengths, exactly.
+        let u = union(Contract::Tuple(vec![num()]), Contract::Tuple(vec![num(), num()]));
+        let l = len(&g, &u, &mut i);
+        assert!(l.is_exact());
+        assert!(l.contract.contains(&i.integer(1)) && l.contract.contains(&i.integer(2)));
+        assert!(!l.contract.contains(&i.integer(3)));
+    }
+
+    #[test]
+    fn tl13_repeat_of_bottom_is_exactly_the_empty_tuple() {
+        // The recursive branch Bottom-normalizes, so only the base survives:
+        // len = (Equals(0), Exact) — never GE(0).
+        let mut i = Interner::new();
+        let g = repeat("R", Contract::Bottom);
+        let l = len(&g, &rec_ref("R"), &mut i);
+        assert!(l.is_exact(), "the length is exact, not approximate");
+        assert!(l.contract.contains(&i.integer(0)));
+        assert!(!l.contract.contains(&i.integer(1)), "no nonzero length is realizable");
+    }
+
+    #[test]
+    fn tl14_increments_two_and_three() {
+        // R = Tuple() | Tuple(E,E)++R | Tuple(E,E,E)++R — increments {2,3} over {0}.
+        // Λ(R) = {0, 2, 3, 4, …}: `Union(Equals(0), GE(2))`, exact.
+        let mut i = Interner::new();
+        let e = || Contract::Kind(Kind::Number);
+        let g = group(&[(
+            "R",
+            union(
+                union(
+                    Contract::Tuple(vec![]),
+                    Contract::concat([Contract::Tuple(vec![e(), e()]), rec_ref("R")]),
+                ),
+                Contract::concat([Contract::Tuple(vec![e(), e(), e()]), rec_ref("R")]),
+            ),
+        )]);
+        let l = len(&g, &rec_ref("R"), &mut i);
+        assert!(l.is_exact(), "finite exact labels admit the exact solution");
+        for ok in [0, 2, 3, 4, 5, 9] {
+            assert!(l.contract.contains(&i.integer(ok)), "{ok} is realizable");
+        }
+        // Length 1 refutes membership — the gap the semigroup leaves.
+        assert!(!l.contract.contains(&i.integer(1)), "1 is NOT realizable");
+    }
+
+    #[test]
+    fn tl19_mutual_scc_period_comes_from_cycle_weights() {
+        // R = Tuple() | Tuple(E)++S ;  S = Tuple(E)++R
+        // Λ(R) = evens, Λ(S) = odds. The period is the CYCLE weight (2), never the
+        // gcd of the individual edge weights (1), which would erase the parity.
+        let mut i = Interner::new();
+        let e = || Contract::Kind(Kind::Number);
+        let g = group(&[
+            (
+                "R",
+                union(
+                    Contract::Tuple(vec![]),
+                    Contract::concat([Contract::Tuple(vec![e()]), rec_ref("S")]),
+                ),
+            ),
+            ("S", Contract::concat([Contract::Tuple(vec![e()]), rec_ref("R")])),
+        ]);
+
+        let lr = len(&g, &rec_ref("R"), &mut i);
+        let ls = len(&g, &rec_ref("S"), &mut i);
+        assert!(lr.is_exact() && ls.is_exact());
+
+        for even in [0, 2, 4, 6, 10] {
+            assert!(lr.contract.contains(&i.integer(even)), "R admits {even}");
+            assert!(!ls.contract.contains(&i.integer(even)), "S rejects {even}");
+        }
+        for odd in [1, 3, 5, 7, 11] {
+            assert!(ls.contract.contains(&i.integer(odd)), "S admits {odd}");
+            assert!(!lr.contract.contains(&i.integer(odd)), "R rejects {odd} — parity preserved");
+        }
+    }
+
+    #[test]
+    fn tl15_nonlinear_alternative_is_admissible_but_approximate() {
+        // R = Tuple() | Concat(Tuple(E), R, R) — two own-SCC references per
+        // alternative: admissible, but its length is (GE(min), Approx). It supplies
+        // no subcontract witness (§3).
+        let mut i = Interner::new();
+        let e = || Contract::Kind(Kind::Number);
+        let g = group(&[(
+            "R",
+            union(
+                Contract::Tuple(vec![]),
+                Contract::concat([Contract::Tuple(vec![e()]), rec_ref("R"), rec_ref("R")]),
+            ),
+        )]);
+        let l = len(&g, &rec_ref("R"), &mut i);
+        assert_eq!(l.stamp, Stamp::Approx, "nonlinear alternatives forfeit exactness");
+        assert!(l.contract.contains(&i.integer(0)));
+    }
+
+    #[test]
+    fn tl22_infinite_increment_language_declines_exact_solving() {
+        // R = Tuple() | Concat(Repeat(E), R): linear, but the increment language is
+        // {0,1,2,…} — outside the finite-exact label boundary, so the solver
+        // declines and returns a sound approximation.
+        let mut i = Interner::new();
+        let e = || Contract::Kind(Kind::Number);
+        let g = group(&[
+            (
+                "Many",
+                union(
+                    Contract::Tuple(vec![]),
+                    Contract::concat([Contract::Tuple(vec![e()]), rec_ref("Many")]),
+                ),
+            ),
+            (
+                "R",
+                union(
+                    Contract::Tuple(vec![]),
+                    Contract::concat([rec_ref("Many"), rec_ref("R")]),
+                ),
+            ),
+        ]);
+        let l = len(&g, &rec_ref("R"), &mut i);
+        assert_eq!(l.stamp, Stamp::Approx, "an infinite increment language is not exact");
+        // Still sound: every realizable length is admitted.
+        for n in [0, 1, 2, 7] {
+            assert!(l.contract.contains(&i.integer(n)));
+        }
+    }
+}

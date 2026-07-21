@@ -537,6 +537,20 @@ fn join_product(parts: impl Iterator<Item = E3>) -> E3 {
 }
 
 /// The emptiness verdict of every group member.
+/// The emptiness verdict of an arbitrary contract under `group` — the *permanent*
+/// inhabitation fact the tuple family's length stamps consume (family §2).
+pub fn contract_emptiness(group: &RecGroup, c: &Contract, interner: &mut Interner) -> Emptiness {
+    let env = EmptyEnv::analyze(group, interner);
+    match env.voice(group, c, interner) {
+        E3::Empty => Emptiness::Empty,
+        E3::NonEmpty => match prod_eval(group, c, &env.productive, interner) {
+            Some(w) => Emptiness::NonEmpty(w),
+            None => Emptiness::Unproven,
+        },
+        E3::Unproven => Emptiness::Unproven,
+    }
+}
+
 pub fn emptiness(group: &RecGroup, interner: &mut Interner) -> BTreeMap<String, Emptiness> {
     let env = EmptyEnv::analyze(group, interner);
     group
