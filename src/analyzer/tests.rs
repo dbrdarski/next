@@ -55,6 +55,11 @@ fn empty() -> TypeEnv {
     TypeEnv::new()
 }
 
+/// An empty named-contract environment.
+fn nc() -> ContractEnv {
+    ContractEnv::new()
+}
+
 #[test]
 fn constant_folding_produces_exact_contract() {
     let mut i = Interner::new();
@@ -66,7 +71,7 @@ fn constant_folding_produces_exact_contract() {
             konst(i.integer(4)),
         ],
     );
-    let a = analyze(&e, &empty(), &mut i);
+    let a = analyze(&e, &empty(), &nc(), &mut i);
     assert!(a.accepted());
     assert_eq!(a.contract, Contract::Equals(i.integer(12)));
 }
@@ -77,7 +82,7 @@ fn closed_type_error_is_operation_safety() {
     // 1 + "x" traps operation-safety.
     let hello = i.string("x");
     let e = prim(PrimOp::Add, vec![konst(i.integer(1)), konst(hello)]);
-    let a = analyze(&e, &empty(), &mut i);
+    let a = analyze(&e, &empty(), &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::OperationSafety);
     assert_eq!(a.findings[0].severity, Severity::Error);
@@ -88,11 +93,11 @@ fn division_is_total_but_comparison_forces_the_indeterminate() {
     let mut i = Interner::new();
     // 1 / 0 alone is safe (produces Indeterminate).
     let div = prim(PrimOp::Div, vec![konst(i.integer(1)), konst(i.integer(0))]);
-    assert!(analyze(&div, &empty(), &mut i).accepted());
+    assert!(analyze(&div, &empty(), &nc(), &mut i).accepted());
 
     // (1 / 0) < 2 traps undischarged-Indeterminate.
     let cmp = prim(PrimOp::Lt, vec![div.clone(), konst(i.integer(2))]);
-    let a = analyze(&cmp, &empty(), &mut i);
+    let a = analyze(&cmp, &empty(), &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::UndischargedIndeterminate);
 }
@@ -102,11 +107,11 @@ fn zero_to_negative_power_traps() {
     let mut i = Interner::new();
     // 0 ^ -1 traps; but (2+3) ^ -1 is safe (base folds to a nonzero 5).
     let bad = prim(PrimOp::Pow, vec![konst(i.integer(0)), konst(i.integer(-1))]);
-    assert!(!analyze(&bad, &empty(), &mut i).accepted());
+    assert!(!analyze(&bad, &empty(), &nc(), &mut i).accepted());
 
     let five = prim(PrimOp::Add, vec![konst(i.integer(2)), konst(i.integer(3))]);
     let ok = prim(PrimOp::Pow, vec![five, konst(i.integer(-1))]);
-    let a = analyze(&ok, &empty(), &mut i);
+    let a = analyze(&ok, &empty(), &nc(), &mut i);
     assert!(a.accepted(), "5^-1 = 1/5 must not be flagged, got {:?}", a.findings);
     assert_eq!(a.contract, Contract::Equals(i.number(Rational::new(1.into(), 5.into()))));
 }
@@ -114,7 +119,7 @@ fn zero_to_negative_power_traps() {
 #[test]
 fn unbound_reference_is_flagged() {
     let mut i = Interner::new();
-    let a = analyze(&name("nope"), &empty(), &mut i);
+    let a = analyze(&name("nope"), &empty(), &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::UnboundEvaluation);
 }
@@ -232,7 +237,7 @@ fn closed_expression_concordance() {
     let mut i = Interner::new();
     let corpus = closed_corpus(&mut i);
     for e in &corpus {
-        let analysis = analyze(e, &empty(), &mut i);
+        let analysis = analyze(e, &empty(), &nc(), &mut i);
         let oracle = eval_expr(e, &mut i);
         match oracle {
             Err(trap) => {
@@ -259,7 +264,7 @@ fn template_structure_interpolation_is_rejected() {
     // `{ (1, 2) }` interpolates a tuple → E11 trap-until-ruled, an error.
     let tuple = Expr::TupleCons(vec![Element::Expr(konst(i.integer(1)))]);
     let t = Expr::Template(vec![TemplatePart::Interp(tuple)]);
-    let a = analyze(&t, &empty(), &mut i);
+    let a = analyze(&t, &empty(), &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::UnprintableInterpolation);
     assert_eq!(a.findings[0].severity, Severity::Error);
@@ -272,7 +277,7 @@ fn template_unknown_interpolation_warns_not_rejects() {
     let mut env = TypeEnv::new();
     env.insert("x".into(), Contract::Top);
     let t = Expr::Template(vec![TemplatePart::Interp(name("x"))]);
-    let a = analyze(&t, &env, &mut i);
+    let a = analyze(&t, &env, &nc(), &mut i);
     assert!(a.accepted(), "unknown printability is a warning, not a rejection");
     assert_eq!(a.findings[0].severity, Severity::Warning);
     assert_eq!(a.findings[0].class, TrapClass::UnprintableInterpolation);
@@ -288,30 +293,30 @@ fn open_field_access_reasoning() {
     );
 
     // r.a where r : Record({a: Number}) — accepted, output is Number.
-    let a = analyze(&afield(name("r"), "a", false), &env, &mut i);
+    let a = analyze(&afield(name("r"), "a", false), &env, &nc(), &mut i);
     assert!(a.accepted());
     assert_eq!(a.contract, Contract::Kind(Kind::Number));
 
     // r.b (absent from an exact record) — rejected, absent-field.
-    let a = analyze(&afield(name("r"), "b", false), &env, &mut i);
+    let a = analyze(&afield(name("r"), "b", false), &env, &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::AbsentField);
 
     // null.a — rejected, null-receiver.
     let mut nenv = TypeEnv::new();
     nenv.insert("r".into(), Contract::Kind(Kind::Null));
-    let a = analyze(&afield(name("r"), "a", false), &nenv, &mut i);
+    let a = analyze(&afield(name("r"), "a", false), &nenv, &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::NullReceiver);
 
     // r?.b on an unknown receiver — total form never traps.
     let mut tenv = TypeEnv::new();
     tenv.insert("r".into(), Contract::Top);
-    let a = analyze(&afield(name("r"), "b", true), &tenv, &mut i);
+    let a = analyze(&afield(name("r"), "b", true), &tenv, &nc(), &mut i);
     assert!(a.accepted() && a.findings.is_empty());
 
     // r.b on an unknown receiver (demand form) — a warning, not a rejection.
-    let a = analyze(&afield(name("r"), "b", false), &tenv, &mut i);
+    let a = analyze(&afield(name("r"), "b", false), &tenv, &nc(), &mut i);
     assert!(a.accepted());
     assert_eq!(a.findings[0].severity, Severity::Warning);
 }
@@ -324,7 +329,7 @@ fn match_tested_seat_guard() {
         Some(konst(i.integer(5))),
         vec![arm(Some(Pat::Wild), Some(konst(i.integer(3))), konst(i.integer(10)))],
     );
-    let a = analyze(&m, &empty(), &mut i);
+    let a = analyze(&m, &empty(), &nc(), &mut i);
     assert!(a.findings.iter().any(|f| f.class == TrapClass::TestedSeat && f.severity == Severity::Error));
 }
 
@@ -343,7 +348,7 @@ fn match_refuted_destructuring_binding() {
             MatchItem::Stmt(name("a")),
         ],
     );
-    let a = analyze(&m, &empty(), &mut i);
+    let a = analyze(&m, &empty(), &nc(), &mut i);
     assert!(a.findings.iter().any(|f| f.class == TrapClass::RefutedBinding && f.severity == Severity::Error));
 }
 
@@ -358,7 +363,7 @@ fn match_exhaustiveness_and_expecting_seat() {
         vec![arm(Some(Pat::Const(one)), None, konst(i.integer(10)))],
     );
     let e = prim(PrimOp::Add, vec![nonexhaustive, konst(i.integer(1))]);
-    let a = analyze(&e, &empty(), &mut i);
+    let a = analyze(&e, &empty(), &nc(), &mut i);
     assert!(!a.accepted());
     assert!(a.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat));
 
@@ -368,7 +373,7 @@ fn match_exhaustiveness_and_expecting_seat() {
         vec![arm(Some(Pat::Wild), None, konst(i.integer(10)))],
     );
     let ok = prim(PrimOp::Add, vec![exhaustive, konst(i.integer(1))]);
-    let a = analyze(&ok, &empty(), &mut i);
+    let a = analyze(&ok, &empty(), &nc(), &mut i);
     assert!(a.accepted(), "exhaustive match must not trip expecting-seat: {:?}", a.findings);
 }
 
@@ -388,7 +393,7 @@ fn match_arm_narrows_scrutinee() {
     ]);
     let body = prim(PrimOp::Add, vec![name("a"), name("b")]);
     let m = matchx(Some(name("x")), vec![arm(Some(pat), None, body)]);
-    let a = analyze(&m, &env, &mut i);
+    let a = analyze(&m, &env, &nc(), &mut i);
     assert!(a.accepted() && a.findings.is_empty(), "narrowing should prove a+b safe: {:?}", a.findings);
 }
 
@@ -403,12 +408,12 @@ fn apply_known_callee_argument_obligation() {
 
     // f(n) — one argument, matches the one parameter → accepted.
     let ok = apply(name("f"), vec![name("n")]);
-    let a = analyze(&ok, &env, &mut i);
+    let a = analyze(&ok, &env, &nc(), &mut i);
     assert!(a.accepted(), "f(n) should be accepted: {:?}", a.findings);
 
     // f(n, n) — two arguments against one parameter → argument-obligation.
     let bad = apply(name("f"), vec![name("n"), name("n")]);
-    let a = analyze(&bad, &env, &mut i);
+    let a = analyze(&bad, &env, &nc(), &mut i);
     assert!(!a.accepted());
     assert!(a.findings.iter().any(|f| f.class == TrapClass::ArgumentObligation));
 }
@@ -418,9 +423,74 @@ fn apply_non_function_callee_rejected() {
     let mut i = Interner::new();
     let mut env = TypeEnv::new();
     env.insert("x".into(), Contract::Kind(Kind::Number)); // definitely not a function
-    let a = analyze(&apply(name("x"), vec![]), &env, &mut i);
+    let a = analyze(&apply(name("x"), vec![]), &env, &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::OperationSafety);
+}
+
+// ── Named (user) contracts reaching source patterns (C§12.2 / E9) ─────────────
+
+/// `Percent = Range(0, 100)` as a source-level contract binding.
+fn percent_env(i: &mut Interner) -> ContractEnv {
+    let range = Expr::Apply {
+        callee: Box::new(name("Range")),
+        args: vec![
+            Arg::Expr(konst(i.integer(0))),
+            Arg::Expr(konst(i.integer(100))),
+        ],
+    };
+    crate::contract::build_contract_env([("Percent", &range)])
+}
+
+fn contract_pat(n: &str) -> Pat {
+    Pat::Contract(Ref::Immutable(BindingRef::Name(n.into())))
+}
+
+#[test]
+fn user_contract_pattern_narrows() {
+    let mut i = Interner::new();
+    let cenv = percent_env(&mut i);
+    let mut env = TypeEnv::new();
+    env.insert("x".into(), Contract::Kind(Kind::Number));
+
+    // match x { Percent => 1 }  with x : Number.
+    let m = matchx(Some(name("x")), vec![arm(Some(contract_pat("Percent")), None, konst(i.integer(1)))]);
+
+    // Resolved: a Number need not be a Percent, so the match is NOT exhaustive.
+    let a = analyze(&m, &env, &cenv, &mut i);
+    assert!(a.may_complete, "Percent must narrow — Number is not covered by Range(0,100)");
+
+    // Unresolved (empty contract env): the pattern widens to Top and covers
+    // everything — the discriminating control for the test above.
+    let a = analyze(&m, &env, &nc(), &mut i);
+    assert!(!a.may_complete, "an unresolved contract name widens to Top");
+}
+
+#[test]
+fn user_contract_binding_can_be_refuted() {
+    let mut i = Interner::new();
+    let cenv = percent_env(&mut i);
+
+    // match { Percent = 500 } — 500 is disjoint from Range(0, 100).
+    let m = matchx(
+        None,
+        vec![MatchItem::Bind(Bind {
+            target: BindTarget::Pattern(contract_pat("Percent")),
+            value: konst(i.integer(500)),
+            exported: false,
+        })],
+    );
+
+    let a = analyze(&m, &empty(), &cenv, &mut i);
+    assert!(
+        a.findings.iter().any(|f| f.class == TrapClass::RefutedBinding && f.severity == Severity::Error),
+        "500 ∉ Percent must refute the binding: {:?}",
+        a.findings,
+    );
+
+    // Control: without the contract env the name is Top, so nothing is refuted.
+    let a = analyze(&m, &empty(), &nc(), &mut i);
+    assert!(a.accepted());
 }
 
 #[test]
@@ -454,7 +524,7 @@ fn open_expression_soundness() {
     for (expr, contract, values) in &checks {
         let mut env = TypeEnv::new();
         env.insert("x".into(), contract.clone());
-        let analysis = analyze(expr, &env, &mut i);
+        let analysis = analyze(expr, &env, &nc(), &mut i);
         if analysis.accepted() {
             for v in values {
                 let concrete = substitute(expr, v);

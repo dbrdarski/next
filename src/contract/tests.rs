@@ -840,3 +840,112 @@ mod rec {
         }
     }
 }
+
+// ── Contract expressions (C§12.2) ─────────────────────────────────────────────
+
+mod contract_expr {
+    use super::*;
+    use crate::ast::{Arg, BindingRef, Element, Expr, Field, Ref};
+    use crate::contract::{ContractEnv, build_contract_env, eval_contract};
+
+    fn cref(n: &str) -> Expr {
+        Expr::Ref(Ref::Immutable(BindingRef::Name(n.into())))
+    }
+    /// `Ctor(args…)` — a contract-constructor application.
+    fn ctor(name: &str, args: Vec<Expr>) -> Expr {
+        Expr::Apply {
+            callee: Box::new(cref(name)),
+            args: args.into_iter().map(Arg::Expr).collect(),
+        }
+    }
+
+    #[test]
+    fn prelude_names_and_constructors() {
+        let mut i = Interner::new();
+        let env = ContractEnv::new();
+
+        assert_eq!(eval_contract(&cref("Number"), &env), Some(Contract::Kind(Kind::Number)));
+        assert_eq!(eval_contract(&cref("Top"), &env), Some(Contract::Top));
+        assert_eq!(eval_contract(&cref("Bottom"), &env), Some(Contract::Bottom));
+
+        // Range(0, 100)
+        let range = ctor("Range", vec![Expr::Const(i.integer(0)), Expr::Const(i.integer(100))]);
+        assert_eq!(eval_contract(&range, &env), Some(Contract::Range(r(0), r(100))));
+
+        // Greater(5) / LessEq(9)
+        let g = ctor("Greater", vec![Expr::Const(i.integer(5))]);
+        assert_eq!(eval_contract(&g, &env), Some(Contract::Greater(r(5))));
+
+        // Mod(2, 0) — the even integers
+        let m = ctor("Mod", vec![Expr::Const(i.integer(2)), Expr::Const(i.integer(0))]);
+        assert_eq!(eval_contract(&m, &env), Some(Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) }));
+
+        // Equals(7) and HasField("age")
+        let five = i.integer(7);
+        let eq = ctor("Equals", vec![Expr::Const(five.clone())]);
+        assert_eq!(eval_contract(&eq, &env), Some(Contract::Equals(five)));
+        let age = i.string("age");
+        let hf = ctor("HasField", vec![Expr::Const(age)]);
+        assert_eq!(eval_contract(&hf, &env), Some(Contract::HasField("age".into())));
+
+        // An unknown bare name does not resolve.
+        assert_eq!(eval_contract(&cref("Nope"), &env), None);
+    }
+
+    #[test]
+    fn set_operations_and_structural_literals() {
+        let mut i = Interner::new();
+        let env = ContractEnv::new();
+
+        // Union(Number, Null)
+        let u = ctor("Union", vec![cref("Number"), cref("Null")]);
+        assert_eq!(
+            eval_contract(&u, &env),
+            Some(Contract::Union(
+                Box::new(Contract::Kind(Kind::Number)),
+                Box::new(Contract::Kind(Kind::Null)),
+            )),
+        );
+
+        // A tuple literal of contracts is a tuple contract: [Number, String]
+        let t = Expr::TupleCons(vec![Element::Expr(cref("Number")), Element::Expr(cref("String"))]);
+        assert_eq!(
+            eval_contract(&t, &env),
+            Some(Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::String)])),
+        );
+
+        // A record literal of contracts is a record contract: { a: Number }
+        let rec = Expr::RecordCons(vec![Field::Field { key: "a".into(), value: cref("Number") }]);
+        assert_eq!(
+            eval_contract(&rec, &env),
+            Some(Contract::Record(vec![("a".into(), Contract::Kind(Kind::Number))])),
+        );
+
+        // A non-contract expression is not a contract.
+        assert_eq!(eval_contract(&Expr::Const(i.integer(3)), &env), None);
+    }
+
+    #[test]
+    fn named_contracts_resolve_and_compose() {
+        // Percent = Range(0, 100);  Grade = Union(Percent, Null)
+        let mut i = Interner::new();
+        let percent = ctor("Range", vec![Expr::Const(i.integer(0)), Expr::Const(i.integer(100))]);
+        let grade = ctor("Union", vec![cref("Percent"), cref("Null")]);
+        let env = build_contract_env([("Percent", &percent), ("Grade", &grade)]);
+
+        assert_eq!(env.get("Percent"), Some(&Contract::Range(r(0), r(100))));
+        assert_eq!(
+            env.get("Grade"),
+            Some(&Contract::Union(
+                Box::new(Contract::Range(r(0), r(100))),
+                Box::new(Contract::Kind(Kind::Null)),
+            )),
+        );
+
+        // The resolved contract denotes what it should.
+        let g = env.get("Grade").unwrap();
+        assert!(g.contains(&i.integer(50)));
+        assert!(g.contains(&i.null()));
+        assert!(!g.contains(&i.integer(500)));
+    }
+}

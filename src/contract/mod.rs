@@ -19,9 +19,11 @@ use crate::oracle::values_equal;
 use crate::rational::Rational;
 use crate::value::{ValueData, ValueRef};
 
+mod expr;
 mod operation;
 pub mod recursive;
 mod subcontract;
+pub use expr::{ContractEnv, build_contract_env, eval_contract};
 pub use operation::{OpResult, OpSafety, analyze_operation};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};
 pub use subcontract::{Verdict, subcontract};

@@ -6,6 +6,46 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-21 — Named contracts: static contract-expression evaluation (C§12.2) + patterns
+
+`src/contract/expr.rs` (new) + a `ContractEnv` threaded through the analyzer + 5
+tests. Full suite 209, 0 ignored, clippy clean.
+
+- **Contract expressions are statically evaluated (C§12.2 / §292).** Contract
+  constructors are predeclared prelude *names* and a named contract is an ordinary
+  binding of a contract expression (`Percent = Range(0, 100)`), so
+  `eval_contract(expr, env) → Option<Contract>` interprets a kernel `Expr`:
+  constructor applications (`Range`/`Greater`/`GreaterEq`/`Less`/`LessEq`/`Mod`/
+  `Geo`/`Equals`/`HasField`/`Union`/`Intersection`/`Difference`/`Tuple`), prelude
+  names (the seven Kinds, `Top`, `Bottom`, and the `Failure` shape), **structural
+  literals** (a tuple literal of contracts is a tuple contract; a record literal is
+  a record contract), and references to already-bound named contracts.
+  `build_contract_env` folds a sequence of `name = contract-expression` bindings
+  into a [`ContractEnv`], so later contracts compose earlier ones
+  (`Grade = Union(Percent, Null)`).
+- **One resolution path.** The analyzer's `contract_ref` (contract-as-pattern, E9)
+  now *delegates to* `eval_contract`, so patterns and contract expressions agree by
+  construction rather than by two hand-kept name tables.
+- **Threaded through the analyzer.** Every `analyze_*` now carries
+  `cenv: &ContractEnv` beside the value-level `TypeEnv`, so a user contract resolves
+  wherever a pattern appears — including nested `Match`es inside operands.
+- **The payoff, tested with controls:** `Percent = Range(0, 100)` now (a) *narrows*
+  an arm — `match x { Percent => … }` with `x : Number` is correctly **not
+  exhaustive** (an unresolved name would widen to `Top` and wrongly look total), and
+  (b) *refutes* a destructuring bind — `Percent = 500` is a `refuted-binding` error.
+  Both tests assert the empty-env control behaves oppositely, so they prove
+  resolution actually happens rather than passing vacuously.
+- **Scope (implementation-owed, not doc-owed):** **recursive/mutual source
+  contracts** — a named contract referencing itself or its group — do not yet build
+  a `RecGroup`; a self/forward reference simply fails to resolve (`None` → `Top`, no
+  narrowing; sound). The C§9 machinery it would feed is already implemented and
+  green; wiring source → `RecGroup` is my next increment. Numeric/string constructor
+  arguments must be literals; statically evaluating *computed* contract arguments is
+  the remaining C§12.2 surface.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-20 — Analyzer: `Apply` (C§7 / B5 / E10 — application)
 
 `src/analyzer/mod.rs` `analyze_apply` + a Tuple-arity disjoint rule + 2 tests and
