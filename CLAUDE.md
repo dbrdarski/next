@@ -51,3 +51,11 @@ The full suite is specified in `next-test-suite-specification-v0-1.md` — stabl
 ## Process
 
 Keep a `DECISIONS.md` changelog. Small commits per build-order step. When the author reviews, provenance matters: what the specs mandated vs what you chose vs what you're asking.
+
+**Three files, three jobs — update all of them in the same commit as the work:**
+
+- `DECISIONS.md` — **history**: append-only, newest-first, dated headings. Per-decision provenance and rationale. Never rewritten.
+- `PROGRESS.md` — **state**: the current snapshot, *rewritten in place* each increment (a stale state file is worse than none). Scoreboard, doc-sync matrix, subsystem map, blockers, next steps, and a thin increment ledger pointing at `DECISIONS.md` anchors. Must stay standalone-readable — it is what gets uploaded to the design chat.
+- `OwedItems.md` — **doc-side gaps**: what the *normative documents* still owe, registered implementation drift, and open asks for the author. Not a to-do list for decided-but-unbuilt work (that lives in tasks).
+
+When a doc-side item is closed by a ruling, strike it in `OwedItems.md` rather than deleting it, and record the ruling in `DECISIONS.md`.
