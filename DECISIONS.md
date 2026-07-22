@@ -6,6 +6,47 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-22 — RULING [user]: strict tested seats — the T-10/D-01 conflict resolved
+
+**The ruling:** plain ternary conditions, `&&`/`||` left operands, and `!` operands
+are **strict tested seats** and trap **tested-seat** on non-Booleans *regardless of
+result position*. The lowering is guard-based with bind-then-guard preserving
+single evaluation. Escaped `~` forms remain falsy-set matches. (T-10's survival of
+the erratum pass reflected the intended law; the catalog's PConst-arm rows were the
+stale side.)
+
+**Catalog amended** (kernel-AST §4, provenance-marked [RULED — user, 2026-07-22]):
+
+- `c ? t : e` ⇒ `Match(∅, [Arm(guard: c, t), Arm(e)])`
+- `a && b` ⇒ `Match(∅, [Arm(guard: a, b), Arm(Const(false))])`
+- `a || b` ⇒ `Match(∅, [Arm(guard: a, Const(true)), Arm(b)])`
+- `!x` ⇒ `Match(∅, [Arm(guard: x, Const(false)), Arm(Const(true))])`
+
+**Bind-then-guard, degenerate:** each tested operand occurs **exactly once**, in
+the guard — so single evaluation holds with no tmp binding at all (the tmp is the
+general recipe's provision for lowerings that reference the tested value again;
+none of these four do — their results are the branch expressions or Boolean
+constants). Recorded in the catalog row so the simplification is visibly the same
+law, not a shortcut.
+
+**Implementation:** `bool_match` (Const-pattern arms over a scrutinee) replaced by
+`tested_match` (guard-based, scrutinee-less) — one function, all four forms plus
+the `&&:=`/`||:=` compound writes inherit it. Behavior changes exactly on
+non-Boolean operands: previously silent fall-through (CompletedWithoutValue;
+ExpectingSeat only at demanding seats), now **TestedSeat immediately**. Boolean
+operands are observably unchanged.
+
+**Tests:** T-10 flipped **live** (both bare-statement and bound positions);
+`tested_seats_are_strict_boolean` extended (`1 || 9`, `0 && 1`, `!5` all
+TestedSeat); D-01/02/03/06 extended with the non-Boolean trap asserts; the desugar
+structural tests tightened to assert the guard shape (pattern `None`, guard
+`Some`, scrutinee-less). Analyzer concordance holds for free: `analyze_match`
+already routes guards through `check_tested_seat`, so a closed `5 ? 1 : 2` is a
+TestedSeat **error** exactly as the oracle now traps. Whole tree: 230 lib + 105
+conformance green, 12 ignores, clippy clean.
+
+---
+
 ## 2026-07-22 — Conformance suite aligned to the stable IDs (tests/conformance.rs)
 
 The suite spec's stable IDs are now executable: **104 ID-keyed tests + 13 honest

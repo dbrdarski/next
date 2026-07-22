@@ -214,11 +214,11 @@ impl<'a> Desugarer<'a> {
             }
             SExpr::Pipe { dir, left, right } => self.pipe(*dir, left, right)?,
             SExpr::Ternary { cond, then, els } => {
-                // c ? t : e  ⇒  Match(c, [true => t, false => e]).
+                // c ? t : e  ⇒  Match(∅, [Arm(guard: c, t), Arm(e)]) — strict tested seat.
                 let scrut = self.expr(cond)?;
                 let t = self.expr(then)?;
                 let f = self.expr(els)?;
-                self.bool_match(scrut, t, f)
+                Self::tested_match(scrut, t, f)
             }
             SExpr::Binary { op, left, right } => self.binary(*op, left, right)?,
             SExpr::Unary { op, operand } => self.unary(*op, operand)?,
@@ -335,18 +335,18 @@ impl<'a> Desugarer<'a> {
         }
         match op {
             BinOp::And => {
-                // a && b  ⇒  a ? b : false
+                // a && b  ⇒  Match(∅, [Arm(guard: a, b), Arm(false)]) — strict tested seat
                 let a = self.expr(left)?;
                 let b = self.expr(right)?;
                 let f = self.c_bool(false);
-                Ok(self.bool_match(a, b, f))
+                Ok(Self::tested_match(a, b, f))
             }
             BinOp::Or => {
-                // a || b  ⇒  a ? true : b
+                // a || b  ⇒  Match(∅, [Arm(guard: a, true), Arm(b)]) — strict tested seat
                 let a = self.expr(left)?;
                 let t = self.c_bool(true);
                 let b = self.expr(right)?;
-                Ok(self.bool_match(a, t, b))
+                Ok(Self::tested_match(a, t, b))
             }
             BinOp::NullOr => {
                 // a ?? b  ⇒  Match(a, [null => b, v => v]); scrutinee once.
@@ -401,11 +401,11 @@ impl<'a> Desugarer<'a> {
                     // is-falsy: false/null => true, else false
                     return Ok(self.falsy_set_match(a, t, f));
                 }
-                // !x  ⇒  Match(x, [true => false, false => true])
+                // !x  ⇒  Match(∅, [Arm(guard: x, false), Arm(true)]) — strict tested seat
                 let x = self.expr(operand)?;
                 let f = self.c_bool(false);
                 let t = self.c_bool(true);
-                Ok(self.bool_match(x, f, t))
+                Ok(Self::tested_match(x, f, t))
             }
             UnOp::Loosen => {
                 // A bare `~a` in a value/tested seat: the truthiness test itself
@@ -456,14 +456,19 @@ impl<'a> Desugarer<'a> {
         }))
     }
 
-    /// Match on a strict Boolean scrutinee: `[true => t, false => f]`.
-    fn bool_match(&mut self, scrut: Expr, t: Expr, f: Expr) -> Expr {
-        let (tp, fp) = (self.interner.boolean(true), self.interner.boolean(false));
+    /// The strict tested-seat lowering **[RULED — user, 2026-07-22; T-10]**:
+    /// `Match(∅, [Arm(guard: test, t), Arm(f)])`. Ternary conditions, `&&`/`||`
+    /// left operands, and `!` operands are strict tested seats — a non-Boolean
+    /// **traps tested-seat** regardless of result position. The tested operand
+    /// occurs exactly once, in the guard, so evaluation is single (the degenerate
+    /// bind-then-guard — no tmp needed when nothing else references the value).
+    /// Escaped `~` forms stay falsy-set *matches* (see `falsy_set_match`).
+    fn tested_match(test: Expr, t: Expr, f: Expr) -> Expr {
         Expr::Match(Match {
-            scrutinee: Some(Box::new(scrut)),
+            scrutinee: None,
             items: vec![
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(tp)), guard: None, result: t }),
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(fp)), guard: None, result: f }),
+                MatchItem::Arm(Arm { pattern: None, guard: Some(test), result: t }),
+                MatchItem::Arm(Arm { pattern: None, guard: None, result: f }),
             ],
         })
     }
@@ -608,7 +613,7 @@ impl<'a> Desugarer<'a> {
     /// Kernel-level `&&` over two already-lowered Boolean expressions.
     fn and_exprs(&mut self, a: Expr, b: Expr) -> Expr {
         let f = self.c_bool(false);
-        self.bool_match(a, b, f)
+        Self::tested_match(a, b, f)
     }
 
     /// A guard is a strict tested seat; a `~`-loosened guard becomes the
@@ -789,11 +794,11 @@ impl<'a> Desugarer<'a> {
             MutOp::Pow => prim(PrimOp::Pow, read, rhs),
             MutOp::And => {
                 let f = self.c_bool(false);
-                self.bool_match(read, rhs, f)
+                Self::tested_match(read, rhs, f)
             }
             MutOp::Or => {
                 let t = self.c_bool(true);
-                self.bool_match(read, t, rhs)
+                Self::tested_match(read, t, rhs)
             }
             MutOp::Null => {
                 let v = self.fresh("nn");

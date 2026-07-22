@@ -84,12 +84,14 @@ fn tested_seats_are_strict_boolean() {
     // A non-Boolean *guard* is the tested seat that traps (companion §3).
     let guard = "f = (v) => v :: { _ when v => 1 }\nf(5)";
     assert_eq!(trap_class(guard), TrapClass::TestedSeat);
-    // A non-Boolean ternary condition instead desugars to a Boolean-exhaustive
-    // match; at runtime it matches no arm ⇒ completes-without-value. In a value
-    // position (here a binding) the demand surfaces at the expecting seat (the
-    // analyzer rejects it up front). As a bare statement it would simply go
-    // nowhere.
-    assert_eq!(trap_class("y = 5 ? 1 : 2\ny"), TrapClass::ExpectingSeat);
+    // RULED [user, 2026-07-22]: plain ternary conditions (and `&&`/`||` left
+    // operands, `!` operands) are strict tested seats — the guard-based lowering
+    // traps tested-seat on a non-Boolean **regardless of result position**.
+    assert_eq!(trap_class("y = 5 ? 1 : 2\ny"), TrapClass::TestedSeat);
+    assert_eq!(trap_class("5 ? 1 : 2"), TrapClass::TestedSeat); // bare statement too
+    assert_eq!(trap_class("1 || 9"), TrapClass::TestedSeat);
+    assert_eq!(trap_class("0 && 1"), TrapClass::TestedSeat);
+    assert_eq!(trap_class("!5"), TrapClass::TestedSeat);
 }
 
 // ── Functions, recursion, late binding ───────────────────────────────────────

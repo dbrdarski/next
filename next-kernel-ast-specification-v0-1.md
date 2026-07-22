@@ -62,15 +62,17 @@ Invariants: patterns are **exact by default** — `rest` opens (captured or igno
 
 Every surface form not named in §§1–3 lowers here, **before identity and contract analysis** — the analyzer never sees sugar.
 
+**Amendment [user ruling, 2026-07-22 — resolving the T-10 concordance conflict]:** the strict Boolean forms (`? :`, `&&`, `\|\|`, `!`) lower to **guard-based** scrutinee-less matches, not PConst-arm matches: plain ternary conditions, `&&`/`\|\|` left operands, and `!` operands are strict tested seats and **trap tested-seat on non-Booleans regardless of result position**. Single evaluation is preserved by bind-then-guard, degenerate here — each tested operand occurs exactly once, in the guard. Escaped `~` forms remain falsy-set *matches* (rows unchanged).
+
 | Surface | Kernel |
 |---|---|
 | `# expr` (hask) | `Lambda` over the hole positions; fresh numbering per nested `#`; `^_n` escapes rebind to the enclosing generated lambda's parameters (E4) |
 | `x \|> f` · `f <\| x` | `Apply(f, [x])` — application, nothing else (E2) |
-| `c ? t : e` | `Match(c, [Arm(PConst(true), t), Arm(PConst(false), e)])` — condition is a strict tested seat; Boolean exhaustive |
-| `a && b` | `Match(a, [Arm(PConst(true), b), Arm(PConst(false), Const(false))])` (E10's `a ? b : false`) |
-| `a \|\| b` | `Match(a, [Arm(PConst(true), Const(true)), Arm(PConst(false), b)])` |
+| `c ? t : e` | `Match(∅, [Arm(guard: c, t), Arm(e)])` — the condition sits in a **guard**, a strict tested seat: non-Boolean → **trap: tested-seat** regardless of result position (T-10) **[RULED — user, 2026-07-22; supersedes the PConst-arm lowering]**. Single evaluation holds because the condition occurs exactly once, in the guard — the degenerate bind-then-guard (a tmp bind is needed only if a lowering references the tested value again) |
+| `a && b` | `Match(∅, [Arm(guard: a, b), Arm(Const(false))])` — left operand a strict tested seat (E10's `a ? b : false`, guard form) **[RULED — 2026-07-22]** |
+| `a \|\| b` | `Match(∅, [Arm(guard: a, Const(true)), Arm(b)])` **[RULED — 2026-07-22]** |
 | `~a \|\| b` · `~a && b` | selection matches over the exact falsy set: `Match(a, [Arm(PConst(false), …), Arm(PConst(null), …), Arm(PBind(x), …)])` — the truthy arm's narrowing **is** the accumulated Difference `Difference(C, {Equals(false), Equals(null)})`; no truthiness primitive exists (E10) |
-| `!x` | `Match(x, [Arm(PConst(true), Const(false)), Arm(PConst(false), Const(true))])` |
+| `!x` | `Match(∅, [Arm(guard: x, Const(false)), Arm(Const(true))])` — operand a strict tested seat **[RULED — 2026-07-22]** |
 | `!~x` | the falsy-set match emitting Booleans |
 | `a ?? b` | `Match(a, [Arm(PConst(null), b), Arm(PBind(v), Ref(v))])` — scrutinee evaluated once; differs from `~a \|\| b` exactly on `false` (E10) |
 | block bodies | the same `Match` node, scrutinee absent, bindings/statements interleaved (E10 — one kernel node) |

@@ -413,6 +413,9 @@ mod phase2 {
 
     #[test]
     fn d01_ternary() {
+        // Ruled row: `c ? t : e` ≡ Match(∅, [Arm(guard: c, t), Arm(e)]) — the
+        // condition is a strict tested seat (T-10); single evaluation holds
+        // because the condition occurs exactly once, in the guard.
         num_eq(&eval("true ? 1 : 2"), 1);
         num_eq(&eval("false ? 1 : 2"), 2);
     }
@@ -421,14 +424,17 @@ mod phase2 {
     fn d02_conjunction() {
         num_eq(&eval("true && 5"), 5);
         assert_eq!(eval("false && 5").as_boolean(), Some(false));
+        // RULED [2026-07-22]: the left operand is a strict tested seat.
+        assert_eq!(trap("0 && 1"), TrapClass::TestedSeat);
     }
 
     #[test]
     fn d03_disjunction() {
-        // Catalog row: `a || b` ≡ Match(a, [true => Const(true), false => b]).
+        // Ruled row: `a || b` ≡ Match(∅, [Arm(guard: a, true), Arm(b)]).
         num_eq(&eval("false || 5"), 5);
         assert_eq!(eval("true || 5").as_boolean(), Some(true));
-        // A non-Boolean left rides the same doc conflict as T-10 (see that row).
+        // RULED [2026-07-22]: the left operand is a strict tested seat.
+        assert_eq!(trap("1 || 9"), TrapClass::TestedSeat);
     }
 
     #[test]
@@ -448,6 +454,8 @@ mod phase2 {
     fn d06_not() {
         vtrue("!false");
         assert_eq!(eval("!true").as_boolean(), Some(false));
+        // RULED [2026-07-22]: the operand is a strict tested seat.
+        assert_eq!(trap("!5"), TrapClass::TestedSeat);
     }
 
     #[test]
@@ -598,9 +606,12 @@ mod phase3 {
     }
 
     #[test]
-    #[ignore = "[ask-author] doc conflict: AST §4 lowers `c ? t : e` to PConst(true)/PConst(false) arms — so `5 ? 1 : 2` completes-without-value (traps expecting-seat only at a demanding seat) — while the semantics companion's seed list and this suite row say TRAP tested-seat ('post-desugar guard'). Implementation follows the closed catalog; awaiting a ruling."]
     fn t10_tested_seat() {
+        // RULED [user, 2026-07-22]: plain ternary conditions, `&&`/`||` left
+        // operands, and `!` operands are strict tested seats — trap tested-seat
+        // on non-Booleans regardless of result position (guard-based lowering).
         assert_eq!(trap("5 ? 1 : 2"), TrapClass::TestedSeat);
+        assert_eq!(trap("y = 5 ? 1 : 2\ny"), TrapClass::TestedSeat);
     }
 
     /// The catalog-conforming half of T-10 that is stable under either ruling:

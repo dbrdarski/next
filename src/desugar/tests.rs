@@ -52,15 +52,21 @@ fn pipe_chain_matches_nested_calls() {
 
 #[test]
 fn conjunction_desugars_to_match() {
-    // a && b  ⇒  a ? b : false  ⇒  Match(a, [true => b, false => false])
-    let items = match_items(&lower("a && b")).to_vec();
+    // RULED [user, 2026-07-22]: a && b ⇒ Match(∅, [Arm(guard: a, b), Arm(false)])
+    // — the left operand is a strict tested seat (guard), not a PConst pattern.
+    let e = lower("a && b");
+    let items = match_items(&e).to_vec();
     assert_eq!(items.len(), 2);
-    // First arm: pattern true, result Ref(b). Second: pattern false, result Const(false).
-    if let MatchItem::Arm(arm0) = &items[0] {
-        assert!(matches!(arm0.result, Expr::Ref(_)));
-    } else {
-        panic!("expected arm");
-    }
+    let (MatchItem::Arm(arm0), MatchItem::Arm(arm1)) = (&items[0], &items[1]) else {
+        panic!("expected two arms");
+    };
+    assert!(arm0.pattern.is_none() && matches!(arm0.guard, Some(Expr::Ref(_))));
+    assert!(matches!(arm0.result, Expr::Ref(_)));
+    assert!(arm1.pattern.is_none() && arm1.guard.is_none());
+    assert!(matches!(arm1.result, Expr::Const(_))); // Const(false)
+    // And the whole form is scrutinee-less.
+    let Expr::Match(m) = &e else { panic!("expected match") };
+    assert!(m.scrutinee.is_none());
 }
 
 #[test]
@@ -72,9 +78,14 @@ fn disjunction_desugars_to_match() {
 
 #[test]
 fn ternary_desugars_to_bool_match() {
+    // RULED [user, 2026-07-22]: c ? t : e ⇒ Match(∅, [Arm(guard: c, t), Arm(e)]).
     let e = lower(r#"c ? "t" : "e""#);
     let items = match_items(&e);
     assert_eq!(items.len(), 2);
+    let MatchItem::Arm(arm0) = &items[0] else { panic!("expected arm") };
+    assert!(arm0.pattern.is_none() && arm0.guard.is_some(), "condition sits in the guard");
+    let Expr::Match(m) = &e else { panic!("expected match") };
+    assert!(m.scrutinee.is_none());
 }
 
 #[test]

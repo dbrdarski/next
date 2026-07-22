@@ -111,20 +111,13 @@ shape. Sound today; tracked here so the rebuild is deliberate.
   companion now integrates the total-interpolation ruling (§3 render rules match
   the implementation detail-for-detail), §6 states thirteen classes, and the suite
   renumbered to T-01…T-13.
-- **[ask-author] T-10 / D-01 conflict — ternary on a non-Boolean. STILL OPEN.**
-  The kernel-AST §4 catalog lowers `c ? t : e` to `Match(c, [Arm(PConst(true), t),
-  Arm(PConst(false), e)])`, under which `5 ? 1 : 2` *completes without value*
-  (trapping **expecting-seat** only at a demanding seat). The semantics companion's
-  trap-seed list and suite row T-10 instead expect **TRAP tested-seat** ("post-
-  desugar guard"), which would require a guard-based lowering (e.g. bind-then-
-  guard: `{ tmp = c; when tmp => t; => e }` — also single-evaluation). The same
-  choice governs non-Boolean `a && b` / `a || b` / `!x`. Note: the 2026-07-22
-  erratum pass edited the very T-row line and **kept** "post-desugar guard" — some
-  evidence the tested-seat expectation is intentional — but the catalog's closed
-  lowering stands unamended, so the conflict remains. The implementation follows
-  the closed catalog; T-10 ships `#[ignore]` with the conflict recorded, and
-  T-10a (a non-Boolean *arm guard* traps tested-seat — true under either ruling)
-  runs in its place. **Needs a ruling.**
+- ~~**T-10 / D-01 conflict — ternary on a non-Boolean**~~ — **RULED [user,
+  2026-07-22]**: plain ternary conditions, `&&`/`||` left operands, and `!`
+  operands are **strict tested seats** — trap tested-seat on non-Booleans
+  regardless of result position. The AST §4 catalog is amended to guard-based
+  lowerings (`Match(∅, [Arm(guard: test, t), Arm(f)])`; single evaluation via the
+  degenerate bind-then-guard — each tested operand occurs exactly once, in the
+  guard). Escaped `~` forms remain falsy-set matches. Implemented; T-10 runs live.
 
 ## Author-flagged opens (implemented per their stated law)
 
