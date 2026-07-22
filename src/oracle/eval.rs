@@ -17,8 +17,9 @@ pub fn run_program_value(src: &str) -> Result<ValueRef, Trap> {
     let sprogram = parse_program(toks).expect("parse ok");
     let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar ok");
 
+    let env = super::harness::prelude_env(&mut interner);
     let mut oracle = Oracle::new(&mut interner);
-    oracle.run_module(&module)
+    oracle.run_module_in(&module, &env)
 }
 
 /// Apply a primitive operation to concrete operand values, returning the produced
@@ -56,8 +57,9 @@ pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
     let sprogram = parse_program(toks).expect("parse ok");
     let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar ok");
 
+    let env = super::harness::prelude_env(&mut interner);
     let mut oracle = Oracle::new(&mut interner);
-    let value = oracle.run_module(&module)?;
+    let value = oracle.run_module_in(&module, &env)?;
     Ok((value, oracle.store.commits))
 }
 

@@ -95,6 +95,71 @@ fn install_host_effects(interner: &mut Interner, env: &Env, io: &Rc<RefCell<Host
     env.define("readFile", Binding::Value(read_file));
 }
 
+/// A root environment with the **pure prelude** installed: the `String` record
+/// (`length` / `units` / `points` — E8's grapheme machinery views). These are
+/// pure natives, callable in every world.
+pub fn prelude_env(interner: &mut Interner) -> Env {
+    let env = Scope::root();
+    install_string_prelude(interner, &env);
+    env
+}
+
+/// `String.length` counts **grapheme clusters** (UAX #29, the pinned segmenter —
+/// E8); `String.units` / `String.points` are the UTF-16-unit and code-point views
+/// over the same machinery.
+// [ask-author]: the element representation of the `units`/`points` views is not
+// pinned by E8 — implemented here as Tuples of Numbers (code units / code points);
+// only their *lengths* are asserted by the suite (S-02).
+fn install_string_prelude(interner: &mut Interner, env: &Env) {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let demand_str = |args: &[ValueRef]| -> Result<String, String> {
+        args.first()
+            .and_then(|v| v.as_str_units().map(String::from_utf16_lossy))
+            .ok_or_else(|| "String.* expects a String argument".to_string())
+    };
+
+    let length = NativeFn {
+        name: "String.length".into(),
+        act_kind: ActKind::Pure,
+        imp: Rc::new(move |interner: &mut Interner, args: &[ValueRef]| {
+            let s = demand_str(args)?;
+            let n = s.graphemes(true).count();
+            Ok(interner.integer(n as i64))
+        }),
+    };
+    let units = NativeFn {
+        name: "String.units".into(),
+        act_kind: ActKind::Pure,
+        imp: Rc::new(move |interner: &mut Interner, args: &[ValueRef]| {
+            let s = demand_str(args)?;
+            let items: Vec<ValueRef> =
+                s.encode_utf16().map(|u| interner.integer(u as i64)).collect();
+            Ok(interner.tuple(items))
+        }),
+    };
+    let points = NativeFn {
+        name: "String.points".into(),
+        act_kind: ActKind::Pure,
+        imp: Rc::new(move |interner: &mut Interner, args: &[ValueRef]| {
+            let s = demand_str(args)?;
+            let items: Vec<ValueRef> =
+                s.chars().map(|c| interner.integer(c as i64)).collect();
+            Ok(interner.tuple(items))
+        }),
+    };
+
+    let length_v = interner.native(NativeRef::new(length));
+    let units_v = interner.native(NativeRef::new(units));
+    let points_v = interner.native(NativeRef::new(points));
+    let string_record = interner.record_str(vec![
+        ("length", length_v),
+        ("units", units_v),
+        ("points", points_v),
+    ]);
+    env.define("String", Binding::Value(string_record));
+}
+
 /// Lex → parse → desugar → run an entry program with host effects installed,
 /// returning the final value and the captured IO. Panics on a front-end error
 /// (for tests, where the source is known-good); use [`run_source`] for a
@@ -106,7 +171,7 @@ pub fn run_with_io(src: &str) -> Result<(ValueRef, HostIo), Trap> {
     let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar ok");
 
     let io = Rc::new(RefCell::new(HostIo::default()));
-    let env = Scope::root();
+    let env = prelude_env(&mut interner);
     install_host_effects(&mut interner, &env, &io);
 
     let mut oracle = Oracle::new(&mut interner);
@@ -147,7 +212,7 @@ pub fn run_source(src: &str) -> Result<(ValueRef, HostIo), RunError> {
         .map_err(RunError::Desugar)?;
 
     let io = Rc::new(RefCell::new(HostIo::default()));
-    let env = Scope::root();
+    let env = prelude_env(&mut interner);
     install_host_effects(&mut interner, &env, &io);
 
     let value = Oracle::new(&mut interner)

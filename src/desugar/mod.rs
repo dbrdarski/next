@@ -551,7 +551,20 @@ impl<'a> Desugarer<'a> {
         };
 
         let patterns: Vec<&SPattern> = match &a.pattern {
-            Some(SPattern::Alt(alts)) => alts.iter().collect(),
+            Some(SPattern::Alt(alts)) => {
+                // Alternation is sound because alternatives are binding-free (E9,
+                // P-30): a capture in any alternative is rejected here (the spec
+                // allows parse- or analyzer-phase; desugar is the earliest point
+                // that sees the expanded arms).
+                for alt in alts {
+                    if let Some(name) = first_binding(alt) {
+                        return err(format!(
+                            "alternation alternatives are binding-free (E9): `{name}` binds"
+                        ));
+                    }
+                }
+                alts.iter().collect()
+            }
             Some(p) => vec![p],
             None => {
                 return Ok(vec![Arm { pattern: None, guard: base_guard, result }]);
@@ -669,13 +682,42 @@ impl<'a> Desugarer<'a> {
     // ── Mutation (§4) ────────────────────────────────────────────────────────
 
     fn mutation(&mut self, path: &SPath, op: MutOp, value: &SExpr) -> Result<Expr, DesugarError> {
-        // Only field paths are lowered in v0.1; index/slice mutation is deferred.
+        // The splice row (§4): `items[a...b] := r` ⇒ `Write(items,
+        // [...items[...a], ...r, ...items[b...]])` — a spread-composed splice
+        // (E7). An absent bound drops its side's spread (empty window).
+        if let [SPathSeg::Slice { lo, hi }] = path.segments.as_slice() {
+            if op != MutOp::Assign {
+                return err("compound assignment on a slice is not defined; use `:=`");
+            }
+            let r = self.expr(value)?;
+            let slice_of = |lo: Option<Box<Expr>>, hi: Option<Box<Expr>>| Expr::Access {
+                target: Box::new(Self::name_ref(&path.root)),
+                form: AccessForm::Slice { lo, hi },
+                total: false, // slices ignore `total` — clamped-total always (E7)
+            };
+            let mut elems: Vec<Element> = Vec::new();
+            if let Some(a) = lo {
+                let a_k = Box::new(self.expr(a)?);
+                elems.push(Element::Spread(slice_of(None, Some(a_k))));
+            }
+            elems.push(Element::Spread(r));
+            if let Some(b) = hi {
+                let b_k = Box::new(self.expr(b)?);
+                elems.push(Element::Spread(slice_of(Some(b_k), None)));
+            }
+            return Ok(Expr::Write {
+                slot: SlotRef::Name(path.root.clone()),
+                value: Box::new(Expr::TupleCons(elems)),
+            });
+        }
+
+        // Only field paths are lowered otherwise; index mutation is deferred.
         let mut fields = Vec::new();
         for seg in &path.segments {
             match seg {
                 SPathSeg::Field(f) => fields.push(f.clone()),
                 SPathSeg::Index(_) | SPathSeg::Slice { .. } => {
-                    return err("index/slice mutation is not yet lowered (v0.1)");
+                    return err("index mutation / non-terminal slice is not yet lowered (v0.1)");
                 }
             }
         }
@@ -774,4 +816,26 @@ impl<'a> Desugarer<'a> {
 
 fn prim(op: PrimOp, a: Expr, b: Expr) -> Expr {
     Expr::PrimOp { op, args: vec![a, b] }
+}
+
+/// The first bound name in a surface pattern, if any — alternation alternatives
+/// must be binding-free (E9). Pins compare (no binding); record-field shorthand
+/// (`{x}`) and captured rests bind.
+fn first_binding(p: &SPattern) -> Option<String> {
+    match p {
+        SPattern::Bind(name) => Some(name.clone()),
+        SPattern::Tuple(elems) => elems.iter().find_map(|e| match e {
+            SPatElem::Pat(inner) => first_binding(inner),
+            SPatElem::Rest(Some(name)) => Some(name.clone()),
+            SPatElem::Rest(None) => None,
+        }),
+        SPattern::Record(fields, _) => fields.iter().find_map(|f| match f {
+            SPatField::Field(key, None) => Some(key.clone()), // shorthand binds
+            SPatField::Field(_, Some(inner)) => first_binding(inner),
+            SPatField::Rest(Some(name)) => Some(name.clone()),
+            SPatField::Rest(None) => None,
+        }),
+        SPattern::Alt(alts) => alts.iter().find_map(first_binding),
+        _ => None,
+    }
 }

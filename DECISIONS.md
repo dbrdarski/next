@@ -6,6 +6,76 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-22 — Conformance suite aligned to the stable IDs (tests/conformance.rs)
+
+The suite spec's stable IDs are now executable: **104 ID-keyed tests + 13 honest
+`#[ignore]`s** in `tests/conformance.rs` (phases 0–4 + the Phase A stubs), on top
+of the 230 unit tests. Writing the ID rows immediately exposed **seven real
+parser/desugar conformance bugs** and **one new doc conflict** — exactly what ID
+alignment is for. All fixed; whole tree green, clippy clean.
+
+**Parser/desugar bugs the suite caught (all grammar/catalog-mandated):**
+- **L1 unenforced** (P-20): two statements on one line parsed. Was a documented
+  deferral ("later diagnostic pass"); now a parse error in `program()` and
+  `block()` (grammar §1.1 — a statement may not begin on the line where the
+  previous statement's last token sits).
+- **L2 unenforced** (P-21): two arms on one line parsed. Now a parse error in
+  `arm_block()`.
+- **`when` was effectively reserved** (P-22): `when = 5` failed to parse — a
+  zero-reserved-words violation. The demand-arm head now parses under
+  **backtracking**: if the whole `when <guard> => <result>` shape does not parse,
+  `when` is an ordinary name. (`where = 2` already worked — its keyword check
+  looks at position 1.)
+- **Match-postfix operators missing** (P-10): `x :: {…} |> f` was a parse error;
+  the §3 ladder note says operators after the block attach to the completed
+  match. `pipe_expr` split into head + `pipe_tail`, and `match_expr` loops
+  `::`-blocks and pipe-tails (the closed match form resets the mixing ban).
+- **Duplicate literal record keys accepted** (P-26): now a parse error (E5 —
+  "rejected upstream"); computed keys/spreads stay exempt (later-wins governs).
+- **Multiple rests per level accepted** (P-29): now a parse error, tuples and
+  record patterns both.
+- **Alternation binding rule unenforced** (P-30): `1 | x => …` ran. Desugar's arm
+  expansion now rejects any binding inside an alternative (`first_binding`:
+  `Bind`, captured rests, record shorthand; pins stay legal — they compare).
+- **Splice write unimplemented** (D-14): the §4 row `items[a...b] := r` ⇒
+  `Write(items, [...items[...a], ...r, ...items[b...]])` now lowers (absent bound
+  → that side's spread drops); compound-assign on a slice stays a clear error.
+  The old "index/slice mutation" blanket error now covers only index/non-terminal
+  cases.
+
+**New doc conflict, [ask-author] (OwedItems "Doc errata"):** **T-10 vs D-01.**
+The AST §4 catalog lowers `c ? t : e` to `PConst(true)/PConst(false)` arms —
+`5 ? 1 : 2` completes-without-value — while the companion's seed list and suite
+T-10 expect **TRAP tested-seat** ("post-desugar guard"). Implementation follows
+the closed catalog; T-10 ships `#[ignore]` with the conflict recorded, T-10a
+(non-Boolean *arm guard* traps tested-seat — true under either ruling) runs in
+its place. The same ruling governs non-Boolean `&&`/`||`/`!` operands (D-03 keeps
+to the agreeing Boolean cases meanwhile).
+
+**Test-side lessons the grammar taught (not bugs):**
+- `x = 2` ⏎ `-x ** 2` is ONE statement (§1.1's stated hazard — the leading-`-`
+  continuation; P-23's lint case). P-12 binds on one line.
+- **Blocks produce via `=>` exit-arm statements** (grammar §2), not a trailing
+  expression (that is a discarded `Stmt` — the goes-nowhere lint). D-09 now uses
+  `=> y * 2` and a guarded `when x > 0 => x` exit. Both forms already worked.
+- H-03/H-05 observe the canonicalization laws through `==` (canonical code):
+  `x => x + x == x => 2 * x` and the commutative-reorder pair are already true —
+  ahead of the PENDING-§5 register, which is legal (the register forbids
+  asserting the *interim inequality* as desired, not early success). FE-03/04/05/06
+  likewise assert final expectations and pass today.
+- **`String` prelude added** (harness `prelude_env`, pure natives, both run
+  paths): `String.length` (grapheme count, the pinned segmenter), `String.units`
+  / `String.points` views — unblocks S-01…03 (PIN-UNICODE rows green).
+  `// [ask-author]`: the element representation of the views (Tuples of Numbers
+  here) is not pinned by E8; only lengths are asserted.
+
+**The 13 `#[ignore]`s, each with its reason in-file:** T-10 (doc conflict),
+M-04 (needs a fuel harness), P-27b + MOD-01/03/04/05 (module-system semantics
+staged), Phase A × 6 (program-level analyzer pending; A-WRK additionally RECOVER —
+grid texts must come verbatim from the author's transcripts, `journal.txt`).
+
+---
+
 ## 2026-07-22 — AUDIT: full codebase check against the evolved docs
 
 A systematic walk of every module against the current normative set (compendium

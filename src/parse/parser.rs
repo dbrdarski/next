@@ -133,8 +133,15 @@ impl Parser {
             None
         };
         let mut statements = Vec::new();
+        let mut prev_end: Option<u32> = None;
         while !self.at(&TokenKind::Eof) {
+            // L1: a statement may not begin on the line where the previous
+            // statement's last token sits (grammar §1.1).
+            if prev_end == Some(self.line()) {
+                return Err(self.err("one statement per line (L1)"));
+            }
             statements.push(self.statement()?);
+            prev_end = Some(self.toks[self.pos - 1].line);
         }
         Ok(SProgram { header, statements })
     }
@@ -160,11 +167,15 @@ impl Parser {
             return Ok(SStmt::At(self.at_declaration()?));
         }
         if self.at_ident_kw(token_kw::WHEN) {
-            self.advance();
-            let guard = self.match_expr()?; // below the arrow tier (see `arm`)
-            self.expect(TokenKind::FatArrow)?;
-            let result = self.expr()?;
-            return Ok(SStmt::WhenArm { guard, result });
+            // Zero reserved words (P-22): `when` heads the demand form only when
+            // the whole `when <guard> => <result>` shape parses; otherwise it is
+            // an ordinary name (`when = 5`, `when + where`) — backtrack.
+            let save = self.pos;
+            let attempt = self.when_arm_statement();
+            match attempt {
+                Ok(stmt) => return Ok(stmt),
+                Err(_) => self.pos = save,
+            }
         }
         if self.at(&TokenKind::FatArrow) {
             self.advance();
@@ -473,20 +484,48 @@ impl Parser {
         Ok(SArrowBody::Expr(self.expr()?))
     }
 
+    /// The `when …` demand-arm statement body (called under backtracking).
+    fn when_arm_statement(&mut self) -> Result<SStmt, ParseError> {
+        self.advance(); // `when`
+        let guard = self.match_expr()?; // below the arrow tier (see `arm`)
+        self.expect(TokenKind::FatArrow)?;
+        let result = self.expr()?;
+        Ok(SStmt::WhenArm { guard, result })
+    }
+
     fn match_expr(&mut self) -> Result<SExpr, ParseError> {
         let mut node = self.pipe_expr()?;
-        while self.eat(&TokenKind::ColonColon) {
-            self.expect(TokenKind::LBrace)?;
-            let arms = self.arm_block()?;
-            node = SExpr::Match { scrutinee: Box::new(node), arms };
+        loop {
+            if self.eat(&TokenKind::ColonColon) {
+                self.expect(TokenKind::LBrace)?;
+                let arms = self.arm_block()?;
+                node = SExpr::Match { scrutinee: Box::new(node), arms };
+                continue;
+            }
+            // Ladder note (grammar §3): operators after the block attach to the
+            // completed match — `x :: {…} |> f` pipes the result. A fresh pipe
+            // chain starts here (the closed match form resets the mixing ban).
+            if matches!(self.kind(), TokenKind::PipeGt | TokenKind::LtPipe)
+                && matches!(node, SExpr::Match { .. })
+            {
+                node = self.pipe_tail(node)?;
+                continue;
+            }
+            break;
         }
         Ok(node)
     }
 
     fn arm_block(&mut self) -> Result<Vec<SArm>, ParseError> {
         let mut arms = Vec::new();
+        let mut prev_end: Option<u32> = None;
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            // L2: each arm begins on a new line (grammar §1.1).
+            if prev_end == Some(self.line()) {
+                return Err(self.err("one arm per line (L2)"));
+            }
             arms.push(self.arm()?);
+            prev_end = Some(self.toks[self.pos - 1].line);
         }
         self.expect(TokenKind::RBrace)?;
         Ok(arms)
@@ -513,7 +552,14 @@ impl Parser {
     }
 
     fn pipe_expr(&mut self) -> Result<SExpr, ParseError> {
-        let mut operands = vec![self.hask_expr()?];
+        let first = self.hask_expr()?;
+        self.pipe_tail(first)
+    }
+
+    /// Fold a pipe chain whose first operand is already parsed (also the entry
+    /// for a completed match continuing into pipes — the §3 ladder note).
+    fn pipe_tail(&mut self, first: SExpr) -> Result<SExpr, ParseError> {
+        let mut operands = vec![first];
         let mut dir: Option<PipeDir> = None;
         loop {
             let d = match self.kind() {
@@ -901,6 +947,19 @@ impl Parser {
             }
         }
         self.expect(TokenKind::RBrace)?;
+        // Literal-literal duplicate keys are rejected upstream (E5, P-26);
+        // computed keys and spreads are exempt (later-wins governs them).
+        let mut seen: Vec<&str> = Vec::new();
+        for f in &fields {
+            let name = match f {
+                SField::KeyValue(n, _) | SField::Shorthand(n) => n.as_str(),
+                _ => continue,
+            };
+            if seen.contains(&name) {
+                return Err(self.err(format!("duplicate literal key `{name}` in a record")));
+            }
+            seen.push(name);
+        }
         Ok(SExpr::Record(fields))
     }
 
@@ -927,8 +986,15 @@ impl Parser {
     fn block(&mut self) -> Result<Vec<SStmt>, ParseError> {
         self.expect(TokenKind::LBrace)?;
         let mut stmts = Vec::new();
+        let mut prev_end: Option<u32> = None;
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            // L1/L2 inside blocks: statements (arm statements included) each on
+            // their own line (grammar §2).
+            if prev_end == Some(self.line()) {
+                return Err(self.err("one statement per line (L1)"));
+            }
             stmts.push(self.statement()?);
+            prev_end = Some(self.toks[self.pos - 1].line);
         }
         self.expect(TokenKind::RBrace)?;
         Ok(stmts)
@@ -1016,6 +1082,10 @@ impl Parser {
             }
         }
         self.expect(TokenKind::RBracket)?;
+        // One rest per level (§3, P-29).
+        if elems.iter().filter(|e| matches!(e, SPatElem::Rest(_))).count() > 1 {
+            return Err(self.err("one rest per pattern level"));
+        }
         Ok(elems)
     }
 
@@ -1050,6 +1120,10 @@ impl Parser {
             }
         }
         self.expect(TokenKind::RBrace)?;
+        // One rest per level (§3, P-29) — records too.
+        if fields.iter().filter(|f| matches!(f, SPatField::Rest(_))).count() > 1 {
+            return Err(self.err("one rest per pattern level"));
+        }
         Ok((fields, exact))
     }
 

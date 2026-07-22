@@ -104,6 +104,17 @@ shape. Sound today; tracked here so the rebuild is deliberate.
 - The **semantics companion v0.1** still lists the deleted `unprintable-interpolation`
   trap (§3 Template row and the §6 concordance table) — superseded by the
   interpolation-total ruling [user, 2026-07-18] and test-suite line 57.
+- **[ask-author] T-10 / D-01 conflict — ternary on a non-Boolean.** The kernel-AST
+  §4 catalog lowers `c ? t : e` to `Match(c, [Arm(PConst(true), t),
+  Arm(PConst(false), e)])`, under which `5 ? 1 : 2` *completes without value*
+  (trapping **expecting-seat** only at a demanding seat). The semantics companion's
+  trap-seed list and suite row T-10 instead expect **TRAP tested-seat** ("post-
+  desugar guard"), which would require a guard-based lowering (e.g. bind-then-
+  guard: `{ tmp = c; when tmp => t; => e }` — also single-evaluation). The same
+  choice governs non-Boolean `a && b` / `a || b` / `!x`. The implementation follows
+  the closed catalog; T-10 ships `#[ignore]` with the conflict recorded, and
+  T-10a (a non-Boolean *arm guard* traps tested-seat — true under either ruling)
+  runs in its place. **Needs a ruling.**
 
 ## Author-flagged opens (implemented per their stated law)
 
