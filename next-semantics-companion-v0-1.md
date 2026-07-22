@@ -4,7 +4,7 @@
 
 ## 1. Semantic domains
 
-**Values** — interned, immutable: Boolean, Null, Number (exact rational), String (UTF-16 storage; grapheme semantics E8), Tuple, Record, Function, Indeterminate(form). Same value = same pointer; `==` is pointer comparison (B1). **Locations (slots)** — runtime-internal mutable cells; never values (C§12.4, F4). **Store σ** — slot → committed content. **Pending set π** — slot → staged content; exists only inside a mutation transaction (B5). **Environment ρ** — name → binding, where a binding is an immutable value, a slot, or an *under-initialization* marker (B4). **Worlds w** ∈ {pure, mutator, effect} — derived from the enclosing `Lambda.actKind`, never from lexical nesting (E14). **Function value** — (canonical body, capture map, actKind): captures hold resolved values for immutable free names, μ-markers for under-init self/group references, location markers for slot references (C§12.3 layer 1, F3); eager vs lazy capture of immutables is unobservable (B4) — the oracle may do either. **Outcomes** of body evaluation: `Produced(v)` | `CompletedWithoutValue` | (non-termination). `CompletedWithoutValue` is not a value and never converts to one (E10, 1.0.2).
+**Values** — immutable: Boolean, Null, Number (exact rational), String (UTF-16 storage; grapheme semantics E8), Tuple, Record, Function, Indeterminate(form). **Data values intern**: same value = same pointer, `==` is pointer comparison (B1). **Closures intern shallowly [user, restored]** — key = (canonical-code pointer, capture pointers); same value = same pointer universally; **calls are never memoized**; μ-group members intern at window close (markers stored; heap acyclic). **Locations (slots)** — runtime-internal mutable cells; never values (C§12.4, F4). **Store σ** — slot → committed content. **Pending set π** — slot → staged content; exists only inside a mutation transaction (B5). **Environment ρ** — name → binding, where a binding is an immutable value, a slot, or an *under-initialization* marker (B4). **Worlds w** ∈ {pure, mutator, effect} — derived from the enclosing `Lambda.actKind`, never from lexical nesting (E14). **Function value** — (canonical body, capture map, actKind): captures hold resolved values for immutable free names, μ-markers for under-init self/group references, location markers for slot references (C§12.3 layer 1, F3); eager vs lazy capture of immutables is unobservable (B4) — the oracle may do either. **Outcomes** of body evaluation: `Produced(v)` | `CompletedWithoutValue` | (non-termination). `CompletedWithoutValue` is not a value and never converts to one (E10, 1.0.2).
 
 ## 2. Programs, modules, entry
 
@@ -18,7 +18,7 @@ Judgment ⟨e, ρ, σ, π, w⟩ ⇓ outcome (σ/π threaded; strictly left-to-ri
 
 **Ref(b)** — immutable binding → its value. Location marker → **read-your-writes**: π(slot) if staged in the current transaction, else σ(slot) (B5). Under-initialization marker → **trap: unbound-evaluation** (the accepted-programs theorem says this is unreachable; B4).
 
-**Lambda(p, body, k)** — constructs and interns the function value; free immutable names resolve per late binding (at construction or first use — unobservable); self/group names still open become μ-markers; slot names become location markers. Yields the interned function.
+**Lambda(p, body, k)** — constructs and interns the function value; free immutable names resolve per late binding (at construction or first use — unobservable); self/group names still open become μ-markers; slot names become location markers. Yields the interned function value — shallow key; construction dedups, invocation never memoizes (B1).
 
 **Apply(f, args)** — evaluate callee, then args left-to-right; a `Spread(e)` must evaluate to a Tuple (**trap: spread-kind** otherwise) and splices. **World admission** (B5's matrix): callee.actKind ∉ admitted(w) → **trap: world-admission**. Bind the complete argument tuple against the callee's parameter pattern — structural mismatch → **trap: argument-obligation**. Evaluate the body under the callee's own world:
 - *pure callee* — outcome must be `Produced` at expecting seats (see Match); at statement seats any outcome stands.
@@ -33,7 +33,7 @@ Judgment ⟨e, ρ, σ, π, w⟩ ⇓ outcome (σ/π threaded; strictly left-to-ri
 
 **Access(t, form, total)** — evaluate the target (and index). *Demand forms* (total = false): Null receiver → **trap: null-receiver**; absent field → **trap: absent-field**; index — normalize from-end (−k ↦ len−k on the unit sequence), non-integer or out-of-bounds → **trap: index-bounds**. *Total forms* (`?.` family): Null receiver → Null; absent field → Null; out-of-bounds index → Null — one step; the produced Null travels onward as an ordinary value (E6). *Slices*: always total — normalize signs via length, clamp to reality, half-open window; empty window → the empty Tuple/String (E7). **Strings**: bare index/slice/length operate on **grapheme clusters** (UAX #29, versioned tables — E8); `String.units` / `String.points` views are prelude functions over the same machinery.
 
-**Template(parts)** — concatenate; interpolations stringify: String verbatim; Number per B2's printing rule (decimal iff the reduced denominator's primes ⊆ {2,5}, else exact fraction); `true`/`false`/`null` by name. Any other kind → **trap: unprintable-interpolation** **[tagged: structure printing is deliberately unruled — E11's open print doctrine; the trap keeps the oracle honest until it's ruled]**.
+**Template(parts)** — concatenate; **interpolation is total [user ruling, 2026-07-18 — the unprintable-interpolation trap is deleted]**. Renderings, deterministic functions of the interned value, frozen with semantics: String verbatim at top level, quoted-and-escaped (literal form) inside structures; Number per B2; `true`/`false`/`null` by name; **Tuple/Record as their canonical literal forms** (records in canonical sorted-key order — field order isn't identity); **Function as `<Function>`**; **Indeterminate as `<Indeterminate _/0>` / `<Indeterminate 0/0>`** — the form, never the operands (operands aren't part of the interned value). The principle: literal-formed values render as literals (parse ∘ print = identity on that fragment — a harness law); the rest render in angle brackets, visibly non-parseable.
 
 **Write(slot, e)** — w ≠ mutator → **trap: world-admission**. Evaluate e; stage π[slot] := v. Visibility follows read-your-writes; commitment happens only at the transaction's publication (above).
 
@@ -47,7 +47,7 @@ The oracle needs a world to touch. **Host effects** are harness-provided functio
 
 **Mutators cannot trap in ways pure code cannot.** Inspect §3's trap sources reachable in mutator world: world-admission excludes effects (the matrix), so no IO exists; every remaining trap class (safety, bounds, tested-seat, …) is one the analyzer discharges for *accepted* programs exactly as in pure world; Indeterminate is a value, not a trap. Hence in an accepted program a mutator body either completes — publishing once — or diverges — publishing nothing. Publication-only transactionality needs no rollback because §3 contains no mutator-reachable abort. **Every evaluated reference is bound** — `Ref` traps on under-init markers; the static binding rule plus lambda-body exemption make that trap unreachable in accepted programs; the analyzer's environment check (B4) is the proof obligation, this trap is its test.
 
-## 6. Trap ↔ compile-error concordance (the oracle's contract with the analyzer)
+## 6. Trap ↔ compile-error concordance (the oracle's contract with the analyzer) — **thirteen classes** [count stated — erratum 2026-07-18; the fourteenth, unprintable-interpolation, deleted by the total-interpolation ruling]
 
 | Oracle trap | Analyzer obligation it mirrors |
 |---|---|
@@ -61,11 +61,10 @@ The oracle needs a world to touch. **Host effects** are harness-provided functio
 | tested-seat | E10 strict Boolean at tested seats |
 | refuted-binding | E9 destructuring irrefutability |
 | spread-kind / computed-key | E5/E3 construction and call obligations |
-| unprintable-interpolation | the open print doctrine (E11) — trap until ruled |
 
 Soundness, per class, becomes a property test: generate accepted programs, run the oracle, assert zero traps. Gray programs may diverge; they still must not trap.
 
-## 7. The fork this document could not avoid: open-value identity
+## 7. Open-value identity **[RULED — user, 2026-07-17]**
 
 Writing `==` for mutually recursive values forces the semantics-ledger fork (B4) into the open. Self-reference is ruled and closed: `x = [() => x]` canonicalizes at its own statement's end (window = the executing binding statement); `y = [() => y]` and `z = [() => z]` intern equal. The **group** case is the fork:
 
@@ -75,7 +74,7 @@ b = [() => a]        //   a's closure carries a marker for b
 a2 = [() => b]       // after b closes — is a2 == a ?
 ```
 
-**Strict openness**: open values cannot finalize until their group closes; identity is canonical-by-group — `a2 == a` holds, but the machinery tracks group windows. **Nominal markers**: markers are name-keyed; values flow while open; identity is construction-relative — whether `a2 == a` holds depends on marker resolution rules. **The oracle must implement one to run this program.** Provisional v0.1 default, explicitly not a ruling: **strict openness with statement-group windows** — it extends the ruled self-reference story (windows close, then canonical) to groups, keeps `a2 == a` true (matching the y/z μ-precedent that same shape ⇒ same value), and its cost is bookkeeping the oracle can afford. **[open — user; the concrete test pair above is the decision's whole surface]**.
+**Strict openness**: open values cannot finalize until their group closes; identity is canonical-by-group — `a2 == a` holds, but the machinery tracks group windows. **Nominal markers**: markers are name-keyed; values flow while open; identity is construction-relative — whether `a2 == a` holds depends on marker resolution rules. **The oracle must implement one to run this program.** **RULED: strict openness — shape is identity.** The group *is* `y = [() => y]` written in two statements: construction is not identity, shape is. Hence `a2 == a`, and a shape-symmetric group collapses into the self-loop (`a == b == y`) — the coherent consequence, embraced. Location markers remain nominal (the split rule — state-touching closures never shape-merge). The mechanism (group windows, joint μ-canonicalization, late-twin fold-in) lands with §5; until then these `==` cases are PENDING-§5 with expectations fixed.
 
 ## 8. Conformance and harness laws
 

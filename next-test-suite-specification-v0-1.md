@@ -54,7 +54,7 @@ Each row: structural equality of desugar output with the hand-built kernel term,
 
 ## Phase 3 — Oracle semantics
 
-**T-01…T-14 — one minimal program per trap class:** unbound-evaluation (`f()` before `f = …` at same level... via forward *call* at evaluation) · world-admission (`fetch(url)` in a pure function; `Write` outside mutator; effect called from mutator) · expecting-seat (`x = m()` where m's Match falls through) · argument-obligation (`((a, b) => a)(1)`) · operation-safety (`1 + "a"`) · undischarged-Indeterminate (`(1/0) < 3`) · null-receiver (`null.x`) · absent-field (`{a:1}.b`) · index-bounds (`[1,2][5]`, `[1,2][-3]`) · tested-seat (`5 ? a : b` post-desugar guard) · refuted-binding (`[a, b] = [1]`) · spread-kind (`f(...5)`, `{ ...[1] }`) · computed-key (`{ [5]: v }`). *(The former fourteenth class, unprintable-interpolation, is deleted — interpolation ruled total [user, 2026-07-18]; see PR-01…05.)*
+**T-01…T-13 — one minimal program per trap class [renumbered — erratum 2026-07-18]:** unbound-evaluation (`f()` before `f = …` at same level... via forward *call* at evaluation) · world-admission (`fetch(url)` in a pure function; `Write` outside mutator; effect called from mutator) · expecting-seat (`x = m()` where m's Match falls through) · argument-obligation (`((a, b) => a)(1)`) · operation-safety (`1 + "a"`) · undischarged-Indeterminate (`(1/0) < 3`) · null-receiver (`null.x`) · absent-field (`{a:1}.b`) · index-bounds (`[1,2][5]`, `[1,2][-3]`) · tested-seat (`5 ? a : b` post-desugar guard) · refuted-binding (`[a, b] = [1]`) · spread-kind (`f(...5)`, `{ ...[1] }`) · computed-key (`{ [5]: v }`). *(The former fourteenth class, unprintable-interpolation, is deleted — interpolation ruled total [user, 2026-07-18]; see PR-01…05.)*
 
 | ID | Case | Expected |
 |---|---|---|
@@ -123,6 +123,6 @@ Each row: structural equality of desugar output with the hand-built kernel term,
 
 ## Coverage map (comprehensiveness check)
 
-Grammar v0.1 §§1–8 → P-01…P-30 (every lexical rule T1–T3, L1–L2, brace/`_`/`...` disambiguation). Kernel AST §4 → D-01…D-16 (every desugar row). Semantics §3 → O/S/X/M/FL/MOD (every node's rules) and §6 → T-01…T-14 (every trap class, bijectively). Compendium B2 → N-01…N-05; B5/B7 → M-01…M-06; B6 → FL-01…FL-03; E6/E7/E8 → O-01…O-06, S-01…S-03; E10 → X-01/X-02, T (tested-seat, expecting-seat); E12 → MOD-01…MOD-05; Part D → A-NEG/A-ACC; C§7/C§16 → A-SND; lints → A-LNT. Gaps are bugs in this document — file them against it.
+Grammar v0.1 §§1–8 → P-01…P-30 (every lexical rule T1–T3, L1–L2, brace/`_`/`...` disambiguation). Kernel AST §4 → D-01…D-16 (every desugar row). Semantics §3 → O/S/X/M/FL/MOD (every node's rules) and §6 → T-01…T-13 (every trap class, bijectively — thirteen since the interpolation ruling). Compendium B2 → N-01…N-05; B5/B7 → M-01…M-06; B6 → FL-01…FL-03; E6/E7/E8 → O-01…O-06, S-01…S-03; E10 → X-01/X-02, T (tested-seat, expecting-seat); E12 → MOD-01…MOD-05; Part D → A-NEG/A-ACC; C§7/C§16 → A-SND; lints → A-LNT. Gaps are bugs in this document — file them against it.
 
 *End of Test Suite Specification v0.1. Implementation note for Claude Code: phases 0–4 are buildable immediately alongside their build-order steps; Phase A files compile as `#[ignore]`d stubs with their expected verdicts recorded, activated when the analyzer phase opens.*

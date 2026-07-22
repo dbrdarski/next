@@ -544,9 +544,9 @@ mod phase2 {
 mod phase3 {
     use super::*;
 
-    // ── T-01…T-14: one minimal program per trap class (13 remain; the former
-    //    fourteenth, unprintable-interpolation, is deleted — ruled total; the ID
-    //    range stays stable, the case is superseded by PR-01…05). ──────────────
+    // ── T-01…T-13: one minimal program per trap class (renumbered — erratum
+    //    2026-07-18; the former fourteenth, unprintable-interpolation, is deleted
+    //    by the total-interpolation ruling — see PR-01…05). ─────────────────────
 
     #[test]
     fn t01_unbound_evaluation() {

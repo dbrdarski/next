@@ -90,28 +90,38 @@ shape. Sound today; tracked here so the rebuild is deliberate.
   parameter (analyzer-internal; surface writes exact only). We model exact `Record`
   + bare `HasField`, so open record *patterns* lose per-field contracts (they narrow
   to `∩ HasField` only). Sound, precision-lossy.
-- **μ v0.5 §6 universal interning:** closures should intern shallowly with runtime
-  `==` a pointer test and Algorithm B canonicalization-internal; we run Algorithm B
-  at compare time over plain allocations. Equal on every `==` result; differs in
-  harness pointer observability (suite register PENDING-§5). Noted in
-  `src/oracle/equal.rs`.
+- **Universal interning (μ v0.5 §6; companion §1/§3/§7 as of 2026-07-22):**
+  closures should intern shallowly (key = canonical-code pointer + capture
+  pointers) with runtime `==` a pointer test and Algorithm B
+  canonicalization-internal; we run Algorithm B at compare time over plain
+  allocations. Equal on every `==` result — every FE row asserts final
+  expectations and passes today; differs only in harness pointer observability.
+  The companion itself scopes the mechanism to §5 ("group windows, joint
+  μ-canonicalization, late-twin fold-in land with §5; until then PENDING-§5 with
+  expectations fixed"), so the re-architecture is the §5 canonicalizer-wiring
+  increment. Noted in `src/oracle/equal.rs`.
 - **`Concat` C.2 rows:** `Concat ⊑ Kind(Tuple)`, kind-vs-Concat disjointness, and
   unequal-segment-count alignment (family §4) are absent — all land `Unproven`
   (sound). The §4 alignment procedure is the scheduled fix.
 
 ## Doc errata (for the author)
 
-- The **semantics companion v0.1** still lists the deleted `unprintable-interpolation`
-  trap (§3 Template row and the §6 concordance table) — superseded by the
-  interpolation-total ruling [user, 2026-07-18] and test-suite line 57.
-- **[ask-author] T-10 / D-01 conflict — ternary on a non-Boolean.** The kernel-AST
-  §4 catalog lowers `c ? t : e` to `Match(c, [Arm(PConst(true), t),
+- ~~The **semantics companion v0.1** still lists the deleted
+  `unprintable-interpolation` trap~~ — **CLOSED [author, 2026-07-22]**: the
+  companion now integrates the total-interpolation ruling (§3 render rules match
+  the implementation detail-for-detail), §6 states thirteen classes, and the suite
+  renumbered to T-01…T-13.
+- **[ask-author] T-10 / D-01 conflict — ternary on a non-Boolean. STILL OPEN.**
+  The kernel-AST §4 catalog lowers `c ? t : e` to `Match(c, [Arm(PConst(true), t),
   Arm(PConst(false), e)])`, under which `5 ? 1 : 2` *completes without value*
   (trapping **expecting-seat** only at a demanding seat). The semantics companion's
   trap-seed list and suite row T-10 instead expect **TRAP tested-seat** ("post-
   desugar guard"), which would require a guard-based lowering (e.g. bind-then-
   guard: `{ tmp = c; when tmp => t; => e }` — also single-evaluation). The same
-  choice governs non-Boolean `a && b` / `a || b` / `!x`. The implementation follows
+  choice governs non-Boolean `a && b` / `a || b` / `!x`. Note: the 2026-07-22
+  erratum pass edited the very T-row line and **kept** "post-desugar guard" — some
+  evidence the tested-seat expectation is intentional — but the catalog's closed
+  lowering stands unamended, so the conflict remains. The implementation follows
   the closed catalog; T-10 ships `#[ignore]` with the conflict recorded, and
   T-10a (a non-Boolean *arm guard* traps tested-seat — true under either ruling)
   runs in its place. **Needs a ruling.**
