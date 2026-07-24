@@ -25,7 +25,7 @@ mod operation;
 pub mod recursive;
 mod subcontract;
 pub use expr::{ContractEnv, build_contract_env, eval_contract};
-pub use length::{Len, Stamp, len};
+pub use length::{Len, Stamp, intersection_empty_by_length, len, restrict_len};
 pub use operation::{OpResult, OpSafety, analyze_operation};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};
 pub use subcontract::{Verdict, subcontract};
@@ -101,6 +101,12 @@ pub enum Contract {
     /// (C§9). Meaningful only relative to a [`recursive::RecGroup`]; bare, it
     /// denotes nothing (`contains` is `false`) — recursive code resolves it first.
     Ref(String),
+    /// **Length restriction** (tuple-length family §3): `{ t ∈ ⟦T⟧ : |t| ∈ ⟦D⟧ }`
+    /// — the aggregates in `T` whose length satisfies the Number contract `D`.
+    /// **Analyzer-derived, never user syntax** (so the C§9 admissibility perimeter
+    /// is untouched); positive in `T`, monotone in `D`. Build via
+    /// [`Contract::length_restricted`], which applies the canonical rows.
+    LengthRestricted(Box<Contract>, Box<Contract>),
 }
 
 /// The kind of a value, or `None` for an Indeterminate value.
@@ -163,6 +169,26 @@ impl Contract {
         }
     }
 
+    /// Smart constructor for [`Contract::LengthRestricted`], applying the family's
+    /// canonical rows (§3): `LengthRestricted(Bottom, _) → Bottom`;
+    /// `LengthRestricted(_, Bottom) → Bottom`; `LengthRestricted(T, TopLength) → T`;
+    /// `LengthRestricted(LengthRestricted(T, D₁), D₂) → LengthRestricted(T, D₁ ∩ D₂)`.
+    /// The structural lowering (exact-tuple filter, Union distribution, `Repeat`
+    /// unroll) is [`length::restrict_len`]; this constructor is the pure algebra.
+    pub fn length_restricted(t: Contract, d: Contract) -> Contract {
+        if matches!(t, Contract::Bottom) || matches!(d, Contract::Bottom) {
+            return Contract::Bottom;
+        }
+        if is_top_length(&d) {
+            return t;
+        }
+        if let Contract::LengthRestricted(inner_t, inner_d) = t {
+            let merged = Contract::Intersection(inner_d, Box::new(d));
+            return Contract::LengthRestricted(inner_t, Box::new(merged));
+        }
+        Contract::LengthRestricted(Box::new(t), Box::new(d))
+    }
+
     /// Denotational membership (C§16): whether `v ∈ ⟦self⟧`.
     pub fn contains(&self, v: &ValueRef) -> bool {
         match self {
@@ -191,7 +217,49 @@ impl Contract {
             // A bare reference has no ambient group to resolve against; recursive
             // membership goes through `recursive::contains`.
             Contract::Ref(_) => false,
+            Contract::LengthRestricted(t, d) => {
+                t.contains(v) && value_length(v).is_some_and(|n| nat_in(d, n))
+            }
         }
+    }
+}
+
+/// The length of a value for the tuple-length family: a tuple's arity or a
+/// record's field count (`None` for a non-aggregate — it has no length, so no
+/// length restriction admits it).
+pub(crate) fn value_length(v: &ValueRef) -> Option<usize> {
+    v.as_tuple().map(<[ValueRef]>::len).or_else(|| v.as_record().map(|r| r.len()))
+}
+
+/// Whether the natural number `n` inhabits a **Number** contract `d` (a length
+/// domain), without needing an interned value.
+pub(crate) fn nat_in(d: &Contract, n: usize) -> bool {
+    let r = Rational::from_integer(BigInt::from(n));
+    match d {
+        Contract::Top | Contract::Kind(Kind::Number) => true,
+        Contract::Bottom => false,
+        Contract::Range(lo, hi) => *lo <= r && r <= *hi,
+        Contract::Greater(m) => r > *m,
+        Contract::GreaterEq(m) => r >= *m,
+        Contract::Less(m) => r < *m,
+        Contract::LessEq(m) => r <= *m,
+        Contract::Mod { n: modulus, r: rem } => {
+            !modulus.is_zero() && (BigInt::from(n) - rem).mod_floor(modulus).is_zero()
+        }
+        Contract::Union(a, b) => nat_in(a, n) || nat_in(b, n),
+        Contract::Intersection(a, b) => nat_in(a, n) && nat_in(b, n),
+        Contract::Difference(a, b) => nat_in(a, n) && !nat_in(b, n),
+        _ => false,
+    }
+}
+
+/// Whether `d` admits **every** natural length — the identity domain for
+/// `LengthRestricted`. `Top`, `Kind(Number)`, and `GreaterEq(m ≤ 0)` qualify.
+fn is_top_length(d: &Contract) -> bool {
+    match d {
+        Contract::Top | Contract::Kind(Kind::Number) => true,
+        Contract::GreaterEq(m) => *m <= Rational::from(0),
+        _ => false,
     }
 }
 

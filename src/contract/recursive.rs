@@ -205,6 +205,10 @@ pub fn contains(group: &RecGroup, c: &Contract, v: &ValueRef) -> bool {
         Contract::Union(a, b) => contains(group, a, v) || contains(group, b, v),
         Contract::Intersection(a, b) => contains(group, a, v) && contains(group, b, v),
         Contract::Difference(b, e) => contains(group, b, v) && !contains(group, e, v),
+        // Resolve the base through the group (a bare `Contract::contains` can't).
+        Contract::LengthRestricted(t, d) => {
+            contains(group, t, v) && super::value_length(v).is_some_and(|n| super::nat_in(d, n))
+        }
         Contract::Tuple(elems) => match v.as_tuple() {
             Some(items) => {
                 items.len() == elems.len()
@@ -408,6 +412,12 @@ fn prod_eval(
         }
         // Reference to a name outside the group — treat as opaque (no witness).
         Contract::Ref(_) => None,
+        // A length-restricted contract: an inhabitant of the base whose length
+        // fits `d`. Sound but incomplete — samples the base (recursive bases yield
+        // no sample, so `None`, i.e. not-yet-productive).
+        Contract::LengthRestricted(t, d) => super::subcontract::sample(t, interner)
+            .into_iter()
+            .find(|x| super::value_length(x).is_some_and(|n| super::nat_in(d, n)) && contains(group, t, x)),
     }
 }
 
@@ -521,6 +531,13 @@ fn exact_eval(
                 .collect();
             join_product(voices.into_iter())
         }
+        // A length restriction is empty at least when its base is; when the base
+        // is inhabited it may still be empty (no fitting length), so the witness
+        // pass (`prod_eval`) settles NonEmpty vs Unproven.
+        Contract::LengthRestricted(t, _) => match exact_eval(group, t, productive, verdict, interner) {
+            E3::Empty => E3::Empty,
+            _ => E3::Unproven,
+        },
         // Every remaining leaf (Top, non-Function Kind, bounds, Mod, Geo, Equals,
         // Indeterminate, HasField) is inhabited.
         _ => E3::NonEmpty,

@@ -152,6 +152,17 @@ pub fn len(group: &RecGroup, c: &Contract, interner: &mut Interner) -> Len {
         }
         Contract::Difference(base, _) => len(group, base, interner).weakened(),
 
+        // `Λ(LengthRestricted(T, D)) = Λ(T) ∩ ⟦D⟧` (§3): the stamped intersection,
+        // `Exact` whenever `len(T)` is; the disjointness-to-Bottom case is exact.
+        Contract::LengthRestricted(t, d) => {
+            let lt = len(group, t, interner);
+            if super::disjoint(&lt.contract, d) {
+                return Len::exact(Contract::Bottom);
+            }
+            let contract = Contract::Intersection(Box::new(lt.contract), d.clone());
+            Len { contract, stamp: lt.stamp }
+        }
+
         // Anything else carries no tuple length.
         _ => Len::exact(Contract::Bottom),
     }
@@ -545,4 +556,92 @@ fn periodic_form(achievable: &BTreeSet<u64>, period: u64, bound: u64) -> Contrac
     }
     parts.sort_by_key(min_of);
     union_all(parts)
+}
+
+// ── §3: the refutation discipline and the reverse transfer ───────────────────
+
+/// Whether `⟦a⟧ ∩ ⟦b⟧` is provably empty **by length** (§3.i): their length
+/// contracts are disjoint. **Sound even when both stamps are `Approx`** — an upper
+/// approximation of a disjoint length set is sound disjointness evidence (this is
+/// the one refutation `Approx` lengths *are* allowed to make; they never supply a
+/// subcontract refutation witness, §3.ii/v).
+pub fn intersection_empty_by_length(
+    group: &RecGroup,
+    a: &Contract,
+    b: &Contract,
+    interner: &mut Interner,
+) -> bool {
+    let la = len(group, a, interner).contract;
+    let lb = len(group, b, interner).contract;
+    super::disjoint(&la, &lb)
+}
+
+/// The defined reverse transfer (§3): `⟦restrict_len(T, D)⟧ = { t ∈ ⟦T⟧ : |t| ∈
+/// ⟦D⟧ }`, or a marked sound over-approximation. Lowers structurally where a rule
+/// fires (exact-tuple filter, `Union` distribution, `Repeat` unroll against a pure
+/// lower bound); everything else is the derived `LengthRestricted(T, D)` form.
+///
+/// `interner` is carried for the owed recursive rule ("recursive contracts take
+/// certified unfoldings for demand-depth-bounded D", §3) — not yet consumed.
+#[allow(clippy::only_used_in_recursion)]
+pub fn restrict_len(group: &RecGroup, t: &Contract, d: &Contract, interner: &mut Interner) -> Contract {
+    if matches!(t, Contract::Bottom) || matches!(d, Contract::Bottom) {
+        return Contract::Bottom;
+    }
+    match t {
+        // Exact tuple: keep iff its fixed length is admitted, else Bottom.
+        Contract::Tuple(elems) => {
+            if super::nat_in(d, elems.len()) {
+                t.clone()
+            } else {
+                Contract::Bottom
+            }
+        }
+        // Union distributes; drop Bottom branches.
+        Contract::Union(a, b) => {
+            let ra = restrict_len(group, a, d, interner);
+            let rb = restrict_len(group, b, d, interner);
+            match (matches!(ra, Contract::Bottom), matches!(rb, Contract::Bottom)) {
+                (true, true) => Contract::Bottom,
+                (true, false) => rb,
+                (false, true) => ra,
+                (false, false) => Contract::Union(Box::new(ra), Box::new(rb)),
+            }
+        }
+        // `Repeat(E)` against a pure lower bound `GreaterEq(n)`: unroll `n` copies —
+        // `Concat(Tuple(E×n), Repeat(E))`. Bounded / modular `D` cannot unroll this
+        // way (the tail is unbounded), so it stays symbolic.
+        Contract::Ref(name) if group.defs.contains_key(name) => {
+            match (repeat_element(group, name), d) {
+                (Some(elem), Contract::GreaterEq(m)) => match to_nat(m) {
+                    Some(n) if n <= 4096 => {
+                        let head = Contract::Tuple(vec![elem; n as usize]);
+                        Contract::concat([head, Contract::Ref(name.clone())])
+                    }
+                    _ => Contract::length_restricted(t.clone(), d.clone()),
+                },
+                _ => Contract::length_restricted(t.clone(), d.clone()),
+            }
+        }
+        _ => Contract::length_restricted(t.clone(), d.clone()),
+    }
+}
+
+/// Recognize the `Repeat(E)` shape — `R = Union(Tuple(), Concat(Tuple([E]), R))` —
+/// and return its element contract `E`.
+fn repeat_element(group: &RecGroup, name: &str) -> Option<Contract> {
+    let Some(Contract::Union(a, b)) = group.defs.get(name) else { return None };
+    let is_empty_tuple = |c: &Contract| matches!(c, Contract::Tuple(e) if e.is_empty());
+    let rec = if is_empty_tuple(a) {
+        b
+    } else if is_empty_tuple(b) {
+        a
+    } else {
+        return None;
+    };
+    let Contract::Concat(segs) = &**rec else { return None };
+    match segs.as_slice() {
+        [Contract::Tuple(one), Contract::Ref(r)] if one.len() == 1 && r == name => Some(one[0].clone()),
+        _ => None,
+    }
 }

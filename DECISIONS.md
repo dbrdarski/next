@@ -6,6 +6,45 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-24 — Tuple family §3: refutation discipline + restrictLen/LengthRestricted
+
+`Contract::LengthRestricted` + `restrict_len` + `intersection_empty_by_length` + 6
+tests (TL-16/17/20 + canonical rows + exact-tuple filter). Full tree 239 lib + 111
+conformance, clippy clean.
+
+- **`Contract::LengthRestricted(T, D)`** — the analyzer-derived form denoting
+  `{ t ∈ ⟦T⟧ : |t| ∈ ⟦D⟧ }`. Smart constructor `Contract::length_restricted`
+  applies the canonical rows: `Bottom` on either side → `Bottom`; `TopLength`
+  (`GE(0)`/`Top`) → `T`; nested → merge domains by intersection. Membership
+  (`t ∈ T ∧ value_length(t) ∈ D` via `nat_in`, a value-free numeric-nat test),
+  `len` (`Λ(T) ∩ D`, `Exact` when `len(T)` is, disjoint→`Bottom` exact), sample,
+  and group-aware `recursive::contains` all handle it.
+- **`intersection_empty_by_length` (§3.i/v)** — `⟦a⟧ ∩ ⟦b⟧` is empty when the two
+  length contracts are disjoint. **Sound even when both stamps are `Approx`** —
+  upper approximations of disjoint length sets are sound disjointness evidence.
+  This is the *one* refutation `Approx` lengths may make. **TL-20:** a `(GE(5),
+  Approx)` shape against a `Tuple(a, b)` (length 2) → intersection refuted.
+- **`restrict_len` (the reverse transfer)** — lowers structurally: exact tuple →
+  keep/`Bottom` by its fixed length; `Union` distributes (dropping `Bottom`
+  branches); **`Repeat(E)` against a pure lower bound `GE(n)` unrolls** to
+  `Concat(Tuple(E×n), Repeat(E))` (recognized via `repeat_element`); everything
+  else → the symbolic form. **TL-17:** `restrict_len(Repeat(Number), GE(1))` →
+  `Concat(Tuple(Number), R)` (excludes `[]`, includes `[7]`); a modular `D` falls
+  to `LengthRestricted` with exact membership (even lengths only).
+- **The refutation discipline (§3.ii/iii/v) holds by construction** — `subcontract`
+  carries **no length-based refutation**, so an `Approx`-source length mismatch can
+  never *manufacture* a `Refuted`; a recursive `Refuted` still comes only from an
+  enumerated realizable inhabitant witness (**TL-16**: `Repeat(Number) ⊄
+  Tuple(Number, Number)` is `Refuted` by the real witness `[1]`, or `Unproven` —
+  never a length fabrication).
+- **Scope:** §4 segment alignment (forced-boundary peeling, `ElementRefutation`,
+  which closes the `Concat ⊑ Concat` unequal-count gap) and §5 grapheme seams are
+  next. `restrict_len`'s recursive certified-unfolding rule (demand-depth-bounded D)
+  is owed — `interner` is carried for it.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-24 — Canonical-library sync + suite reconciliation
 
 The author dropped in a `MANIFEST.sha256.txt` "stale-upload guard" and evolved the

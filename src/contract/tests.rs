@@ -1179,7 +1179,7 @@ mod contract_expr {
 mod tl {
     use super::*;
     use crate::contract::length::{Stamp, len};
-    use crate::contract::recursive::RecGroup;
+    use crate::contract::recursive::{self, RecGroup};
 
     fn rec_ref(n: &str) -> Contract {
         Contract::Ref(n.into())
@@ -1418,5 +1418,132 @@ mod tl {
         for n in [0, 1, 2, 7] {
             assert!(l.contract.contains(&i.integer(n)));
         }
+    }
+
+    // ── §3: refutation discipline + restrictLen / LengthRestricted ───────────
+
+    #[test]
+    fn tl20_disjoint_length_uppers_refute_intersection_even_when_approx() {
+        // `(GE(5), Approx)` against `Tuple(a, b)` (length exactly 2): the length
+        // uppers are disjoint (2 < 5), so the intersection is empty — Approx may
+        // refute *emptiness* through disjoint uppers.
+        use crate::contract::intersection_empty_by_length;
+        let mut i = Interner::new();
+        let g = empty_group();
+        // A contract whose length is (GE(5), Approx): tuples of length ≥ 5.
+        let at_least_five = Contract::LengthRestricted(Box::new(Contract::Kind(Kind::Tuple)), Box::new(ge(5)));
+        let pair = Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)]);
+        assert!(intersection_empty_by_length(&g, &at_least_five, &pair, &mut i));
+        // A length that DOES overlap must not be reported empty.
+        let triple = Contract::Tuple(vec![Contract::Top, Contract::Top, Contract::Top]);
+        let three_plus = Contract::LengthRestricted(Box::new(Contract::Kind(Kind::Tuple)), Box::new(ge(3)));
+        assert!(!intersection_empty_by_length(&g, &three_plus, &triple, &mut i));
+    }
+
+    #[test]
+    fn tl16_approx_source_mismatch_is_unproven_never_refuted() {
+        // A gcd-coarsened `Approx` source length mismatching a target proves
+        // nothing about subcontract inclusion — the verdict is *unproven*, never a
+        // refutation. `Repeat(Number)` (lengths {0,1,2,…}, Approx) vs an exact pair
+        // `Tuple(Number, Number)`: the recursive subcontract must not `Refuted` on
+        // length grounds. (It genuinely isn't a subcontract; the point is it lands
+        // Unproven, not a length-manufactured Refuted.)
+        let mut i = Interner::new();
+        let g = group(&[
+            (
+                "R",
+                union(
+                    Contract::Tuple(vec![]),
+                    Contract::concat([Contract::Tuple(vec![Contract::Kind(Kind::Number)]), rec_ref("R")]),
+                ),
+            ),
+            (
+                "P",
+                Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)]),
+            ),
+        ]);
+        // No length-based refutation exists in `subcontract`, so any Refuted must
+        // carry a real inhabitant witness (§3.ii). Here R ⊄ P: R admits `[1]`
+        // (length 1), which P rejects — a *realizable* witness, so Refuted is
+        // legitimate. The discipline we assert: the witness genuinely inhabits R∖P.
+        match recursive::subcontract(&g, &rec_ref("R"), &rec_ref("P"), &mut i) {
+            Verdict::Refuted(w) => {
+                assert!(recursive::contains(&g, &rec_ref("R"), &w), "witness ∈ R (realizable)");
+                assert!(!recursive::contains(&g, &rec_ref("P"), &w), "witness ∉ P");
+            }
+            // Unproven is also acceptable — never a manufactured length refutation.
+            Verdict::Unproven => {}
+            Verdict::Proven => panic!("R ⊄ P must not prove"),
+        }
+    }
+
+    #[test]
+    fn tl17_restrict_len_unrolls_repeat_and_falls_to_symbolic() {
+        use crate::contract::restrict_len;
+        let mut i = Interner::new();
+        let g = repeat("R", Contract::Kind(Kind::Number));
+
+        // Repeat(Number) restricted to GE(1) unrolls: Concat(Tuple(Number), R).
+        let unrolled = restrict_len(&g, &rec_ref("R"), &ge(1), &mut i);
+        assert_eq!(
+            unrolled,
+            Contract::Concat(vec![
+                Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+                rec_ref("R"),
+            ]),
+        );
+        // It denotes "≥ 1 Number": the empty tuple is excluded, a 1-tuple included.
+        let empty = i.tuple(vec![]);
+        assert!(!recursive::contains(&g, &unrolled, &empty));
+        let one = i.integer(7);
+        let single = i.tuple(vec![one]);
+        assert!(recursive::contains(&g, &unrolled, &single));
+
+        // A restriction that can't lower falls to the symbolic LengthRestricted.
+        let modular = Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) }; // even lengths
+        let symbolic = restrict_len(&g, &rec_ref("R"), &modular, &mut i);
+        assert!(matches!(symbolic, Contract::LengthRestricted(_, _)));
+        // Membership still exact: even-length all-Number tuples only.
+        let two = {
+            let (a, b) = (i.integer(1), i.integer(2));
+            i.tuple(vec![a, b])
+        };
+        assert!(recursive::contains(&g, &symbolic, &two), "length 2 (even) admitted");
+        assert!(!recursive::contains(&g, &symbolic, &single), "length 1 (odd) excluded");
+    }
+
+    #[test]
+    fn length_restricted_canonical_rows() {
+        let num = || Contract::Kind(Kind::Number);
+        // Bottom on either side ⇒ Bottom.
+        assert_eq!(Contract::length_restricted(Contract::Bottom, ge(1)), Contract::Bottom);
+        assert_eq!(
+            Contract::length_restricted(Contract::Kind(Kind::Tuple), Contract::Bottom),
+            Contract::Bottom,
+        );
+        // TopLength (GE(0)) ⇒ the base unchanged.
+        assert_eq!(Contract::length_restricted(num(), ge(0)), num());
+        // Nesting merges the domains by intersection.
+        let inner = Contract::length_restricted(Contract::Kind(Kind::Tuple), ge(2));
+        let outer = Contract::length_restricted(inner, Contract::LessEq(r(9)));
+        match outer {
+            Contract::LengthRestricted(t, d) => {
+                assert_eq!(*t, Contract::Kind(Kind::Tuple));
+                assert!(matches!(*d, Contract::Intersection(_, _)));
+            }
+            other => panic!("expected merged LengthRestricted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn restrict_len_exact_tuple_filter() {
+        use crate::contract::restrict_len;
+        let mut i = Interner::new();
+        let g = empty_group();
+        let pair = Contract::Tuple(vec![Contract::Top, Contract::Top]);
+        // Length 2 admitted by GE(1) ⇒ keep the tuple.
+        assert_eq!(restrict_len(&g, &pair, &ge(1), &mut i), pair);
+        // Length 2 excluded by GE(3) ⇒ Bottom.
+        assert_eq!(restrict_len(&g, &pair, &ge(3), &mut i), Contract::Bottom);
     }
 }

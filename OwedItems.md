@@ -35,11 +35,12 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
    membership coincides, but open-record *patterns* narrow to `∩ HasField` and lose
    per-field contracts. Sound, precision-lossy.
 
-4. **Tuple family §3–§5 not yet built** — `Concat` §1 + `len` §2 (stamps,
-   weighted-SCC solver) are in. Still owed by me: §3 refutation discipline +
-   `restrictLen`/`LengthRestricted`; **§4 segment alignment** (which closes the
-   `Concat ⊑ Concat` / kind-vs-Concat C.2 rows, currently `Unproven`); §5 grapheme
-   seam summaries. All specified in v0.3.1; ordinary build-order work.
+4. **Tuple family §4–§5 not yet built** — §1 `Concat` + §2 `len` + §3 refutation
+   discipline / `restrictLen`/`LengthRestricted` are in. Still owed by me:
+   **§4 segment alignment** (forced-boundary peeling, `ElementRefutation`, which
+   closes the `Concat ⊑ Concat` / kind-vs-Concat C.2 rows, currently `Unproven`);
+   §5 grapheme seam summaries; and `restrict_len`'s recursive certified-unfolding
+   rule. All specified in v0.3.1; ordinary build-order work.
 
 ## Still owed in the docs (Compendium C§17, patch 1.0.8)
 

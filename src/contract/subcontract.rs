@@ -392,5 +392,11 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
             }
             vec![interner.tuple(items)]
         }
+        // Length restriction: sample the base, keep those whose length fits `d`.
+        LengthRestricted(t, d) => {
+            let mut v = sample(t, interner);
+            v.retain(|x| super::value_length(x).is_some_and(|n| super::nat_in(d, n)));
+            v
+        }
     }
 }
