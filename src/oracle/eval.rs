@@ -759,8 +759,9 @@ fn grapheme_slices(units: &[u16]) -> Vec<Vec<u16>> {
 fn render_value(v: &ValueRef, nested: bool) -> String {
     match v.data() {
         ValueData::Str(u) => {
-            let s = String::from_utf16_lossy(u);
-            if nested { quote_string(&s) } else { s }
+            // Nested: quoted and losslessly escaped, so it round-trips (PR-03/08).
+            // Top level: raw — explicitly outside the round-trip law (PR-06).
+            if nested { quote_units(u) } else { String::from_utf16_lossy(u) }
         }
         ValueData::Number(n) => n.to_string(), // B2 printing
         ValueData::Boolean(b) => b.to_string(),
@@ -770,14 +771,23 @@ fn render_value(v: &ValueRef, nested: bool) -> String {
             format!("[{}]", parts.join(", "))
         }
         ValueData::Record(entries) => {
-            // Canonical order: sorted by key (field order ∉ identity, I-02).
-            let mut fields: Vec<(String, &ValueRef)> = entries
+            // Canonical order: **UTF-16 code-unit order** on the raw key (field
+            // order ∉ identity, I-02; the frozen record-key rule). Identifier keys
+            // render bare; any other key uses computed-key syntax so it round-trips
+            // (PR-07).
+            let mut fields: Vec<_> = entries.iter().collect();
+            fields.sort_by(|a, b| a.key.cmp(&b.key));
+            let parts: Vec<String> = fields
                 .iter()
-                .map(|e| (String::from_utf16_lossy(&e.key), &e.value))
+                .map(|e| {
+                    let key = if is_render_ident(&e.key) {
+                        String::from_utf16_lossy(&e.key)
+                    } else {
+                        format!("[{}]", quote_units(&e.key))
+                    };
+                    format!("{key}: {}", render_value(&e.value, true))
+                })
                 .collect();
-            fields.sort_by(|a, b| a.0.cmp(&b.0));
-            let parts: Vec<String> =
-                fields.iter().map(|(k, val)| format!("{k}: {}", render_value(val, true))).collect();
             format!("{{{}}}", parts.join(", "))
         }
         // Visibly non-parseable forms.
@@ -788,20 +798,58 @@ fn render_value(v: &ValueRef, nested: bool) -> String {
     }
 }
 
-/// Quote and escape a string for the literal fragment (the JS standard escapes).
-fn quote_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+/// Whether a record key renders as a bare identifier (grammar: `$`/`_`-free
+/// alphanumerics, alphabetic first — mirrors `lex::is_ident_start/continue`).
+/// Anything else needs computed-key syntax (PR-07).
+fn is_render_ident(key: &[u16]) -> bool {
+    let Ok(s) = String::from_utf16(key) else { return false }; // lone surrogate ⇒ not an ident
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c != '_' && c != '$' && c.is_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c != '_' && c != '$' && c.is_alphanumeric())
+}
+
+/// Quote and escape a UTF-16 string for the literal fragment (JS standard
+/// escapes), **losslessly**: a lone surrogate unit is escaped as `\uXXXX` (never
+/// U+FFFD, PR-08), so `parse ∘ print = identity` holds on the source-renderable
+/// fragment (PR-03/05).
+fn quote_units(units: &[u16]) -> String {
+    let mut out = String::with_capacity(units.len() + 2);
     out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
+    let mut i = 0;
+    while i < units.len() {
+        let u = units[i];
+        // A well-formed high+low surrogate pair decodes to one scalar.
+        let pair = (0xD800..=0xDBFF).contains(&u)
+            && matches!(units.get(i + 1), Some(&lo) if (0xDC00..=0xDFFF).contains(&lo));
+        if pair {
+            let cp = 0x10000 + (((u as u32) - 0xD800) << 10) + ((units[i + 1] as u32) - 0xDC00);
+            push_escaped(&mut out, char::from_u32(cp).expect("valid astral scalar"));
+            i += 2;
+            continue;
         }
+        if (0xD800..=0xDFFF).contains(&u) {
+            // A lone surrogate has no scalar value — escape the unit itself.
+            out.push_str(&format!("\\u{u:04X}"));
+            i += 1;
+            continue;
+        }
+        push_escaped(&mut out, char::from_u32(u as u32).expect("BMP scalar"));
+        i += 1;
     }
     out.push('"');
     out
+}
+
+fn push_escaped(out: &mut String, c: char) {
+    match c {
+        '"' => out.push_str("\\\""),
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        c => out.push(c),
+    }
 }

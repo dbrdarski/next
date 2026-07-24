@@ -364,6 +364,50 @@ fn pr05_parse_print_is_identity_on_the_literal_fragment() {
     }
 }
 
+#[test]
+fn pr06_top_level_string_is_raw() {
+    // A top-level String interpolates raw — explicitly outside PR-05's law.
+    assert_eq!(eval_str("`${\"abc\"}`"), "abc");
+    assert_eq!(eval_str("`x=${\"y\"}!`"), "x=y!");
+}
+
+#[test]
+fn pr07_non_ident_record_keys_use_computed_syntax() {
+    // Non-IDENT keys render with computed-key syntax, in UTF-16 code-unit order,
+    // and reparse to the same pointer.
+    assert_eq!(
+        eval_str("`${{a: 1, [\"a-b\"]: 2, [\"two words\"]: 3}}`"),
+        "{a: 1, [\"a-b\"]: 2, [\"two words\"]: 3}",
+    );
+    let mut i = Interner::new();
+    let original = eval_in(&mut i, "{a: 1, [\"a-b\"]: 2, [\"two words\"]: 3}");
+    let rendered = eval_in(&mut i, "`${{a: 1, [\"a-b\"]: 2, [\"two words\"]: 3}}`");
+    let printed = String::from_utf16_lossy(rendered.as_str_units().unwrap());
+    let reparsed = eval_in(&mut i, &printed);
+    assert!(original.ptr_eq(&reparsed), "PR-07 must round-trip: {printed}");
+}
+
+#[test]
+fn pr08_lone_surrogate_is_escaped_losslessly() {
+    // A lone surrogate unit is escaped individually (`\uD800`), never U+FFFD.
+    assert_eq!(eval_str(r#"`${["\uD800"]}`"#), r#"["\uD800"]"#);
+    // Round-trip preserves the exact unit (never a replacement char).
+    let mut i = Interner::new();
+    let original = eval_in(&mut i, r#"["\uD800"]"#);
+    let rendered = eval_in(&mut i, r#"`${["\uD800"]}`"#);
+    let printed = String::from_utf16_lossy(rendered.as_str_units().unwrap());
+    let reparsed = eval_in(&mut i, &printed);
+    assert!(original.ptr_eq(&reparsed), "PR-08 must round-trip losslessly: {printed}");
+}
+
+#[test]
+fn pr09_aggregate_with_function_is_deterministic_not_parseable() {
+    // Deterministic display text; not claimed parseable (no round-trip law).
+    assert_eq!(eval_str("`${[1, () => 1]}`"), "[1, <Function>]");
+    // Determinism: same program renders identically twice.
+    assert_eq!(eval_str("`${[1, () => 1]}`"), eval_str("`${[1, () => 1]}`"));
+}
+
 // ── Interning through evaluation ─────────────────────────────────────────────
 
 #[test]

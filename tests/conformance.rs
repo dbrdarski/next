@@ -197,6 +197,33 @@ mod phase0 {
         vtrue("a = [() => b]\nb = [() => a]\ny = [() => y]\na == b");
         vtrue("a = [() => b]\nb = [() => a]\ny = [() => y]\na == y");
     }
+
+    #[test]
+    fn fe07_act_kind_is_part_of_the_key() {
+        // Same params/body/captures but different actKind ⇒ unequal
+        // [companion review 2026-07-21].
+        assert_eq!(
+            eval("f = () => 1\n@effect g = () => 1\nf == g").as_boolean(),
+            Some(false),
+        );
+    }
+
+    #[test]
+    fn mu19_same_group_construction_reference_is_legal() {
+        // A reference to another group member *within construction* is an internal
+        // μ edge, never a read — the mutual group constructs without trapping.
+        num_eq(&eval("a = [() => b]\nb = [() => a]\na[0]()[0]()[0]()\n1"), 1);
+    }
+
+    #[test]
+    #[ignore = "PENDING-§5: MU-18 (open-member observation traps unbound-evaluation, Option A) needs the group-construction-window mechanism — the §5 canonicalizer. Without windows, `a` closes at its own statement and `a == a` is reflexively true."]
+    fn mu18_open_member_observation_traps() {
+        // a = [() => b]; seen = a == a; b = [() => a]  → TRAP unbound-evaluation.
+        assert_eq!(
+            trap("a = [() => b]\nseen = a == a\nb = [() => a]\nseen"),
+            TrapClass::UnboundEvaluation,
+        );
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -672,6 +699,33 @@ mod phase3 {
         assert!(original.ptr_eq(&reparsed));
     }
 
+    #[test]
+    fn pr06_top_level_string_raw() {
+        // Top-level String interpolates raw (no quotes) — outside PR-05's law.
+        assert_eq!(str_of(&eval("`${\"abc\"}`")), "abc");
+    }
+
+    #[test]
+    fn pr07_non_ident_keys_computed_syntax() {
+        // Non-IDENT keys → computed-key syntax, UTF-16 order, reparses.
+        assert_eq!(
+            str_of(&eval("`${{a: 1, [\"a-b\"]: 2, [\"two words\"]: 3}}`")),
+            "{a: 1, [\"a-b\"]: 2, [\"two words\"]: 3}",
+        );
+    }
+
+    #[test]
+    fn pr08_lone_surrogate_lossless() {
+        // A lone surrogate unit escapes individually (`\uD800`), never U+FFFD.
+        assert_eq!(str_of(&eval(r#"`${["\uD800"]}`"#)), r#"["\uD800"]"#);
+    }
+
+    #[test]
+    fn pr09_aggregate_with_function_deterministic() {
+        // Deterministic display text; not claimed parseable.
+        assert_eq!(str_of(&eval("`${[1, () => 1]}`")), "[1, <Function>]");
+    }
+
     // ── O: access & slices ───────────────────────────────────────────────────
 
     #[test]
@@ -1074,7 +1128,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "RECOVER: A-WRK grid texts must come verbatim from the project transcripts (journal.txt) — do not reconstruct from memory [awaiting the author]"]
+    #[ignore = "Phase A: RECOVER discharged — grids are in `next-phase-a-worked-examples-recovered.md` (verbatim from transcripts). Verification still needs the program-level analyzer (Part D recursion arc): factorial/countdown/where contract derivation, drift, fact-cycle pairs."]
     fn a_wrk_worked_example_grids() {
         unreachable!("blocked on the transcript grids");
     }

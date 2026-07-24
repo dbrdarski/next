@@ -6,6 +6,50 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-24 — Canonical-library sync + suite reconciliation
+
+The author dropped in a `MANIFEST.sha256.txt` "stale-upload guard" and evolved the
+kernel-AST, semantics companion, and test-suite. Verified all 14 canonical files
+green, then reconciled the implementation to the new material. Full tree: 234 lib +
+111 conformance, 13 ignores, clippy clean.
+
+- **Manifest caught real desync across three rounds** (recorded because the guard is
+  worth trusting): first pass flagged 3 stale specs + 2 absent files; a mid-round
+  upload *regressed* the test-suite to a pre-erratum T-14 copy (caught); the final
+  drop resolved everything. The kernel-AST §4 now carries my guard-based tested-seat
+  rows tagged `[RULED — user, 2026-07-22]`, so **implementation ↔ canonical spec are
+  aligned** on T-10 (I had flagged the risk that a re-export could drop my amendment;
+  it didn't).
+- **Two rulings landed in the canon**, both of which my code already satisfied:
+  T-10 (guard-based tested seats — `tested_match`); and **open-value observation =
+  Option A** (companion §6 folds it into `unbound-evaluation`) — my oracle already
+  traps an open-member read as `UnboundEvaluation` incidentally.
+- **New suite cases implemented (PR-06…09, FE-07, MU-19):**
+  - **PR-07 / PR-08 needed real renderer work** — `render_value` now sorts record
+    keys in **UTF-16 code-unit order** and renders non-identifier keys with
+    **computed-key syntax** (`["a-b"]: 2`), and quoting moved to `quote_units(&[u16])`
+    so a **lone surrogate escapes losslessly** (`\uD800`, never U+FFFD). Both
+    round-trip to the same pointer, verified.
+  - PR-06 (top-level raw String), PR-09 (deterministic `<Function>` in an aggregate),
+    FE-07 (act-kind distinguishes closures — `shape()` already includes `act_kind`),
+    MU-19 (same-group construction reference is legal) all passed as-is; added rows.
+- **MU-18 is PENDING-§5** — the open-member-observation trap needs the
+  group-construction-window mechanism (the §5 canonicalizer); without windows a
+  member closes at its own statement and `a == a` is reflexively true. `#[ignore]`
+  with that reason.
+- **A-WRK RECOVER discharged** — the grids are recovered in
+  `next-phase-a-worked-examples-recovered.md` (`journal.txt` was the drafting
+  agent's transcript mount, never a repo file). The stub's ignore reason updated:
+  no longer author-blocked; verification still needs the program-level analyzer.
+- **Registries reconciled:** the author's `OwedItems-CLOSED.md` archives the original
+  four items; `OwedItems.md` rewritten as the fresh current registry (drift +
+  C§17-remaining + Threads B/C). `PROGRESS.md` doc-sync matrix now all-green with a
+  manifest line.
+- **`// [ask-author]`:** the `String.units`/`points` element representation (E8
+  doesn't pin it) — unchanged.
+
+---
+
 ## 2026-07-22 — RULING [user]: strict tested seats — the T-10/D-01 conflict resolved
 
 **The ruling:** plain ternary conditions, `&&`/`||` left operands, and `!` operands

@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-22 · last increment `dac88d1` · 41 commits.
+**Snapshot:** 2026-07-24 · canonical library synced (manifest green) · reconciliation pass.
 
 ---
 
@@ -17,22 +17,24 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **230 passed, 0 failed, 0 ignored** |
-| Conformance suite (`tests/conformance.rs`, stable IDs) | **105 passed, 0 failed, 12 ignored** |
+| Unit tests (`cargo test --lib`) | **234 passed, 0 failed, 0 ignored** |
+| Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
+| Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
 
-Conformance by phase: **Phase 0** N-01…05, I-01…04, FE-01…06 all green ·
+Conformance by phase: **Phase 0** N-01…05, I-01…04, FE-01…07 green ·
 **Phase 1** P-01…30 green (P-27b ignored) · **Phase 2** D-01…16 all green ·
-**Phase 3** T-01…13 all green, PR-01…05, O-01…06, S-01…03, X-01/02, M-01…06
+**Phase 3** T-01…13 green, PR-01…09, O-01…06, S-01…03, X-01/02, M-01…06
 (M-04 ignored), FL-01…03, MOD-02 green / MOD-01,03,04,05 ignored · **Phase 4**
-H-01…05 green · **Phase A** 6 recorded stubs.
+H-01…05 green · **Phase A** 6 recorded stubs · **μ** MU-19 green / MU-18 ignored.
 
-The 12 ignores, by reason:
+The 13 ignores, by reason:
 - **module system staged** (5): P-27b, MOD-01, MOD-03, MOD-04, MOD-05 — imports
   parse; linking, module-file world distinction, and project errors are unbuilt.
 - **fuel harness absent** (1): M-04 (`DIVERGES` verdicts).
-- **Phase A** (6): program-level analyzer verdicts pending; A-WRK additionally
-  blocked on the author (see §3).
+- **PENDING-§5** (1): MU-18 (open-member observation trap needs the group window).
+- **Phase A** (6): program-level analyzer verdicts pending (A-WRK's RECOVER is now
+  discharged — grids recovered; verification still needs the analyzer).
 
 ## 2. Doc-sync matrix
 
@@ -40,29 +42,34 @@ Which normative document state this implementation is currently reconciled
 against. If the design side updates a doc, this table says whether the change has
 been absorbed.
 
-| Document | Version/patch absorbed | Read/synced | Notes |
+All 14 canonical files verified against `MANIFEST.sha256.txt` (2026-07-24). Every
+row below is the manifest-canonical version.
+
+| Document | Version/patch | Reconciled | Notes |
 |---|---|---|---|
-| Design compendium | v1.0 patch **1.0.8** | 2026-07-22 (audit) | C§17 owed list mirrored in OwedItems |
-| Grammar | v0.1 | current | L1/L2 now enforced in the parser |
-| Kernel AST | v0.1 + **2026-07-22 §4 amendment** | current | strict-tested-seat rows amended per ruling (I hold the pen on this edit — review it) |
-| Semantics companion | v0.1, author update of **2026-07-22** | 2026-07-22 | 13 classes; total interpolation; §7 RULED |
-| μ-canonicalization | v0.5 | reconciled 2026-07-19 | §6 universal interning: registered drift (OwedItems) |
-| Recursive contracts | v0.2 patch **0.2.2** | 2026-07-21 | Concat guardedness + sourceProgress implemented |
-| Tuple-length family | v0.3 patch **0.3.1** | 2026-07-21 | §1–§2 implemented; §3–§5 next |
-| Application & induction | v0.8 patch **0.8.1** | read 2026-07-21 | **not yet implemented** (the analyzer-core rebuild) |
-| Test suite | v0.1 + **T-13 erratum** | 2026-07-22 | stable IDs executable in `tests/conformance.rs` |
+| Design compendium | v1.0 patch **1.0.8** (frozen) | ✅ | C§17 owed list in OwedItems |
+| Grammar | v0.1 | ✅ | L1/L2 enforced in the parser |
+| Kernel AST | v0.1 + **§4 tested-seat amendment (author, 07-24)** | ✅ | canonical now carries the guard-based rows `[RULED 2026-07-22]`, matching `tested_match` |
+| Semantics companion | v0.1 + **review round (07-21) + §7 RULED** | ✅ | 13 classes; total interpolation; open-value obs = Option A (`unbound-evaluation`); actKind in the closure key (FE-07) |
+| μ-canonicalization | v0.5 | ✅ | §6 universal interning: registered drift, PENDING-§5 (OwedItems) |
+| Recursive contracts | v0.2 patch **0.2.2** | ✅ | Concat guardedness + sourceProgress |
+| Tuple-length family | v0.3 patch **0.3.1** | 🟡 | §1–§2 built; §3–§5 next |
+| Application & induction | v0.8 patch **0.8.1** | ⬜ | not yet implemented (the analyzer-core rebuild) |
+| Test suite | v0.1 + **07-24 additions** | ✅ | PR-06…09, FE-07, MU-18/19 implemented; A-WRK grids recovered |
+| Phase-A worked examples (recovered) | 2026-07-21 | 📄 | RECOVER discharged; verification needs the analyzer |
 
 ## 3. Needs design-side action
 
-1. **A-WRK grids (RECOVER)** — the suite spec says the worked-example grid texts
-   live in the project transcripts (`journal.txt` catalog) and must be recovered
-   *verbatim, never reconstructed*. **`journal.txt` is not in the repo.** Blocks
-   the A-WRK stub only.
-2. **E8 `String.units` / `String.points` element representation** — not pinned by
-   the docs; implemented as Tuples of Numbers (code units / code points), lengths
-   only asserted (S-02). `// [ask-author]` in `src/oracle/harness.rs`. Low stakes.
-3. *(Nothing else is blocked on a ruling. The former T-10/D-01 conflict was ruled
-   2026-07-22 and is implemented — see ledger.)*
+**Nothing is blocking.** All recent asks were resolved this cycle: T-10 ruled
+(guard-based, implemented + now in the canonical §4); open-value observation ruled
+Option A (implemented incidentally); A-WRK RECOVER discharged (grids recovered).
+
+Low-stakes / for-info only:
+1. **E8 `String.units`/`points` element representation** — docs don't pin it;
+   Tuples of Numbers here, lengths only asserted (S-02). `// [ask-author]` in
+   `src/oracle/harness.rs`.
+2. **Open design threads B & C** — no spec change, block nothing; the tests that
+   would move if Thread C is ruled are catalogued in `OwedItems.md`.
 
 ## 4. Subsystem status map
 
@@ -138,3 +145,5 @@ alignment) · C§17's still-owed doc items (per-pair tables, remaining
 | 2026-07-22 | `7508c8c` | Conformance suite: stable IDs; 7 parser/desugar fixes | “Conformance suite aligned” |
 | 2026-07-22 | `017f5ae` | Author doc updates read + synced (T-13, §7 RULED) | commit message |
 | 2026-07-22 | `dac88d1` | **Ruling implemented:** strict tested seats (T-10) | “RULING [user]: strict tested seats” |
+| 2026-07-22 | `5e41ecb` | PROGRESS.md added (state snapshot for the design loop) | commit message |
+| 2026-07-24 | (this) | Canonical library synced (manifest); reconciliation: PR-06…09, FE-07, MU-18/19; A-WRK RECOVER discharged; lossless renderer | “Canonical-library sync + suite reconciliation” |
