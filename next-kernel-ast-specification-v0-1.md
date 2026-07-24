@@ -8,7 +8,7 @@
 
 ## 1. Node inventory — expressions
 
-Every expression node evaluates to an interned value or participates in an act body's sequencing. `Expr :=` one of:
+Every expression node evaluates to an interned value (B1 — universal; closures shallow-keyed) or participates in an act body's sequencing. `Expr :=` one of:
 
 **`Const(v)`** — an interned value embedded directly. Post-resolution form of literals and of the prelude names `true`/`false`/`null` (which are bindings at the surface, values in canonical code). Numbers are exact rationals (B2); strings UTF-16 (B1); functions appear as `Const` only via `Equals(<interned function value>)`-style constancy — lambdas construct, `Const` embeds what construction produced.
 
@@ -62,20 +62,31 @@ Invariants: patterns are **exact by default** — `rest` opens (captured or igno
 
 Every surface form not named in §§1–3 lowers here, **before identity and contract analysis** — the analyzer never sees sugar.
 
-**Amendment [user ruling, 2026-07-22 — resolving the T-10 concordance conflict]:** the strict Boolean forms (`? :`, `&&`, `\|\|`, `!`) lower to **guard-based** scrutinee-less matches, not PConst-arm matches: plain ternary conditions, `&&`/`\|\|` left operands, and `!` operands are strict tested seats and **trap tested-seat on non-Booleans regardless of result position**. Single evaluation is preserved by bind-then-guard, degenerate here — each tested operand occurs exactly once, in the guard. Escaped `~` forms remain falsy-set *matches* (rows unchanged).
-
 | Surface | Kernel |
 |---|---|
 | `# expr` (hask) | `Lambda` over the hole positions; fresh numbering per nested `#`; `^_n` escapes rebind to the enclosing generated lambda's parameters (E4) |
 | `x \|> f` · `f <\| x` | `Apply(f, [x])` — application, nothing else (E2) |
-| `c ? t : e` | `Match(∅, [Arm(guard: c, t), Arm(e)])` — the condition sits in a **guard**, a strict tested seat: non-Boolean → **trap: tested-seat** regardless of result position (T-10) **[RULED — user, 2026-07-22; supersedes the PConst-arm lowering]**. Single evaluation holds because the condition occurs exactly once, in the guard — the degenerate bind-then-guard (a tmp bind is needed only if a lowering references the tested value again) |
-| `a && b` | `Match(∅, [Arm(guard: a, b), Arm(Const(false))])` — left operand a strict tested seat (E10's `a ? b : false`, guard form) **[RULED — 2026-07-22]** |
-| `a \|\| b` | `Match(∅, [Arm(guard: a, Const(true)), Arm(b)])` **[RULED — 2026-07-22]** |
+| `c ? t : e` | `Match(∅, [Arm(guard: c, t), Arm(e)])` — **the condition is a strict tested seat** [RULED — user, 2026-07-22]: guard-based and scrutinee-less, so a non-Boolean traps **tested-seat immediately, regardless of result position** |
+| `a && b` | `Match(∅, [Arm(guard: a, b), Arm(Const(false))])` (E10's `a ? b : false`) [RULED — user, 2026-07-22] |
+| `a \|\| b` | `Match(∅, [Arm(guard: a, Const(true)), Arm(b)])` [RULED — user, 2026-07-22] |
 | `~a \|\| b` · `~a && b` | selection matches over the exact falsy set: `Match(a, [Arm(PConst(false), …), Arm(PConst(null), …), Arm(PBind(x), …)])` — the truthy arm's narrowing **is** the accumulated Difference `Difference(C, {Equals(false), Equals(null)})`; no truthiness primitive exists (E10) |
-| `!x` | `Match(∅, [Arm(guard: x, Const(false)), Arm(Const(true))])` — operand a strict tested seat **[RULED — 2026-07-22]** |
+| `!x` | `Match(∅, [Arm(guard: x, Const(false)), Arm(Const(true))])` [RULED — user, 2026-07-22] |
 | `!~x` | the falsy-set match emitting Booleans |
 | `a ?? b` | `Match(a, [Arm(PConst(null), b), Arm(PBind(v), Ref(v))])` — scrutinee evaluated once; differs from `~a \|\| b` exactly on `false` (E10) |
 | block bodies | the same `Match` node, scrutinee absent, bindings/statements interleaved (E10 — one kernel node) |
+
+**The strict-tested-seat lowering [RULED — user, 2026-07-22; resolves the T-10/D-01 conflict].** The general recipe is
+**bind-then-guard**: bind the tested operand to a temporary, then guard on it — the binding is what preserves single
+evaluation for lowerings that reference the tested value *again* in a result. In the four rows above the recipe is
+**degenerate**: each tested operand occurs exactly once, in the guard, and the results are branch expressions or Boolean
+constants — so no temporary is needed and none is emitted. Recorded here so the simplification is visibly the same law
+rather than a shortcut. **Behavioral delta from the superseded PConst-arm rows:** a non-Boolean operand previously fell
+through every arm to `CompletedWithoutValue`, surfacing as an **expecting-seat** error only at a demanding seat and not at
+all at a statement seat; it now traps **tested-seat** at the operand, immediately, in every position — which is what C§E10
+requires ("tested seats demand `Kind(Boolean)` **on arrival**, checked and propagated like every operation demand") and what
+C§7's fire-even-when-unused discipline requires. Boolean operands are observably unchanged. **The escaped `~` forms and
+`??` keep their falsy-set / null-set matches** — they are not tested seats; only the four rows above are.
+
 | `p₁ \| p₂ => e` | arm expansion: `Arm(p₁, e); Arm(p₂, e)` — remainder = union of consumptions, unchanged |
 | `^name` in a pattern | equality guard on the arm |
 | `x +:= e` (and family) | `Write(x, PrimOp(op, [Ref(x), e]))` |
@@ -100,6 +111,6 @@ New `ActBind` kinds for the reactive fence (`@reactive`, `@computed`) and any fu
 
 ## 8. Conformance
 
-A conforming pipeline: parser (grammar v0.1) → **desugar (§4, closed)** → intern (§5) → oracle evaluation (§6 semantics; the truth source) and, later, analysis (Parts C/D) over the same canonical forms. The oracle implements: interned values, late binding, the falsy-set matches, one-step `?.` totals, clamped slices, staging/publication for mutator bodies, Failure values as plain data, the completion triple. Conformance seeds join Part I's suite: every §4 row as a desugar-equivalence case; `x = [() => x]` interning; `y/z` μ-equality; the `?? vs ~||` false-distinction pair; a `Write` equality-guard no-op case; a `CompletedWithoutValue`-at-statement-seat vs expecting-seat pair.
+A conforming pipeline: parser (grammar v0.1) → **desugar (§4, closed)** → intern (§5) → oracle evaluation (§6 semantics; the truth source) and, later, analysis (Parts C/D) over the same canonical forms. The oracle implements: interned values (closures shallow-keyed), late binding, the falsy-set matches, one-step `?.` totals, clamped slices, staging/publication for mutator bodies, Failure values as plain data, the completion triple. Conformance seeds join Part I's suite: every §4 row as a desugar-equivalence case; `x = [() => x]` interning; `y/z` μ-equality; the `?? vs ~||` false-distinction pair; a `Write` equality-guard no-op case; a `CompletedWithoutValue`-at-statement-seat vs expecting-seat pair.
 
 *End of Kernel AST Specification v0.1. The semantics companion is the remaining pre-code artifact.*

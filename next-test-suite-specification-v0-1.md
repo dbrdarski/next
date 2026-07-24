@@ -23,6 +23,7 @@
 | FE-04 | `y = [() => y]; z = [() => z]; y == z` | **PENDING-§5** (F7 flag retired — closures intern) |
 | FE-05 | group pair: `a = [() => b]; b = [() => a]; a2 = [() => b]; a == a2` | VALUE true **[RULED — shape identity, 2026-07-17]**; PENDING-§5 mechanism |
 | FE-06 | symmetric collapse: the same group plus `y = [() => y]`: `a == b` and `a == y` | VALUE true, true **[RULED — the two-steps-of-y principle]**; PENDING-§5 |
+| FE-07 | same parameter pattern, body, and captures, different `actKind` (`pure () => 1` vs `effect () => 1`) | VALUE **unequal** — actKind is part of the canonical Lambda key [companion review 2026-07-21] |
 
 ## Phase 1 — Lexer & parser (grammar v0.1)
 
@@ -54,7 +55,7 @@ Each row: structural equality of desugar output with the hand-built kernel term,
 
 ## Phase 3 — Oracle semantics
 
-**T-01…T-13 — one minimal program per trap class [renumbered — erratum 2026-07-18]:** unbound-evaluation (`f()` before `f = …` at same level... via forward *call* at evaluation) · world-admission (`fetch(url)` in a pure function; `Write` outside mutator; effect called from mutator) · expecting-seat (`x = m()` where m's Match falls through) · argument-obligation (`((a, b) => a)(1)`) · operation-safety (`1 + "a"`) · undischarged-Indeterminate (`(1/0) < 3`) · null-receiver (`null.x`) · absent-field (`{a:1}.b`) · index-bounds (`[1,2][5]`, `[1,2][-3]`) · tested-seat (`5 ? a : b` post-desugar guard) · refuted-binding (`[a, b] = [1]`) · spread-kind (`f(...5)`, `{ ...[1] }`) · computed-key (`{ [5]: v }`). *(The former fourteenth class, unprintable-interpolation, is deleted — interpolation ruled total [user, 2026-07-18]; see PR-01…05.)*
+**T-01…T-13 — one minimal program per trap class [renumbered — erratum 2026-07-18]:** unbound-evaluation (`f()` before `f = …` at same level... via forward *call* at evaluation; **and, under Option A, observation of an open group member — MU-18** [companion review 2026-07-21, pending the author's ratification]) · world-admission (`fetch(url)` in a pure function; `Write` outside mutator; effect called from mutator) · expecting-seat (`x = m()` where m's Match falls through) · argument-obligation (`((a, b) => a)(1)`) · operation-safety (`1 + "a"`) · undischarged-Indeterminate (`(1/0) < 3`) · null-receiver (`null.x`) · absent-field (`{a:1}.b`) · index-bounds (`[1,2][5]`, `[1,2][-3]`) · tested-seat (`5 ? a : b` post-desugar guard) · refuted-binding (`[a, b] = [1]`) · spread-kind (`f(...5)`, `{ ...[1] }`) · computed-key (`{ [5]: v }`). *(The former fourteenth class, unprintable-interpolation, is deleted — interpolation ruled total [user, 2026-07-18]; see PR-01…05.)*
 
 | ID | Case | Expected |
 |---|---|---|
@@ -62,7 +63,11 @@ Each row: structural equality of desugar output with the hand-built kernel term,
 | PR-02 | `` `${{b: 2, a: 1}}` `` | VALUE `"{a: 1, b: 2}"` — canonical sorted-key order |
 | PR-03 | `` `${["x"]}` `` | VALUE `"[\"x\"]"` — strings quoted-and-escaped inside structures |
 | PR-04 | `` `${f}` `` for any function · `` `${1/0}` `` and `` `${2/0}` `` | `"<Function>"` · both `"<Indeterminate _/0>"` — determinism under interning |
-| PR-05 | property: parse ∘ print = identity on the literal-formed fragment | harness law |
+| PR-05 | property: parse ∘ print = identity on the **source-renderable fragment** (Boolean, Null, Number, nested-seat String, and Tuple/Record recursively over those) | harness law [scoped, companion review 2026-07-21] |
+| PR-06 | `` `${"abc"}` `` — top-level String interpolates raw | VALUE `"abc"` (no quotes); **explicitly outside PR-05's property** |
+| PR-07 | `` `${{a: 1, ["a-b"]: 2, ["two words"]: 3}}` `` — non-IDENT keys | VALUE uses computed-key syntax, keys in UTF-16 code-unit order; reparses to the same pointer |
+| PR-08 | quoted rendering of a String holding a lone surrogate unit | the unit is escaped individually (`\uD800`), never U+FFFD — lossless UTF-16 round-trip |
+| PR-09 | `` `${[1, () => 1]}` `` — aggregate containing a Function | VALUE deterministic display text; **not** claimed parseable (no PR-05 assertion) |
 | O-01 | `{a: null}.a` then `.b` on the result | first VALUE null; then TRAP null-receiver — stored null is data (E6) |
 | O-02 | `u?.name` with u null · `{a:1}?.b` · `[1]?.[9]` | VALUE null each — one step |
 | O-03 | `u?.name.first`, null arriving | TRAP null-receiver at the second hop (one-step rule) |
@@ -111,10 +116,11 @@ Each row: structural equality of desugar output with the hand-built kernel term,
 
 **A-LNT — lint tier, one case each:** goes-nowhere bare pure expression · discarded fallible-effect result · identity slice `t[...]` · redundant `?.` · redundant `~` · non-Boolean right of unescaped `||` · leading-`-` continuation · self-prefix module reference.
 
-**A-WRK — worked-example grids [RECOVER]:** the factorial grids, drift pairs, and the even/odd fact-cycle pair are named in Part I with full program text and expected contract tables in the project transcripts (see `journal.txt` catalog); recover verbatim at implementation time — do not reconstruct from memory. The environment-transforming factory (C§13.3's `make`) is fully specified in-document: instance-chain cutoff → the recorded verdict, unchanged by any families work (deferred-claim form, D§9).
+**A-WRK — worked-example grids [RECOVER]:** the factorial grids, drift pairs, and the even/odd fact-cycle pair are named in Part I with full program text and expected contract tables in the project transcripts (see `journal.txt` catalog); recover verbatim at implementation time — do not reconstruct from memory. The environment-transforming factory (C§13.3's `make`) is fully specified in-document: instance-chain cutoff → the recorded verdict, unchanged by any families work (deferred-claim form, D§9). **DISCHARGED (2026-07-21):** recovered verbatim into `next-phase-a-worked-examples-recovered.md` (grids 1–9 with per-item transcript provenance); the transcript pointer is superseded for repo purposes — `journal.txt` was the drafting agent's transcript-mount catalog, never a repo file.
 
 ## Registers
 
+- **MU-18 / MU-19 [companion review 2026-07-21]:** MU-18 — an unrelated statement observing an open group member (`a = [() => b]; seen = a == a; b = [() => a]`) is **rejected** by the analyzer, and the oracle traps it under the ratified class (Option A: `unbound-evaluation`). MU-19 — a *same-group construction* reference stays **legal** (internal μ edge, never a read); the pair fixes the boundary in both directions.
 - **PENDING-§5:** FE-03, FE-04, FE-05, FE-06, H-05's `==` observation — flip to positive when the canonicalizer lands; until then expected-fail, and no test may assert the interim inequality as desired behavior.
 - **PENDING-F7:** retired 2026-07-17 — universal interning restored (closures shallow-keyed); FE-04 is PENDING-§5 only.
 - **PROVISIONAL:** empty — FE-05 ruled 2026-07-17; register retained for future items.

@@ -2,6 +2,8 @@
 
 You are implementing **NEXT**, a language whose design is complete and recorded in four normative documents in this repository. Your job is implementation, not design.
 
+**Open design threads — do not treat the affected text as settled:** see `HANDOVER-open-threads-2026-07-23.md`, continued by `HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md` (later record wins on Thread C). (A) open-value observation legality + its trap class; (B) function equality under the freeze slice; (C) the equality-freeze exclusions — provenance unratified (zero-annihilation, cancellation, identity elimination, and the closed-enumeration narrowing). All three are PENDING-§5-adjacent and block no current work; **MU-10 and H-05 are the tests that move if the rulings change.**
+
 ## Normative documents (read in this order)
 
 1. `next-design-compendium-v1-0.md` — the master: architecture, semantics, ledgers, statuses. Wins on design intent.
@@ -51,11 +53,3 @@ The full suite is specified in `next-test-suite-specification-v0-1.md` — stabl
 ## Process
 
 Keep a `DECISIONS.md` changelog. Small commits per build-order step. When the author reviews, provenance matters: what the specs mandated vs what you chose vs what you're asking.
-
-**Three files, three jobs — update all of them in the same commit as the work:**
-
-- `DECISIONS.md` — **history**: append-only, newest-first, dated headings. Per-decision provenance and rationale. Never rewritten.
-- `PROGRESS.md` — **state**: the current snapshot, *rewritten in place* each increment (a stale state file is worse than none). Scoreboard, doc-sync matrix, subsystem map, blockers, next steps, and a thin increment ledger pointing at `DECISIONS.md` anchors. Must stay standalone-readable — it is what gets uploaded to the design chat.
-- `OwedItems.md` — **doc-side gaps**: what the *normative documents* still owe, registered implementation drift, and open asks for the author. Not a to-do list for decided-but-unbuilt work (that lives in tasks).
-
-When a doc-side item is closed by a ruling, strike it in `OwedItems.md` rather than deleting it, and record the ruling in `DECISIONS.md`.
