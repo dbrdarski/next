@@ -29,7 +29,8 @@ use std::cell::{Cell, RefCell};
 
 use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
 use crate::analyzer::obligation::accepted_domain;
-use crate::analyzer::outcome::summarize_instance;
+use crate::analyzer::outcome::{analyze_instance_body, summarize_instance};
+use crate::analyzer::{Finding, Severity};
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::interner::Interner;
 use crate::value::ValueRef;
@@ -248,31 +249,7 @@ fn infer_inner(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> Option<Contract> {
-    let group = reachable_closures(callee.clone());
-
-    // Each reachable function's proposal domain. The root takes the call-site domain;
-    // so do **same-arity partners**, so a mutual group is analyzed over one consistent
-    // domain. (Otherwise a partner analyzed over its wider accepted domain — `Top` for a
-    // bare param — feeds the root arguments carrying the `Top`-domain Indeterminate
-    // passthrough, which the domain-indexed hypothesis then correctly declines, breaking
-    // the mutual proof.) A function with no sound domain — a rest param — drops out (a
-    // call to it coarsens to `Top`, sound). Sound throughout: the driver verifies each
-    // member over its assigned domain, so a mismatched propagation only fails, never
-    // falsely proves.
-    let with_args: Vec<(ValueRef, Vec<Contract>)> = group
-        .iter()
-        .filter_map(|g| {
-            let args = match root_args {
-                Some(a) if g == callee => a.to_vec(),
-                Some(a) => {
-                    let dom = domain_args(g, cenv)?;
-                    if dom.len() == a.len() { a.to_vec() } else { dom }
-                }
-                None => domain_args(g, cenv)?,
-            };
-            Some((g.clone(), args))
-        })
-        .collect();
+    let with_args = group_domains(callee, root_args, cenv);
 
     // Bottom-pin the whole group over their own domains, so a mutual/identity recursive
     // tail call (in-domain) drops out of the base union. The instance+domain key means
@@ -309,6 +286,69 @@ fn domain_args(callee: &ValueRef, cenv: &ContractEnv) -> Option<Vec<Contract>> {
         Contract::Tuple(parts) => Some(parts),
         _ => None,
     }
+}
+
+/// Every function reachable from `callee` paired with the domain it is analyzed over.
+/// The root takes the call-site domain (`root_args` when supplied); so do **same-arity
+/// partners**, so a mutual group is analyzed over one consistent domain (else a partner
+/// over its wider accepted domain feeds the root `Top`-domain Indeterminate-passthrough
+/// args that the domain-indexed hypothesis then declines — the [interim] same-arity
+/// propagation, to be replaced by call-edge-derived domains, v0.8.1 §5). A function with
+/// no sound domain (a rest param) drops out — a call to it coarsens to `Top`, sound.
+fn group_domains(
+    callee: &ValueRef,
+    root_args: Option<&[Contract]>,
+    cenv: &ContractEnv,
+) -> Vec<(ValueRef, Vec<Contract>)> {
+    reachable_closures(callee.clone())
+        .iter()
+        .filter_map(|g| {
+            let args = match root_args {
+                Some(a) if g == callee => a.to_vec(),
+                Some(a) => {
+                    let dom = domain_args(g, cenv)?;
+                    if dom.len() == a.len() { a.to_vec() } else { dom }
+                }
+                None => domain_args(g, cenv)?,
+            };
+            Some((g.clone(), args))
+        })
+        .collect()
+}
+
+/// **Interprocedural body safety** (Archive6 §8/§9). The proven-trap findings of
+/// `callee`'s body **and its transitive callees** — replacing the closed-call oracle
+/// fold, so the analyzer never executes a user function to discover a trap. Every
+/// reachable function is analyzed over its domain ([`group_domains`]) and its body's
+/// **Error**-severity findings are surfaced; the whole reachable set is walked
+/// explicitly, so a trap in a transitive callee (`bad = () => helper()`) is caught even
+/// though nested calls coarsen under the guard. Structurally terminating: each reachable
+/// body is analyzed **once** (never executed), so a diverging `loop = () => loop()` is
+/// analyzed, not run.
+///
+/// **Errors only.** A `Warning` (unproven safety) over a coarsened domain is spurious
+/// (`factorial`'s `Number * Top` cannot be *proven* safe but does not trap), so
+/// propagating it would manufacture false findings; an `Error` is `OpSafety::Refuted` —
+/// a proven trap — sound to surface at the call site. Coarser callee warnings staying
+/// local is a precision/diagnostic gap, never unsoundness.
+pub fn body_safety(
+    callee: &ValueRef,
+    root_args: Option<&[Contract]>,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<Finding> {
+    if currently_inferring() {
+        return vec![]; // inside fact-proving: the enclosing walk already covers the group
+    }
+    without_inference(|| {
+        let mut findings = Vec::new();
+        for (g, args) in group_domains(callee, root_args, cenv) {
+            if let Some(a) = analyze_instance_body(&g, &args, cenv, interner) {
+                findings.extend(a.findings.into_iter().filter(|f| f.severity == Severity::Error));
+            }
+        }
+        findings
+    })
 }
 
 /// The direct-call adjacency among candidates: `i → j` iff candidate `j`'s closure is

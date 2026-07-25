@@ -12,8 +12,11 @@
 //!
 //! **Scope so far:** `Const`, `Ref`, `PrimOp`, `TupleCons`, `RecordCons`,
 //! `Template` (E11), `Access` (E6), `Match` (E9/E10), and `Apply` (C§7/B5/E10).
-//! Closed expressions are constant-folded through the oracle (`eval_prim` /
-//! `eval_expr`), so the concordance is *exact*. Analysis runs in the **pure world**
+//! Closed **primitive** operations and **accesses** fold through the finite oracle
+//! kernel (`eval_prim` / `eval_expr` on a `Const` target) for an exact verdict; a
+//! **closed function call is never executed** — its body traps are found by
+//! interprocedural body-safety analysis (`induction::body_safety`), so static analysis
+//! never runs a user function (Archive6 §8/§9). Analysis runs in the **pure world**
 //! (matching the `eval_expr` truth source); world threading and `Lambda`-body /
 //! function-shape analysis (C§13.2) are later increments, so an open call's return
 //! types as `Top`. Index/slice bounds await C§17 (see `OwedItems.md`). `Write` and
@@ -513,17 +516,17 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
 
 // ── Apply (C§7 / B5 / E10) — application ──────────────────────────────────────
 
-/// Analyze an application. Closed calls (known callee value + singleton plain
-/// args) fold through the oracle (`eval_expr`) for an exact verdict. Otherwise:
-/// each argument spread must be a Tuple (`spread-kind`); the callee must be a
-/// function (else operation-safety); and when the callee value is known, its
-/// act-kind is checked against the analysis world (`world-admission`) and the
-/// argument tuple against its parameter pattern (`argument-obligation`).
+/// Analyze an application — **without executing the callee** (Archive6 §8/§9). Each
+/// argument spread must be a Tuple (`spread-kind`); the callee must be a function (else
+/// operation-safety); and when the callee value is known, its act-kind is checked
+/// against the analysis world (`world-admission`), the argument tuple against its
+/// parameter pattern (`argument-obligation`), its body's proven traps surfaced by
+/// **interprocedural body safety** (`induction::body_safety`), its return inferred
+/// (`call_return`), and its completion demanded (`callee_completion`). A closed call is
+/// no longer folded through the oracle — a diverging closed call is analyzed, never run.
 ///
-/// **World context.** This increment analyzes in the **pure world** (matching the
-/// `eval_expr` truth source); world threading arrives with `Lambda`-body analysis.
-/// The callee's *return* shape and a `Pure`/`Effect` body's completion are not yet
-/// derived (no function-shape contract — C§13.2), so an open call types as `Top`.
+/// **World context.** This increment analyzes in the **pure world**; world threading
+/// arrives with fuller `Lambda`-body analysis.
 fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
     let mut findings = Vec::new();
 
@@ -533,51 +536,23 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
     findings.extend(ca.findings);
 
     let mut arg_contracts: Vec<Contract> = Vec::new();
-    let mut arg_vals: Vec<ValueRef> = Vec::new();
-    let mut foldable = true;
     let mut has_spread = false;
     for a in args {
         match a {
             Arg::Expr(e) => {
                 let aa = analyze(e, env, cenv, interner);
                 demand(&aa, &mut findings);
-                match &aa.contract {
-                    Contract::Equals(v) => arg_vals.push(v.clone()),
-                    _ => foldable = false,
-                }
                 arg_contracts.push(aa.contract.clone());
                 findings.extend(aa.findings);
             }
             Arg::Spread(e) => {
                 has_spread = true;
-                foldable = false;
                 let aa = analyze(e, env, cenv, interner);
                 demand(&aa, &mut findings);
                 check_spread_kind(&aa.contract, Kind::Tuple, "argument spread of a non-Tuple", &mut findings, interner);
                 findings.extend(aa.findings);
             }
         }
-    }
-
-    // Fold a fully-known call through the oracle for an exact verdict.
-    let fold_callee = match &cc {
-        Contract::Equals(cv) if foldable && !has_spread => Some(cv.clone()),
-        _ => None,
-    };
-    if let Some(cv) = fold_callee {
-        let node = Expr::Apply {
-            callee: Box::new(Expr::Const(cv)),
-            args: arg_vals.into_iter().map(|v| Arg::Expr(Expr::Const(v))).collect(),
-        };
-        return match eval_expr(&node, interner) {
-            Ok(Outcome::Produced(v)) => Analysis::produced(Contract::Equals(v), findings),
-            // A closed call that completes without a value is a *proven* fall-through.
-            Ok(Outcome::CompletedWithoutValue) => Analysis { contract: Contract::Top, findings, completion: Completion::FallsThrough },
-            Err(trap) => {
-                findings.push(Finding { class: trap.class, severity: Severity::Error, message: trap.message });
-                Analysis::produced(Contract::Bottom, findings)
-            }
-        };
     }
 
     // A non-function callee always traps operation-safety.
@@ -590,9 +565,15 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         return Analysis::produced(Contract::Bottom, findings);
     }
 
-    // With a known callee value, check its act-kind and parameter obligation.
+    // With a known callee value, check its act-kind and parameter obligation, and
+    // surface **interprocedural body-safety** traps — the callee body's (and its
+    // transitive callees') proven traps, replacing the closed-call oracle fold so static
+    // analysis never executes a user function (Archive6 §8/§9).
     if let Contract::Equals(cv) = &cc {
         analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
+        if !has_spread {
+            findings.extend(induction::body_safety(cv, Some(&arg_contracts), cenv, interner));
+        }
     }
     // Completion (E10): the callee's body may complete without a value (a partial Match,
     // or a mutator whose return is discarded), which an expecting seat then demands

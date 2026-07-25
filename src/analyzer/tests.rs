@@ -1927,14 +1927,92 @@ mod fact_identity {
         });
     }
 
-    // The domain-escape guard (v0.8.1's `call input ⊆ fact input domain`) is exercised
-    // by the mutual `even`/`odd`-over-`[Number]` path: `odd` analyzed over its wider
-    // accepted domain feeds `even(n-1)` a `Top`-domain Indeterminate-passthrough that is
-    // *not* `⊑ [Number]`, so `even`'s domain-indexed fact correctly declines it — which is
-    // exactly why `infer_inner` propagates a consistent domain to same-arity partners.
-    // `analyzer::tests::apply_wiring::an_inferred_boolean_return_satisfies_a_tested_seat`
-    // covers it end-to-end. A standalone self-recursive escape is not tested here because
-    // a closed escaping call (`f("x")`) folds through the *unbounded* `eval_expr` and
-    // diverges — a pre-existing fold-path gap registered in OwedItems, orthogonal to the
-    // hypothesis key.
+    // The domain-rejection law (v0.8.1's `call input ⊆ fact input domain`) is locked
+    // *directly* by `a_hypothesis_applies_only_within_its_input_domain` above — the even/odd
+    // mutual path no longer exercises it, since `infer_inner` now propagates a consistent
+    // domain to same-arity partners (so no out-of-domain lookup is generated). The direct
+    // unit test is exactly what the review asked for in place of that indirect coverage.
+}
+
+// ── Interprocedural body safety — replaces the closed-call oracle fold (Archive6) ──
+
+mod body_safety {
+    use super::{Analysis, analyze, apply, empty, name, nc};
+    use crate::contract::{Contract, Kind};
+    use crate::interner::Interner;
+    use crate::oracle::run_source_in;
+
+    /// Run `src` (whose last statement is the entry function), bind it to `callee` and
+    /// each `(name, contract)` argument, and analyze `callee(arg names…)`.
+    fn analyze_call(src: &str, callee: &str, args: &[(&str, Contract)]) -> Analysis {
+        let mut i = Interner::new();
+        let f = run_source_in(src, &mut i).unwrap().0;
+        let mut env = empty();
+        env.insert(callee.into(), Contract::Equals(f));
+        let mut arg_exprs = Vec::new();
+        for (nm, c) in args {
+            env.insert((*nm).into(), c.clone());
+            arg_exprs.push(name(nm));
+        }
+        analyze(&apply(name(callee), arg_exprs), &env, &nc(), &mut i)
+    }
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+
+    #[test]
+    fn direct_body_trap_is_rejected() {
+        let a = analyze_call("bad = () => 1 + \"x\"\nbad", "bad", &[]);
+        assert!(!a.accepted(), "the callee body traps (1 + \"x\"): {:?}", a.findings);
+    }
+
+    #[test]
+    fn transitive_body_trap_is_rejected() {
+        // bad calls helper, whose body traps — the trap must reach bad's call site even
+        // though the nested helper() call coarsens under the guard.
+        let a = analyze_call("helper = () => 1 + \"x\"\nbad = () => helper()\nbad", "bad", &[]);
+        assert!(!a.accepted(), "a transitive body trap must be surfaced: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_safe_transitive_call_is_accepted() {
+        let a = analyze_call("helper = (x) => x + 1\nf = (x) => helper(x)\nf", "f", &[("n", num())]);
+        assert!(a.accepted(), "no trap anywhere: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_recursive_safe_body_terminates_without_false_findings() {
+        // factorial: the recursive call coarsens to Top (Number * Top is an *unproven*
+        // Mul — a Warning, filtered out), so no false finding, and analysis terminates.
+        let a = analyze_call("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf", "f", &[("n", num())]);
+        assert!(a.accepted(), "factorial accepted: {:?}", a.findings);
+        assert!(a.findings.is_empty(), "no false findings from the coarsened recursion: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_recursive_body_with_a_local_trap_is_rejected() {
+        let a = analyze_call("f = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\nf", "f", &[("n", num())]);
+        assert!(!a.accepted(), "the local trap must be surfaced: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_trap_in_a_mutual_partner_reaches_the_caller() {
+        let a = analyze_call(
+            "f = (n) => n == 0 ? 0 : g(n - 1)\n\
+             g = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\n\
+             f",
+            "f",
+            &[("n", num())],
+        );
+        assert!(!a.accepted(), "g's trap must reach f's call site: {:?}", a.findings);
+    }
+
+    #[test]
+    fn diverging_recursion_terminates_without_execution() {
+        // The architectural proof: `loop()` would diverge if executed, but body safety
+        // analyzes the body once and never runs it — so this test *terminating* is the
+        // evidence the oracle-execution coupling is gone. No trap (divergence ≠ trap).
+        let a = analyze_call("loop = () => loop()\nloop", "loop", &[]);
+        assert!(a.accepted(), "divergence is not a trap: {:?}", a.findings);
+    }
 }

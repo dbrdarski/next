@@ -102,19 +102,23 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      `Refuted` must not become effort-dependent (bound from finite analysis structure,
      not a constant). Keep the oracle a reference/validation layer, never required for
      exec / canon / equality / proof / verdicts.
-   - **Analyzer executes user functions via `eval_expr` for closed-call folding
-     [Archive5 §8/§9]** — `analyze_apply`'s closed-call fold runs the whole user call
-     through the **unbounded** `eval_expr` (a closed *recursive* diverging call hangs).
-     The review wants the analyzer to stop executing user functions for normal
-     judgments. **Not a bare deletion:** measured, removing it breaks no test, but the
-     fold also *catches body traps* in closed calls (`badFn()` with body `1 + "x"`) —
-     `infer_return_fact` analyzes the body but **discards findings**, so removal without
-     replacement silently accepts a closed call to an unconditionally-trapping function
-     (unsoundness gap). Sound removal must **pair with lambda-body analysis** (surface the
-     callee body's findings — the standing "Lambda bodies type as Top" increment). Only
-     *recursive* closed calls can diverge. `eval_prim` (primops) and `eval_expr` on a
-     `Const` *access* are finite and OK to keep, ideally re-homed into neutral
-     `semantics::*` shared by oracle and analyzer (naming/architecture, not soundness).
+   - ~~**Analyzer executes user functions via `eval_expr` for closed-call folding**~~
+     **DONE [Archive6, 2026-07-26]** — `analyze_apply`'s closed-call `eval_expr` fold
+     removed; `induction::body_safety` surfaces the callee body's (and transitive
+     callees') **Error** findings interprocedurally; the analyzer no longer executes a
+     user function (diverging `loop()` is analyzed, not run). Remaining refinements
+     (precision/architecture, not soundness):
+     - **Warning-severity interprocedural propagation** — `body_safety` surfaces only
+       Error (proven) findings; a callee's *unproven*-safety warnings stay local (coarser
+       diagnostics). Sound; a diagnostic gap.
+     - **`InstanceBodySummary` unification** — thread findings through `ApplicationOutcome`
+       (`summarize_instance` still drops them) so the SCC driver reasons over
+       `{produced, completion, may_not_complete, findings}` as one summary, instead of
+       `body_safety` re-walking the group separately (also removes the repeated body
+       analysis per call site — folds into the C§13.4 cache).
+     - **Neutral `semantics::*` re-homing** — `eval_prim` and `eval_expr`-on-`Const`-access
+       are finite and shared with the oracle; move the laws into a neutral kernel so the
+       analyzer isn't "asking the oracle" (naming/architecture, not soundness).
    - **Same-arity domain propagation is interim [Archive5 §5]** — `infer_inner` propagates
      the root's call-site domain to reachable **same-arity** closures (not the recursive
      SCC specifically), an interim precision heuristic. The domain guard prevents any

@@ -6,6 +6,57 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Archive6 §8/§9: interprocedural body safety — remove the full-function oracle fold
+
+The last oracle coupling in the analyzer, removed per the author's Archive(6) directive:
+static analysis no longer **executes** a user function to find a trap. New
+`induction::body_safety`; `analyze_apply`'s closed-call `eval_expr` fold deleted; 7
+acceptance tests. Full tree 311 lib + 111 conformance, clippy clean.
+
+- **The problem [mandated — Archive6 §8/§9].** `analyze_apply` folded a closed call by
+  running the whole user call through the **unbounded** `eval_expr` — the last place the
+  analyzer executed user code, and the divergence path. Bare deletion was unsound: the
+  fold also **propagated body traps** (`badFn = () => 1 + "x"; badFn()`), which
+  `infer_return_fact` discards.
+- **`induction::body_safety(callee, root_args, cenv, interner) → Vec<Finding>`.** The
+  proven-trap findings of the callee's body **and its transitive callees**. Reuses
+  `analyze_instance_body` (already produces a full `Analysis` with findings) and
+  `reachable_closures` (the call graph) — **not a new function analyzer**. The key
+  subtlety the author flagged: a one-level `caller += analyze_instance_body(callee)` catches
+  only *direct* traps, because a nested `helper()` coarsens under `without_inference`. So
+  body-safety **walks the whole reachable group explicitly**, analyzing each body once
+  over its domain (`group_domains`, shared with `infer_inner`) and surfacing its
+  **Error**-severity findings — transitive coverage without a fixpoint (safety is
+  monotone reachability, so `reachable_closures` is the right tool, not the SCC vector
+  pass).
+- **Errors only [chose, sound].** A `Warning` (unproven safety) over a coarsened domain
+  is spurious — `factorial`'s `Number * Top` cannot be *proven* safe but does not trap —
+  so propagating warnings would manufacture false findings (breaking the no-false-findings
+  test). An `Error` is `OpSafety::Refuted`, a proven trap: sound to surface. Coarser
+  callee **warnings** staying local is a precision/diagnostic gap, never unsoundness.
+- **Structurally terminating.** Each reachable body is analyzed **once**, never executed
+  — so `loop = () => loop()` is *analyzed*, not run. Guarded by `currently_inferring()`
+  (the same re-entrancy bound), so a nested call during a body walk does not relaunch
+  body-safety.
+- **The fold is gone.** `analyze_apply` now: spread/function/act-kind/arg-obligation
+  checks + `body_safety` (traps) + `call_return` (return) + `callee_completion`
+  (completion). Closed-call exact-value folding is lost (a closed call types by inference,
+  not `Equals(v)`) — no test relied on it (measured earlier), and it is the intended
+  trade. `eval_prim` and `eval_expr` on a `Const` *access* stay (finite, terminating;
+  re-homing into a neutral `semantics::*` shared kernel is naming/architecture, owed).
+- **Verified — the author's 7-test gate:** direct trap → reject; transitive trap →
+  reject; safe transitive → accept; factorial → terminates, **no false findings**;
+  recursive local trap → surfaced; mutual-partner trap → reaches the caller; **diverging
+  `loop()` → analysis terminates without execution** (the architectural proof the oracle
+  coupling is gone). Also removed the stale even/odd out-of-domain comment (§the direct
+  test superseded it).
+- **`// [ask-author]`:** none. Same-arity domain propagation stays flagged **interim**
+  (§5). Owed: warning-severity interprocedural propagation; the `InstanceBodySummary`
+  unification (findings threaded through `ApplicationOutcome`, SCC driver over the full
+  summary); neutral `semantics::*` re-homing of the finite kernel.
+
+---
+
 ## 2026-07-26 — Archive5 §4: direct out-of-domain hypothesis regression + the §8/§9 fold-removal analysis
 
 Archive(5) signed off on both Archive(4) fixes and asked for two follow-ups. The first
