@@ -1587,3 +1587,80 @@ mod driver {
         assert!(r.unproven.is_empty());
     }
 }
+
+// ── Return-fact inference §6 — autonomous claim proposal + the driver (tail) ────
+
+mod inference {
+    use crate::analyzer::induction::infer_return_fact;
+    use crate::contract::{Contract, ContractEnv, Kind, Verdict, subcontract};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+    /// Contract equivalence: mutual subcontract (so `Union(Number, Number)` counts as
+    /// `Number`, the proposal's un-normalized shape).
+    fn equiv(a: &Contract, b: &Contract, i: &mut Interner) -> bool {
+        matches!(subcontract(a, b, i), Verdict::Proven) && matches!(subcontract(b, a, i), Verdict::Proven)
+    }
+
+    #[test]
+    fn infers_factorial_returns_number_over_its_domain() {
+        // No supplied claim: the base `1` generalizes to Number, and the induction
+        // proves `n * f(n-1)`'s return under it. Over the **untyped (Top) accepted
+        // domain** the sound return is Number *together with the arithmetic
+        // Indeterminate-passthrough* — an Indeterminate `n` (which the bare pattern
+        // admits) propagates, so `factorial(1/0)` really returns an Indeterminate. So
+        // the fact contains Number and is strictly tighter than Top (String excluded);
+        // a call site that constrains `n : Number` sharpens it to pure Number (the
+        // analyze_apply wiring).
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        let fact = infer_return_fact(&f, &cenv(), &mut i).expect("a return fact is inferred");
+        assert!(matches!(subcontract(&num(), &fact, &mut i), Verdict::Proven), "Number ⊑ inferred {fact:?}");
+        let hi = i.string("hi");
+        assert!(!fact.contains(&hi), "the fact admits no String — tighter than Top: {fact:?}");
+    }
+
+    #[test]
+    fn infers_even_and_odd_return_boolean() {
+        // Mutual: each base (`true` / `false`) generalizes to Boolean; the recursive
+        // tail call drops out of the base union under the Bottom pin, so the proposal
+        // is Boolean (not Top), and the joint pass proves it.
+        let even = run_source(
+            "even = (n) => n == 0 ? true : odd(n - 1)\n\
+             odd = (n) => n == 0 ? false : even(n - 1)\n\
+             even",
+        )
+        .unwrap()
+        .0;
+        let mut i = Interner::new();
+        let fact = infer_return_fact(&even, &cenv(), &mut i).expect("even's return is inferred");
+        assert!(equiv(&fact, &Contract::Kind(Kind::Boolean), &mut i), "even returns Boolean, got {fact:?}");
+    }
+
+    #[test]
+    fn identity_recursion_infers_a_sound_overapproximation() {
+        // `f = (n) => n == 0 ? 0 : f(n-1)` truly returns 0, but the Kind-generalized
+        // claim is Number — a sound over-approximation (Equals(0) ⊑ Number).
+        let f = run_source("f = (n) => n == 0 ? 0 : f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        let fact = infer_return_fact(&f, &cenv(), &mut i).expect("a return fact is inferred");
+        let zero = Contract::Equals(i.integer(0));
+        assert!(matches!(subcontract(&zero, &fact, &mut i), Verdict::Proven), "0 ⊑ inferred return {fact:?}");
+        assert!(equiv(&fact, &num(), &mut i), "and it generalizes to Number");
+    }
+
+    #[test]
+    fn a_baseless_recursion_yields_no_fact() {
+        // `loop = (n) => loop(n)` has no base — the proposal is Bottom, rejected, so no
+        // fact is asserted (→ coarse Top at a call site, never an overclaim).
+        let f = run_source("loop = (n) => loop(n)\nloop").unwrap().0;
+        let mut i = Interner::new();
+        assert!(infer_return_fact(&f, &cenv(), &mut i).is_none(), "no fact for a baseless recursion");
+    }
+}

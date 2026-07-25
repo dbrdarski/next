@@ -63,6 +63,22 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
    the tuple-family §4 `restrictLen`/`Concat` form (`≥ k` positions) — a precision
    refinement, not a soundness gap.
 
+7. **Return-fact inference precision — two sound gaps [induction tail step 6, 07-25]** —
+   `infer_return_fact` proposes a claim over each function's *accepted input domain*
+   (the parameter pattern; `Top` for a bare `(n)`) and re-verifies it with the driver.
+   Both gaps are precision, not soundness (a coarser fact is always sound):
+   - **Untyped-domain Indeterminate-passthrough** — over `Top`, arithmetic passes an
+     Indeterminate operand through, so e.g. `factorial`'s inferred return is `Number ∪
+     Indeterminate` (an Indeterminate `n` really does propagate). **Call-site argument
+     contracts** sharpen this to pure `Number` — that arrives with the `analyze_apply`
+     rewiring. The grounding-derived input domain (C§10) that would tighten the
+     *autonomous* case is the separate, unbuilt recursion-grounding arc.
+   - **Helper-base functions get no fact** — the proposal Bottom-pins the *whole*
+     reachable group, so a function whose only base contribution is a **non-recursive
+     helper call** proposes `Top`/`Bottom` → no fact (→ coarse `Top` at the call site).
+     The fix is a **reverse-topological claim proposal** (propose a helper's claim
+     before its callers'), owed with the wiring.
+
 5. **`Known(∅)` normalization — doc-integration mismatch [analyzer review, 07-25]** —
    the application spec (`next-application-induction-specification-v0-8.md:19`)
    normalizes `(C, Known(∅)) → Bottom` for the function-position `AnalysisContract`.

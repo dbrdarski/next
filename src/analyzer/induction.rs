@@ -13,17 +13,22 @@
 //! is what turns `f = (n) => n == 0 ? 1 : n * f(n-1)`'s coarse `Union(Equals(0), Top)`
 //! into a proof that `f` returns `Number` under the hypothesis `f: Number`.
 //!
-//! This module lands two layers. **The joint vector pass** ([`joint_vector_pass`])
+//! This module lands three layers. **The joint vector pass** ([`joint_vector_pass`])
 //! settles one component. **The multi-SCC driver** ([`prove_facts`]) decomposes the
 //! candidates' call graph into strongly-connected components, processes them in
 //! **reverse-topological order** (dependencies first), and carries each proven
 //! component's return facts as hypotheses for its dependents — so a dependent proves
-//! what it could not alone. AP-30's `ProvenPresent` half, the realized-witness
-//! refutation, and the `analyze_apply` rewiring are the wiring that follows.
+//! what it could not alone. **Return-fact inference** ([`infer_return_fact`]) closes
+//! the loop autonomously: from a callee it reaches the call graph, *proposes* a return
+//! claim per function (base-generalization, [`Contract::generalize`]), and runs the
+//! driver — so the claim need not be supplied. AP-30's `ProvenPresent` half, the
+//! realized-witness refutation, and the `analyze_apply` rewiring onto `infer_return_fact`
+//! are the wiring that follows.
 
 use std::cell::RefCell;
 
-use crate::analyzer::bodywalk::callee_targets;
+use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
+use crate::analyzer::obligation::accepted_domain;
 use crate::analyzer::outcome::summarize_instance;
 use crate::ast::Lambda;
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
@@ -139,6 +144,64 @@ pub fn prove_facts(candidates: Vec<Candidate>, cenv: &ContractEnv, interner: &mu
         }
     }
     FactResult { proven, unproven }
+}
+
+/// **Infer** a callee's return fact autonomously (§6, the demand-free entry). Reaches
+/// the whole call graph from `callee`, **proposes** a return claim per function, runs
+/// the multi-SCC driver over those candidates, and returns the callee's proven return
+/// contract — `None` if nothing informative is proven (→ the coarse `Top` at the call
+/// site, sound).
+///
+/// The claim is proposed by [`Contract::generalize`] applied to each function's body
+/// summary with **the whole reachable group pinned to `Bottom`** — so a mutual/identity
+/// recursive tail call drops out of the base union (`even`'s `odd(n−1)` → `Bottom`,
+/// leaving the base `true` → `Boolean`), while an arithmetic use still types
+/// (`factorial`'s `n * f(n−1)` → `Number`, since `*` outputs `Number` and `Bottom` is
+/// absorbed). The proposal is **never trusted**: the driver re-verifies `F(C) ⊑ C`
+/// over real hypotheses, so a too-tight or too-loose proposal simply fails or lands
+/// coarse — never a false proof.
+///
+/// **Scope of this cut.** The claim is proposed over each function's *accepted input
+/// domain* (its parameter pattern — `Top` for a bare `(n)`), so the fact is call-site
+/// independent (the input obligation, §1.3, is the separate per-call check). A function
+/// whose only base contribution is a **non-recursive helper call** proposes `Top`/`Bottom`
+/// (the helper is Bottom-pinned too) and so yields no fact — a precision gap, sound;
+/// the reverse-topological *proposal* that would close it is owed alongside the
+/// `analyze_apply` rewiring.
+pub fn infer_return_fact(callee: &ValueRef, cenv: &ContractEnv, interner: &mut Interner) -> Option<Contract> {
+    let group = reachable_closures(callee.clone());
+    let bottoms: Vec<(Lambda, Contract)> = group
+        .iter()
+        .filter_map(|g| g.as_fn().map(|gf| (gf.shape().clone(), Contract::Bottom)))
+        .collect();
+
+    let candidates: Vec<Candidate> = group
+        .iter()
+        .filter_map(|f| {
+            let args = domain_args(f, cenv)?;
+            let produced =
+                with_hypotheses(bottoms.clone(), || summarize_instance(f, &args, cenv, interner))?.produced.erase();
+            let claim = produced.generalize();
+            // Top proves trivially (no information); Bottom claims no value (a baseless
+            // recursion) — neither is an informative fact.
+            if matches!(claim, Contract::Top | Contract::Bottom) {
+                return None;
+            }
+            Some(Candidate { callee: f.clone(), args, contract: claim })
+        })
+        .collect();
+
+    let result = prove_facts(candidates, cenv, interner);
+    result.proven.iter().find(|c| c.callee == *callee).map(|c| c.contract.clone())
+}
+
+/// A callee's accepted input domain as per-position argument contracts, or `None` when
+/// no sound domain is derivable (a rest parameter — §4 owed — or a non-tuple domain).
+fn domain_args(callee: &ValueRef, cenv: &ContractEnv) -> Option<Vec<Contract>> {
+    match accepted_domain(callee, cenv)? {
+        Contract::Tuple(parts) => Some(parts),
+        _ => None,
+    }
 }
 
 /// The direct-call adjacency among candidates: `i → j` iff candidate `j`'s closure is

@@ -125,6 +125,23 @@ fn value_kind(v: &ValueRef) -> Option<Kind> {
 }
 
 impl Contract {
+    /// Widen the singletons in `self` to their Kinds — `Equals(v) → Kind(kind(v))` —
+    /// recursing through `Union` and **dropping `Bottom` alternatives**. A
+    /// candidate-claim proposer for return induction (never trusted — the induction
+    /// re-verifies): it turns a concrete base contribution such as `Union(Equals(1),
+    /// Bottom)` into the Kind claim `Number`. An Indeterminate singleton (no Kind) and
+    /// any non-singleton leaf are left unchanged.
+    pub fn generalize(&self) -> Contract {
+        match self {
+            Contract::Equals(v) => value_kind(v).map(Contract::Kind).unwrap_or_else(|| self.clone()),
+            Contract::Union(a, b) => match (a.generalize(), b.generalize()) {
+                (Contract::Bottom, x) | (x, Contract::Bottom) => x,
+                (ga, gb) => Contract::Union(Box::new(ga), Box::new(gb)),
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Smart constructor for [`Contract::Concat`], applying the family's normal
     /// forms (§1): nested Concats flatten associatively; the canonical empty-tuple
     /// segment **erases** (a structural fact); an **uninhabited segment never

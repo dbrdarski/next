@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-25 · induction tail step 5 — the multi-SCC return-induction driver.
+**Snapshot:** 2026-07-25 · induction tail step 6 — autonomous return-fact inference.
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **289 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **293 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -102,7 +102,8 @@ Low-stakes / for-info only:
 | Application & induction §1 steps 4–5 — outcome contribution (`summarize_instance`: produced + completion off the body, recursion coarse-Top) | v0.8.1 | ✅ tail step 3 (identity / const / partial-match / recursion; AP-30 `ProvenPresent` half owed to §6) |
 | Application & induction §6 — return induction, the joint vector pass (hypothesis injection in `analyze_apply`; sharpens recursive `Top`) | v0.8.1 | ✅ tail step 4 (factorial → Number; false-claim reject; mutual even/odd + vector failure) |
 | Application & induction §6/§13.2a — multi-SCC driver (call-graph SCC decomposition + reverse-topo; carry each proven component's facts to its dependents) | v0.8.1 | ✅ tail step 5 (dependent-after-dependency; order-independent; mutual-as-one-component; vector-failure isolation) |
-| Application & induction §6/§5 — realized-witness `(e,x,v)` refutation, **AP-30 `ProvenPresent`**, domain-indexed facts, `analyze_apply` rewiring | v0.8.1 | ⬜ **next**: refutation + the analyze_apply wiring (unlocks A-NEG/A-ACC/A-SND/A-VER) |
+| Application & induction §6 — return-fact **inference** (autonomous claim proposal: `Contract::generalize` over a Bottom-pinned group summary, then the driver) | v0.8.1 | ✅ tail step 6 (factorial→Number over its domain; even/odd→Boolean; identity→sound over-approx; baseless→no fact) |
+| Application & induction §6/§5 — realized-witness `(e,x,v)` refutation, **AP-30 `ProvenPresent`**, domain-indexed facts, `analyze_apply` rewiring (call-site args, persistent fact cache, re-entrancy guard) | v0.8.1 | ⬜ **next**: the analyze_apply wiring onto `infer_return_fact` (unlocks A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
 | Reactive layer / concurrency / UI | G1 fence | 🚫 fenced, out of scope |
 
@@ -117,17 +118,20 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
-1. **Application & induction — the induction tail** (steps 1–5 done: body walk, input
-   obligation, outcome contribution, the joint vector pass, **the multi-SCC driver**):
-   next is (a) the realized-witness `(e, x, v)` **refutation** (the third voice —
-   permanent in-namespace, distinct from vector-failure *unproven*); (b) **AP-30's
-   `ProvenPresent` half** in the outcome contribution; (c) §5 domain-indexed facts; and
-   (d) the **`analyze_apply` rewiring** onto the driver — so top-level program analysis
-   uses these facts — plus the sampled γ soundness battery. That wiring activates the
-   Phase A batteries. (Deferred non-blocking: per-alternative `witness_status` in
-   `live_alternatives`; rest-parameter length-precise domain via §4; the driver's
-   candidate set is currently supplied — deriving it from seat demands / grounding is
-   separate; indirect deps through non-candidate helpers coarsen to `Top`, sound.)
+1. **Application & induction — the induction tail** (steps 1–6 done: body walk, input
+   obligation, outcome contribution, the joint vector pass, the multi-SCC driver, **and
+   autonomous return-fact inference**): next is the **`analyze_apply` rewiring** onto
+   `infer_return_fact` — passing **call-site argument contracts** (so `factorial(k)`
+   with `k : Number` sharpens to pure `Number`), a **persistent fact cache**, and a
+   **re-entrancy guard** — so top-level program analysis uses these facts. Alongside:
+   (a) the realized-witness `(e, x, v)` **refutation** (the third voice, permanent
+   in-namespace); (b) **AP-30's `ProvenPresent` half**; (c) §5 domain-indexed facts;
+   (d) the sampled γ soundness battery. That wiring activates **A-ACC/A-SND** (A-NEG's
+   `factorial → REJECT` needs the separate **C§10 grounding / derived-input-contract**
+   arc — not this tail). (Deferred non-blocking: per-alternative `witness_status`;
+   rest-parameter length-precise domain via §4; the reverse-topological *claim
+   proposal* for helper-base functions; indirect deps through non-candidate helpers
+   coarsen to `Top`, sound.)
 3. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
    fuel harness (M-04); the string-length contract form + §5 finite-state lift.
 
@@ -174,4 +178,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `7d14bbf` | Induction tail step 2: input obligation — accepted-domain derivation + structural witness | “Induction tail step 2: input obligation” |
 | 2026-07-25 | `d968904` | Induction tail step 3: outcome contribution — per-instance body summary (recursion coarse-Top, terminating) | “Induction tail step 3: outcome contribution” |
 | 2026-07-25 | `b973ce6` | Induction tail step 4: return induction — joint vector pass + hypothesis injection (factorial → Number; mutual even/odd) | “Induction tail step 4: return induction” |
-| 2026-07-25 | (this) | Induction tail step 5: multi-SCC driver — call-graph SCC decomposition + reverse-topo, carry proven facts to dependents (double/quad; order-independent; mutual; failure isolation) | “Induction tail, step 5: the multi-SCC driver” |
+| 2026-07-25 | `c467764` | Induction tail step 5: multi-SCC driver — call-graph SCC decomposition + reverse-topo, carry proven facts to dependents (double/quad; order-independent; mutual; failure isolation) | “Induction tail, step 5: the multi-SCC driver” |
+| 2026-07-25 | (this) | Induction tail step 6: return-fact inference — autonomous claim proposal (`Contract::generalize` over a Bottom-pinned group summary + the driver); factorial/even-odd/identity/baseless | “Induction tail, step 6: return-fact inference” |

@@ -6,6 +6,53 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 6: return-fact inference — autonomous claim proposal (§6)
+
+Closes the loop so the driver's claims need not be supplied: the analyzer now *infers*
+a recursive function's return fact. `infer_return_fact` + `Contract::generalize`; 4
+tests. Full tree 293 lib + 111 conformance, clippy clean.
+
+- **`infer_return_fact(callee, cenv, interner) → Option<Contract>`** — reaches the
+  whole call graph from `callee` (`reachable_closures`), **proposes** a return claim per
+  function, runs the multi-SCC driver (step 5) over those candidates, and returns the
+  callee's proven return contract (`None` when nothing informative is proven → coarse
+  `Top`, sound).
+- **The claim proposer [chose — sound, never trusted].** `Contract::generalize` widens
+  `Equals(v) → Kind(v)` and drops `Bottom` alternatives in a `Union`. It is applied to
+  each function's body summary **with the whole reachable group pinned to `Bottom`**:
+  a mutual/identity recursive tail drops out of the base union (`even`'s `odd(n-1)` →
+  `Bottom`, leaving `true` → `Boolean`), while an arithmetic use still types
+  (`factorial`'s `n * f(n-1)` → `Number`, since `*` outputs `Number` and `Bottom ⊑
+  Number` is absorbed). **The proposal is never trusted** — the driver re-verifies
+  `F(C) ⊑ C` over real hypotheses (D§5's "candidates verified by the standard
+  obligations, never trusted"), so a bad proposal fails or lands coarse, never a false
+  proof. Top/Bottom proposals (trivial / baseless) yield no fact.
+- **Domain [chose — the honest current precision].** The claim is proposed over each
+  function's *accepted input domain* (the parameter pattern — `Top` for a bare `(n)`),
+  so the fact is call-site independent. Consequence, surfaced by the factorial test:
+  over the **untyped `Top` domain the return carries the arithmetic
+  Indeterminate-passthrough** — `factorial(1/0)` really returns an Indeterminate, so the
+  inferred fact is `Number ∪ Indeterminate`, sound and strictly tighter than `Top`. A
+  call site that constrains `n : Number` sharpens it to pure `Number` — that is exactly
+  what the `analyze_apply` wiring (call-site args) will supply. The grounding-derived
+  input domain (C§10) that would tighten the autonomous case is a separate subsystem,
+  unbuilt.
+- **Verified** — `infers_factorial_returns_number_over_its_domain` (Number ⊑ fact, no
+  String — tighter than Top); `infers_even_and_odd_return_boolean` (mutual, Boolean via
+  the Bottom-pin drop-out); `identity_recursion_infers_a_sound_overapproximation`
+  (`n==0 ? 0 : f(n-1)` → Number, a sound over-approx of the true `Equals(0)`);
+  `a_baseless_recursion_yields_no_fact` (`loop = n => loop(n)` → `None`, no overclaim).
+- **Scoped to the follow-up.** A function whose *only* base contribution is a
+  **non-recursive helper call** proposes `Top`/`Bottom` (the helper is Bottom-pinned
+  too) and so yields no fact — a precision gap (sound); the reverse-topological
+  *proposal* that would close it lands with the `analyze_apply` rewiring, alongside
+  call-site args, the persistent fact cache, the re-entrancy guard, AP-30's
+  `ProvenPresent` half, and the realized-witness refutation.
+- **`// [ask-author]`:** none. The `Top`-domain Indeterminate-passthrough and the
+  helper-base gap are registered in `OwedItems.md` (sound precision, not asks).
+
+---
+
 ## 2026-07-25 — Induction tail, step 5: the multi-SCC driver — reverse-topological hypothesis carrying (§6/§13.2a)
 
 The step that turns step 4's single-component pass into a whole-program fact solver.
