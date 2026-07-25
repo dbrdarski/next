@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 Cargo.lock.orig
+
+# Archive/review zips (e.g. Archive(4).zip) live at the root, never tracked
+/*.zip
