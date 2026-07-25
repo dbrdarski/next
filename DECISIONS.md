@@ -6,6 +6,43 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 1: the μ-aware body walk (call graph)
+
+First step of the return-induction tail (the bridge having passed the follow-up
+review). New module `src/analyzer/bodywalk.rs`; `build_inventory` generalized to
+`build_inventory_by<N>`; 4 tests on real recursive/mutual closures. Full tree 274 lib
++ 111 conformance, clippy clean.
+
+- **Recursion lives in the captures, so the call graph reads off a closure value.**
+  A recursive/mutual callee `f` is a *free variable* in its body → canonicalized to a
+  capture slot `@capᵢ` (`free_vars[i] = "f"`); the closure's **shared** environment
+  late-binds it to the target closure as a plain `Binding::Value` (slots are only for
+  `@:` mutables — I verified `f = (n) => f(n-1)` rebinds `f` to `Value(closure)` in the
+  captured env). So `callee_targets(v)` walks `v`'s shape body for applications and
+  resolves each capture-slot callee to the captured function value — **no μ-binder
+  minimization needed**, since a recursive edge closes as a §4a shape repeat.
+- **`reachable_closures`** runs the §4a cutoff (`build_inventory_by`, keyed by shape)
+  over the concrete closure graph: self-recursion admits `{f}`, mutual `even`/`odd`
+  admits `{even, odd}`, a leaf function has no edges, a non-recursive helper chain is
+  bounded — all on **real closures** built via `run_source`, terminating on every
+  cycle.
+- **Two sound under-approximations [chose].** The walk does not descend into nested
+  `Lambda` bodies (distinct instances) and resolves only capture-slot callees (a
+  parameter/local callee gives no edge). Both can only *drop* an edge, never add a
+  spurious one — a missing instance lands `unproven` in the induction, never a false
+  proof.
+- **Fork resolved without an author ruling.** The spec's Choice A (self/group refs as
+  μ-structure edges) would need the μ-binder SCC minimization ("ships with the
+  analyzer", unbuilt). But the current runtime's shared-env late binding makes the
+  value-based walk sound and sufficient for the call graph + cutoff — so the μ-binder
+  minimization is **not** on the critical path for the induction; the abstract-instance
+  self-capture (a cyclic env) is only relevant to precise input-obligation/return
+  contracts, where a self-capture can be represented coarsely (`Unknown`) soundly.
+- **`// [ask-author]`:** none — the value-based-walk choice is an implementation
+  strategy (sound either way); flagged here for visibility.
+
+---
+
 ## 2026-07-25 — Analyzer-core bridge-2: the joint operand driver + structural witness
 
 Completes the review's held bridge before the induction tail. `src/analyzer/

@@ -36,6 +36,7 @@ use crate::oracle::{Outcome, TrapClass, eval_expr, eval_prim};
 use crate::value::ValueRef;
 
 pub mod application;
+pub mod bodywalk;
 pub mod domain;
 pub mod inventory;
 

@@ -30,21 +30,6 @@
 use crate::analyzer::domain::Instance;
 use crate::ast::Lambda;
 
-/// A node in the inventory closure: an admitted instance and the **active shape
-/// sequence** on the path that admitted it. The cutoff fires when a transition's
-/// target shape already appears in this sequence.
-struct InventoryState {
-    instance: Instance,
-    active_shapes: Vec<Lambda>,
-}
-
-/// Whether a call from `state` to `target` is a **shape repeat** — the cutoff
-/// condition (§4a step 4). A target whose shape is already active on the path is not
-/// admitted through it; the induction handles the cycle.
-fn is_cutoff(active_shapes: &[Lambda], target: &Instance) -> bool {
-    active_shapes.contains(&target.shape)
-}
-
 /// Construct the admitted-instance inventory (§4a). `roots` are the instances the
 /// program's root demands reach; `transitions` symbolically enumerates an instance's
 /// call targets. Returns the deduplicated admitted instances.
@@ -55,46 +40,59 @@ fn is_cutoff(active_shapes: &[Lambda], target: &Instance) -> bool {
 /// canonical sequence; a consumer that needs stable candidate identity must sort it
 /// by its own key, never rely on this order.
 pub fn build_inventory(roots: Vec<Instance>, transitions: impl Fn(&Instance) -> Vec<Instance>) -> Vec<Instance> {
-    let mut inventory: Vec<Instance> = Vec::new();
-    let mut visited: Vec<(Instance, Vec<Lambda>)> = Vec::new();
-    let mut work: Vec<InventoryState> = Vec::new();
+    build_inventory_by(roots, |i: &Instance| i.shape.clone(), transitions)
+}
+
+/// The §4a closure over an arbitrary node type `N` keyed by its **shape** — the
+/// cutoff fires when a transition's target shape already appears on the active path.
+/// Used both for abstract [`Instance`]s and, in the induction tail, for closure
+/// values (the μ-aware body-walk call graph).
+pub fn build_inventory_by<N: Clone + PartialEq>(
+    roots: Vec<N>,
+    shape_of: impl Fn(&N) -> Lambda,
+    transitions: impl Fn(&N) -> Vec<N>,
+) -> Vec<N> {
+    let mut inventory: Vec<N> = Vec::new();
+    let mut visited: Vec<(N, Vec<Lambda>)> = Vec::new();
+    let mut work: Vec<(N, Vec<Lambda>)> = Vec::new();
 
     for r in roots {
-        let seq = vec![r.shape.clone()];
-        push_state(&mut inventory, &mut visited, &mut work, r, seq);
+        let seq = vec![shape_of(&r)];
+        push_node(&mut inventory, &mut visited, &mut work, r, seq);
     }
 
-    while let Some(state) = work.pop() {
-        for target in transitions(&state.instance) {
-            if is_cutoff(&state.active_shapes, &target) {
+    while let Some((node, active)) = work.pop() {
+        for target in transitions(&node) {
+            let ts = shape_of(&target);
+            if active.contains(&ts) {
                 continue; // cutoff — the shape repeats on this path
             }
-            let mut seq = state.active_shapes.clone();
-            seq.push(target.shape.clone());
-            push_state(&mut inventory, &mut visited, &mut work, target, seq);
+            let mut seq = active.clone();
+            seq.push(ts);
+            push_node(&mut inventory, &mut visited, &mut work, target, seq);
         }
     }
 
     inventory
 }
 
-/// Admit `instance` (deduplicated) and enqueue its state, unless the exact
-/// `(instance, active shape sequence)` was already processed — the visited guard
-/// bounds the closure against the advance-bounded, shape-cutoff state space.
-fn push_state(
-    inventory: &mut Vec<Instance>,
-    visited: &mut Vec<(Instance, Vec<Lambda>)>,
-    work: &mut Vec<InventoryState>,
-    instance: Instance,
+/// Admit `node` (deduplicated) and enqueue its state, unless the exact `(node, active
+/// shape sequence)` was already processed — the visited guard bounds the closure
+/// against the advance-bounded, shape-cutoff state space.
+fn push_node<N: Clone + PartialEq>(
+    inventory: &mut Vec<N>,
+    visited: &mut Vec<(N, Vec<Lambda>)>,
+    work: &mut Vec<(N, Vec<Lambda>)>,
+    node: N,
     active_shapes: Vec<Lambda>,
 ) {
-    let key = (instance.clone(), active_shapes.clone());
+    let key = (node.clone(), active_shapes.clone());
     if visited.contains(&key) {
         return;
     }
     visited.push(key);
-    if !inventory.contains(&instance) {
-        inventory.push(instance.clone());
+    if !inventory.contains(&node) {
+        inventory.push(node.clone());
     }
-    work.push(InventoryState { instance, active_shapes });
+    work.push((node, active_shapes));
 }

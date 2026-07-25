@@ -1202,3 +1202,75 @@ mod inventory {
         assert_eq!(fwd.len(), 3, "A, B, C admitted");
     }
 }
+
+// ── μ-aware body walk / call graph (v0.8.1 induction tail, step 1) ─────────────
+
+mod bodywalk {
+    use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
+    use crate::oracle::run_source;
+    use crate::value::ValueRef;
+
+    /// Run a program and return its final value (a closure, for these tests).
+    fn run(src: &str) -> ValueRef {
+        run_source(src).expect("program runs").0
+    }
+
+    #[test]
+    fn self_recursion_is_a_self_edge() {
+        // `f` is captured (a free variable in its own body); the shared env late-binds
+        // it to the closure, so the call graph resolves the self-edge.
+        let f = run("f = (n) => n == 0 ? 0 : f(n - 1)\nf");
+        let targets = callee_targets(&f);
+        assert_eq!(targets.len(), 1, "one call target");
+        assert!(targets.contains(&f), "the target is f itself");
+        // The reachable set is finite: the self-edge closes as a shape repeat.
+        let reach = reachable_closures(f.clone());
+        assert_eq!(reach.len(), 1, "only f is admitted");
+        assert!(reach.contains(&f));
+    }
+
+    #[test]
+    fn mutual_recursion_crosses_and_is_finite() {
+        let even = run(
+            "even = (n) => n == 0 ? true : odd(n - 1)\n\
+             odd = (n) => n == 0 ? false : even(n - 1)\n\
+             even",
+        );
+        let odd = {
+            let t = callee_targets(&even);
+            assert_eq!(t.len(), 1, "even calls one function");
+            t[0].clone()
+        };
+        assert_ne!(odd, even, "even and odd are distinct closures");
+        // odd calls back to even.
+        let back = callee_targets(&odd);
+        assert_eq!(back.len(), 1);
+        assert!(back.contains(&even), "odd calls even");
+        // The reachable set is {even, odd} — the cycle closes on the shape repeat.
+        let reach = reachable_closures(even.clone());
+        assert_eq!(reach.len(), 2, "even and odd admitted, no runaway");
+        assert!(reach.contains(&even) && reach.contains(&odd));
+    }
+
+    #[test]
+    fn a_leaf_function_has_no_edges() {
+        // No application in the body → no call-graph successors; reachable = {self}.
+        let id = run("id = (x) => x\nid");
+        assert!(callee_targets(&id).is_empty());
+        assert_eq!(reachable_closures(id.clone()).len(), 1);
+    }
+
+    #[test]
+    fn nonrecursive_helper_is_reached_but_bounded() {
+        // g calls h (a captured helper); h calls nothing. Reachable = {g, h}.
+        let g = run(
+            "h = (x) => x + 1\n\
+             g = (n) => h(n)\n\
+             g",
+        );
+        let targets = callee_targets(&g);
+        assert_eq!(targets.len(), 1, "g calls h");
+        let reach = reachable_closures(g);
+        assert_eq!(reach.len(), 2, "g and h");
+    }
+}
