@@ -9,8 +9,11 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 ## 2026-07-25 — Analyzer-core bridge-2: the joint operand driver + structural witness
 
 Completes the review's held bridge before the induction tail. `src/analyzer/
-application.rs` extended; 2 new tests (AP-24/29, AP-30), the existing algebra tests
-migrated to the structural witness. Full tree 269 lib + 111 conformance, clippy clean.
+application.rs` extended; 2 new tests (AP-24/29 + the structural-witness hardening),
+the existing algebra tests migrated to the structural witness. Full tree 269 lib + 111
+conformance, clippy clean. **[Corrected per the follow-up review, same day]:** the
+structural-witness test is *not* normative AP-30 (that is the fall-through / row-
+contribution case, tail-dependent) — see below.
 
 - **`analyze_application`** processes the joint operand — the correlated
   `[callee, …args]` AnalysisContract — **per live alternative** (admission step 1 +
@@ -28,16 +31,32 @@ migrated to the structural witness. Full tree 269 lib + 111 conformance, clippy 
   ApplicationWitness { callee: ValueRef, arguments: Vec<ValueRef> })`, and the seat
   demand now returns a `SeatVerdict { Proven | Refuted(ApplicationWitness) | Unproven }`.
   A refutation carries the **represented execution** (callee applied to arguments),
-  not a fakeable token (AP-30 asserts the witness is `numFn` applied to `"hi"`).
+  not a fakeable token — `refutation_carries_a_represented_application_witness` asserts
+  the witness is `numFn` applied to `"hi"`.
+- **AP-30 is NOT yet implemented [follow-up review correction].** Normative AP-30 is
+  the *completion / fall-through* version of the cross-pair problem: a fall-through row
+  inhabited only by a projected cross-pair `(e₁,a₂) ∈ (E×A)∖R_alt` must contribute
+  `UnprovenPossible` (→ expecting-seat `Unproven`), flipping to `ProvenPresent` only on
+  a **proved** `R_alt ∩ row` inhabitant. That needs the row-selection / outcome-
+  contribution machinery of the tail; the three `CompletionWithoutValue` states exist,
+  but nothing yet *selects* a row and *decides* the contribution. AP-30 is **owed with
+  the tail** (the misnamed test was renamed, and no longer claims it).
 - **Chose / scoped:** the input obligation is supplied by an `accepts` callback so the
   correlation discipline is exercised independently — deriving the accepted domain from
   the callee's param pattern (§1 step 3 proper) is threaded in the induction tail.
   `analyze_apply` is still the coarse path; the driver is not yet wired into it.
+- **Known precision loss (non-blocking, sound) [review].** `live_alternatives` returns
+  a **collection-wide** `correlated` flag: a mixed outer `Alt` (one correlated branch +
+  one already-projected branch) degrades the *whole* set, so a genuine refutation from
+  the correlated branch is downgraded to `Unproven`. Sound (only loses precision, never
+  manufactures a verdict); the per-alternative `witness_status: Represented | Projected`
+  upgrade is deferred.
 - **`// [ask-author]`:** none.
 
 The review's bridge prerequisite is now discharged (correlated domain + joint witness
-+ AP-24/29/30). The **induction tail** — μ body-walk → candidate graph → SCC return
-induction → `analyze_apply` → Phase A — is unblocked.
++ AP-24/29). The **induction tail** — μ body-walk → real accepted-domain derivation →
+row selection / outcome contribution (**where real AP-30 lands**) → candidate graph →
+SCC return induction → `analyze_apply` → Phase A — is unblocked.
 
 ---
 

@@ -1007,8 +1007,13 @@ mod application {
         );
     }
 
+    // The structural-witness hardening (review §7) — NOT normative AP-30. Real AP-30
+    // is the completion/fall-through version: a row inhabited only by a projected
+    // cross-pair `(e₁,a₂) ∈ (E×A)∖R_alt` must contribute `UnprovenPossible`, flipping
+    // to `ProvenPresent` only on a proved `R_alt ∩ row` inhabitant — that needs the
+    // row-selection / outcome-contribution machinery of the induction tail.
     #[test]
-    fn ap30_refutation_witness_is_a_represented_execution() {
+    fn refutation_carries_a_represented_application_witness() {
         // A genuinely-failing CORRELATED alternative refutes with a structural
         // witness — the callee applied to the argument, not a bare token.
         let mut i = Interner::new();
@@ -1128,10 +1133,10 @@ mod inventory {
     }
 
     #[test]
-    fn membership_is_independent_of_root_and_transition_order() {
-        // The inventory is a set: reversing the roots and the transition enumeration
-        // yields the same membership (the returned Vec order may differ, and callers
-        // must not depend on it).
+    fn membership_is_independent_of_transition_order() {
+        // The inventory is a set: reversing the transition enumeration yields the same
+        // membership (the returned Vec order may differ, and callers must not depend
+        // on it).
         let mut i = Interner::new();
         let a = mk(&mut i, name("x"));
         let b0 = konst(i.integer(0));
@@ -1168,5 +1173,32 @@ mod inventory {
         key(&mut two);
         assert_eq!(one, two, "inventory membership is order-independent");
         assert_eq!(one.len(), 3);
+    }
+
+    #[test]
+    fn membership_is_independent_of_root_order() {
+        // Two independent roots reaching a shared shape: reversing the *root* order
+        // yields the same inventory membership.
+        let mut i = Interner::new();
+        let a = mk(&mut i, name("x"));
+        let b0 = konst(i.integer(0));
+        let b = mk(&mut i, b0);
+        let c0 = konst(i.integer(1));
+        let c = mk(&mut i, c0);
+        let (sa, sb, cc) = (a.shape.clone(), b.shape.clone(), c.clone());
+        let trans = move |inst: &Instance| {
+            if inst.shape == sa || inst.shape == sb {
+                vec![cc.clone()]
+            } else {
+                vec![]
+            }
+        };
+        let mut fwd = build_inventory(vec![a.clone(), b.clone()], &trans);
+        let mut rev = build_inventory(vec![b.clone(), a.clone()], &trans);
+        let key = |v: &mut Vec<Instance>| v.sort_by_key(|x| format!("{:?}", x.shape));
+        key(&mut fwd);
+        key(&mut rev);
+        assert_eq!(fwd, rev, "inventory membership is independent of root order");
+        assert_eq!(fwd.len(), 3, "A, B, C admitted");
     }
 }

@@ -95,7 +95,7 @@ Low-stakes / for-info only:
 | Tuple-length family §5 (grapheme boundary-state seams: segmenter-owned `compose`/`seam_delta`, merges-only bound) | family v0.3.1 | ✅ (TL-09); 🟡 finite-state lift to string *contracts* owed |
 | Analyzer, expression layer: Const/Ref/PrimOp/Tuple/Record/Template/Access/Match/Apply — exact closed-expression trap concordance + sound open-term reasoning, narrowing, named contracts | §6 concordance | ✅ for the listed nodes; 🟡 `Lambda` bodies, `Write`/worlds type as Top; open-call returns Top |
 | Application & induction §2 — `AnalysisContract` **structural/correlated** domain (Leaf/Tuple/Record/Alt, γ, `intersectA`/`meetInstance`, `proveSubcontractA`) | v0.8.1 | ✅ 8.1a + bridge (AP-27/28, correlation survival) |
-| Application & induction §1 — the outcome algebra + **joint operand driver** (`ApplicationOutcome` tri-state, `analyze_application` per-alternative, structural `ApplicationWitness`/`SeatVerdict`) | v0.8.1 | ✅ 8.1b + bridge-2 (AP-15/17/18/21/23/24/29/30) |
+| Application & induction §1 — the outcome algebra + **joint operand driver** (`ApplicationOutcome` tri-state, `analyze_application` per-alternative, structural `ApplicationWitness`/`SeatVerdict`) | v0.8.1 | ✅ 8.1b + bridge-2 (AP-15/17/18/21/23/24/29 + structural witness); **AP-30** ⬜ tail-dependent (row-contribution) |
 | Application & induction §4a — the constructed instance-chain inventory (traversal-free closure + shape-repeat cutoff) | v0.8.1 | ✅ 8.1c (AP-16 mutual/self/diamond, order-independent set) |
 | Application & induction §1 steps 2–4 + §6/§5 — μ-structure body-walk, body-summary, candidate graph + return induction, `analyze_apply` rewiring | v0.8.1 | ⬜ **next**: the induction tail (unblocked — bridge discharged; unlocks A-NEG/A-ACC/A-SND/A-VER) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
@@ -114,10 +114,12 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 
 1. **Application & induction — the induction tail** (bridge discharged, unblocked):
    the μ-structure body-walk (real `transitions` from a closure body), §1 steps 2–4
-   body-summary (input obligation from the callee's param pattern, row selection), §6
-   candidate graph + SCC-ordered return induction with realized-witness `(e, x, v)`
-   refutation, §5 domain-indexed facts; rewire `analyze_apply` onto the driver; the
-   sampled γ soundness battery. Activates the Phase A batteries.
+   body-summary (input obligation from the callee's param pattern, **row selection +
+   outcome contribution — where normative AP-30 lands**), §6 candidate graph +
+   SCC-ordered return induction with realized-witness `(e, x, v)` refutation, §5
+   domain-indexed facts; rewire `analyze_apply` onto the driver; the sampled γ
+   soundness battery. Activates the Phase A batteries. (Deferred non-blocking:
+   per-alternative `witness_status` in `live_alternatives`.)
 3. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
    fuel harness (M-04); the string-length contract form + §5 finite-state lift.
 
@@ -158,4 +160,4 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `2e693c0` | App/induction 8.1b: application transfer rule §1 outcome algebra — tri-state completion, seat demand, join, admission (AP-15/17/18/21/23/24) | “App/induction 8.1b” |
 | 2026-07-25 | `eae2b43` | App/induction 8.1c: instance-chain inventory §4a — traversal-free closure + shape-repeat cutoff (AP-16) | “App/induction 8.1c” |
 | 2026-07-25 | `254c24d` | Analyzer-core bridge: correlated structural AnalysisContract (Leaf/Tuple/Record/Alt) — no false cross-pairs; review items closed | “Analyzer-core bridge” |
-| 2026-07-25 | (this) | Analyzer-core bridge-2: joint operand driver + structural ApplicationWitness/SeatVerdict (AP-24/29/30) | “Analyzer-core bridge-2” |
+| 2026-07-25 | (this) | Analyzer-core bridge-2: joint operand driver + structural ApplicationWitness/SeatVerdict (AP-24/29 + witness; AP-30 owed to tail) | “Analyzer-core bridge-2” |
