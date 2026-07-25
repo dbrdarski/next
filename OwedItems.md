@@ -35,15 +35,21 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
    membership coincides, but open-record *patterns* narrow to `∩ HasField` and lose
    per-field contracts. Sound, precision-lossy.
 
-4. **Tuple family §5 not yet built + two §4 tails** — §1 `Concat` + §2 `len` + §3
-   refutation/`restrictLen` + **§4 segment alignment** (forced-boundary peeling,
-   which closed the `Concat ⊑ Concat` unequal-count C.2 gap) are in. Still owed by
-   me: **§5 grapheme seam summaries**; `restrict_len`'s recursive certified-unfolding
-   rule (demand-depth-bounded `D`, the `interner` is carried for it); and the §4
-   **`ElementRefutation` *structured* witness** (alignment map + projected branch) —
-   refutation currently returns the complete concrete inhabitant, a strictly stronger
-   witness, so this is a presentation detail, not a soundness gap. All specified in
-   v0.3.1; ordinary build-order work.
+4. **Tuple family built (§1–§5); three precision tails owed** — §1 `Concat`, §2
+   `len`, §3 refutation/`restrictLen`, **§4 segment alignment** (closed the
+   `Concat ⊑ Concat` unequal-count C.2 gap), and **§5 grapheme boundary-state seams**
+   (segmenter-owned `compose`/`seam_delta`, exact for every literal, corpus-verified)
+   are all in. Owed, all precision/lift — none a soundness gap:
+   - **§5 finite-state lift to string *contracts*** — RI-parity normalization, the
+     ZWJ-chain / Hangul states over the segmenter's finite state space. Needs the
+     segmenter's category tables **and** a string-length *contract* form the algebra
+     does not yet have; `Summary` currently retains `units` and is segmenter-exact
+     for literals. The recorded exactness upgrade.
+   - `restrict_len`'s recursive certified-unfolding rule (demand-depth-bounded `D`,
+     the `interner` is carried for it).
+   - §4's **`ElementRefutation` *structured* witness** (alignment map + projected
+     branch) — refutation returns the complete concrete inhabitant, a strictly
+     stronger witness, so this is a presentation detail only.
 
 ## Still owed in the docs (Compendium C§17, patch 1.0.8)
 

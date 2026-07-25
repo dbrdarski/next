@@ -1698,3 +1698,129 @@ mod tl {
         assert!(matches!(v, Verdict::Proven), "empty source ⊑ anything (guard), got {v:?}");
     }
 }
+
+// ── §5: string boundary-state seams (TL-09) ──────────────────────────────────
+
+mod seams {
+    use crate::contract::grapheme::{Summary, concat_len_bound, count};
+
+    /// UTF-16 units of a `&str`.
+    fn u(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+    /// The exact composed grapheme count of two literals, through the summary.
+    fn seam(a: &str, b: &str) -> usize {
+        Summary::of_literal(&u(a)).compose(&Summary::of_literal(&u(b))).count
+    }
+    fn delta(a: &str, b: &str) -> isize {
+        Summary::of_literal(&u(a)).seam_delta(&Summary::of_literal(&u(b)))
+    }
+
+    // The five TL-09 boundary characters (round 1) + the round-2 flagship.
+    const WOMAN: &str = "\u{1F469}";
+    const GIRL: &str = "\u{1F467}";
+    const ZWJ: &str = "\u{200D}";
+    const RI_A: &str = "\u{1F1E6}";
+    const RI_B: &str = "\u{1F1E7}";
+    const RI_C: &str = "\u{1F1E8}";
+    const ACUTE: &str = "\u{0301}"; // combining acute accent
+    const HANGUL_L: &str = "\u{1100}"; // choseong kiyeok
+    const HANGUL_V: &str = "\u{1161}"; // jungseong a
+
+    #[test]
+    fn tl09_leading_zwj_flagship_merges_by_two() {
+        // 👩 ++ ‍👩‍👧  →  👩‍👩‍👧 : 1 + 2 → 1. The seam merges by TWO — the counterexample
+        // that retired the unsound `−1` interval.
+        let woman = WOMAN;
+        let zwj_family = format!("{ZWJ}{WOMAN}{ZWJ}{GIRL}");
+        assert_eq!(count(&u(woman)), 1, "👩 is one grapheme");
+        assert_eq!(count(&u(&zwj_family)), 2, "‍👩‍👧 (leading ZWJ) is two graphemes");
+        assert_eq!(seam(woman, &zwj_family), 1, "the whole join is one family cluster");
+        assert_eq!(delta(woman, &zwj_family), -2, "seam delta below −1 (the retired interval)");
+        // The right operand is fully absorbed: count(a++b) = 1 < count(b) = 2. The
+        // left count is a floor, the right count is not.
+        assert!(seam(woman, &zwj_family) < count(&u(&zwj_family)));
+        assert!(seam(woman, &zwj_family) >= count(&u(woman)));
+    }
+
+    #[test]
+    fn tl09_regional_indicator_pairing_and_parity() {
+        // A flag is a pair of regional indicators: 🇦 ++ 🇧 → 🇦🇧 (1), delta −1. But an
+        // already-even trailing run does NOT pair with the next: 🇦🇧 ++ 🇨 → [🇦🇧][🇨]
+        // (2), delta 0. Parity, not a fixed constant.
+        assert_eq!(seam(RI_A, RI_B), 1, "two RIs form one flag");
+        assert_eq!(delta(RI_A, RI_B), -1);
+        let flag_ab = format!("{RI_A}{RI_B}");
+        assert_eq!(count(&u(&flag_ab)), 1);
+        assert_eq!(seam(&flag_ab, RI_C), 2, "even run leaves the next RI unpaired");
+        assert_eq!(delta(&flag_ab, RI_C), 0);
+    }
+
+    #[test]
+    fn tl09_combining_mark_and_hangul_merge() {
+        // A base + a following combining mark is one cluster: e ++ ´ → é (1), delta −1.
+        assert_eq!(seam("e", ACUTE), 1, "base + combining acute is one grapheme");
+        assert_eq!(delta("e", ACUTE), -1);
+        // Hangul L + V compose one syllable block (GB6): delta −1.
+        assert_eq!(seam(HANGUL_L, HANGUL_V), 1, "L + V is one syllable cluster");
+        assert_eq!(delta(HANGUL_L, HANGUL_V), -1);
+    }
+
+    #[test]
+    fn tl09_ascii_and_empty_are_exact_and_seamless() {
+        // No cross-seam interaction for plain text.
+        assert_eq!(seam("ab", "cd"), 4);
+        assert_eq!(delta("ab", "cd"), 0);
+        // "" + s is exactly count(s) (the proven-zero case, 0.1.1).
+        let s = format!("{WOMAN}{ZWJ}{WOMAN}{ZWJ}{GIRL}");
+        assert_eq!(seam("", &s), count(&u(&s)));
+        assert_eq!(delta("", &s), 0);
+        assert_eq!(seam(&s, ""), count(&u(&s)));
+    }
+
+    #[test]
+    fn seam_composition_is_exact_and_associative_over_the_corpus() {
+        // The mandated soundness cross-check: over a generated corpus of
+        // boundary-relevant fragments, summary composition reproduces direct
+        // segmentation, and the merges-only bounds hold. Property testing here is a
+        // cross-check on the segmenter-owned seam, never the proof.
+        let flag = format!("{RI_A}{RI_B}");
+        let family = format!("{ZWJ}{WOMAN}{ZWJ}{GIRL}");
+        let corpus = ["", "a", "ab", WOMAN, GIRL, ZWJ, RI_A, RI_B, RI_C, ACUTE, HANGUL_L, HANGUL_V, &flag, &family];
+        for a in corpus {
+            for b in corpus {
+                let sa = Summary::of_literal(&u(a));
+                let sb = Summary::of_literal(&u(b));
+                let composed = sa.compose(&sb);
+                let joined = format!("{a}{b}");
+                // Exact for literal–literal.
+                assert_eq!(composed.count, count(&u(&joined)), "compose exact for {a:?}++{b:?}");
+                // Merges-only, asymmetric floor: count(a) ≤ count(a++b) ≤ count(a)+count(b).
+                let (ca, cb, cj) = (sa.count, sb.count, composed.count);
+                assert!(cj <= ca + cb, "no split: {a:?}++{b:?}");
+                assert!(cj >= ca, "left count is the floor: {a:?}++{b:?}");
+                // Associativity: (a·b)·c == a·(b·c) on counts, spot-checked with `a`.
+                let via_left = sa.compose(&sb).compose(&Summary::of_literal(&u("a")));
+                let via_right = sa.compose(&sb.compose(&Summary::of_literal(&u("a"))));
+                assert_eq!(via_left.count, via_right.count, "associative on {a:?}++{b:?}++'a'");
+            }
+        }
+    }
+
+    #[test]
+    fn concat_len_bound_is_the_sound_merges_only_envelope() {
+        // The analyzer fallback for abstract operands: [max(lo), sum(hi)].
+        assert_eq!(concat_len_bound((2, Some(3)), (1, Some(4))), (2, Some(7)));
+        // An unbounded operand keeps the upper open, but the floor is the larger lo.
+        assert_eq!(concat_len_bound((5, None), (2, Some(9))), (5, None));
+        // Every literal seam in a small corpus lands inside its own bound.
+        for a in ["", WOMAN, RI_A, "ab"] {
+            for b in ["", GIRL, RI_B, "cd"] {
+                let (ca, cb) = (count(&u(a)), count(&u(b)));
+                let (lo, hi) = concat_len_bound((ca, Some(ca)), (cb, Some(cb)));
+                let actual = seam(a, b);
+                assert!(lo <= actual && actual <= hi.unwrap(), "{a:?}++{b:?} in bound");
+            }
+        }
+    }
+}

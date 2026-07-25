@@ -6,6 +6,50 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Tuple family §5: string boundary-state seams
+
+`src/contract/grapheme.rs` — the segmenter-owned seam — plus 6 tests (TL-09's five
+boundary characters, the round-2 leading-ZWJ flagship, an exhaustive corpus
+cross-check, and the analyzer bound). Full tree 253 lib + 111 conformance, clippy
+clean. Completes the tuple-length family (§1–§5).
+
+- **Grapheme count is not additive across concatenation** — extended clustering
+  (UAX #29) can merge across the seam by **more than one**. The flagship: `👩` (1)
+  `++` `‍👩‍👧` (2) → `👩‍👩‍👧` (1), a seam delta of **−2**. That retired the unsound `−1`
+  interval (round 1). **`grapheme::count` / `Summary` / `compose` / `seam_delta`**
+  are **segmenter-owned** — every seam is recomputed by the pinned
+  `unicode-segmentation` (`=1.13.3`), never a guessed constant (C§13.4 re-pin
+  invalidation rides the version pin).
+- **Boundary-state summary, exact for literals** — a string is a `Summary { count,
+  units }`; concatenation is `compose`, which re-segments the join, so
+  `compose(of(a), of(b)).count == count(a ++ b)` for all `a, b`. The **mandated
+  soundness check** (spec §5: "exhaustive over the generated finite transition
+  table; property testing is a cross-check, never the proof") is a corpus sweep over
+  the boundary-relevant fragments — flagship, RI runs, combining, Hangul, ASCII,
+  empty — asserting composition reproduces direct segmentation and stays associative.
+- **The merge is asymmetric [chose — the spec states the delta, not the floor]** —
+  clustering only merges (never splits), and appending to the right cannot change
+  the **left** operand's internal boundaries (breaks and RI parity are decided
+  left-to-right), whereas prepending can rewrite the right's segmentation (a leading
+  joiner is absorbed — the flagship gives `count = 1 < count(b) = 2`). Hence the
+  sound envelope is `count(a) ≤ count(a ++ b) ≤ count(a) + count(b)` — the floor is
+  the **left** count, *never* `count(b)` and never their max. My first bound used
+  `max` and the flagship corpus check caught it. `concat_len_bound` is the `Approx`
+  analyzer fallback carrying this.
+- **TL-09** — leading-ZWJ (1+2→1); RI pairing (`🇦`+`🇧`→1, delta −1) *and* parity
+  (`🇦🇧`+`🇨`→2, delta 0); combining mark (`e`+´→1); Hangul `L`+`V`→1; ASCII seamless;
+  `"" + s` exact (the proven-zero case, 0.1.1) — all against the pinned segmenter.
+- **Scope / owed:** the finite boundary-state **compression** that lifts the exact
+  seam to abstract string **contracts** — RI-parity normalization, the ZWJ-chain /
+  Hangul states over the segmenter's finite state space — needs the segmenter's
+  category tables *and* a string-length contract form the algebra does not yet have.
+  The current `Summary` retains `units` and is segmenter-exact for every literal; the
+  finite-state lift is the recorded upgrade (OwedItems).
+- **`// [ask-author]`:** the boundary-state space enumeration is deferred with that
+  lift (noted in the module header) — no semantics invented in the interim.
+
+---
+
 ## 2026-07-25 — Tuple family §4: segment alignment
 
 `prove_segments` — the forced-boundary peeling procedure — plus 8 tests (TL-01a,

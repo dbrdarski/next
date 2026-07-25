@@ -20,6 +20,7 @@ use crate::rational::Rational;
 use crate::value::{ValueData, ValueRef};
 
 mod expr;
+pub mod grapheme;
 pub mod length;
 mod operation;
 pub mod recursive;
