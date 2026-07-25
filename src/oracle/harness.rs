@@ -204,20 +204,23 @@ impl std::fmt::Display for RunError {
 
 /// The non-panicking driver: run a program, surfacing every stage's error.
 pub fn run_source(src: &str) -> Result<(ValueRef, HostIo), RunError> {
+    run_source_in(src, &mut Interner::new())
+}
+
+/// As [`run_source`], but into a **caller-supplied interner** — so the produced value
+/// (e.g. a closure) shares its interner with subsequent work. This matters whenever the
+/// value is later *evaluated* (interned `==` is pointer identity, so cross-interner
+/// numbers compare unequal); analysis alone is cross-interner-safe (structural).
+pub fn run_source_in(src: &str, interner: &mut Interner) -> Result<(ValueRef, HostIo), RunError> {
     let toks = lex(src).map_err(RunError::Lex)?;
     let sprogram = parse_program(toks).map_err(RunError::Parse)?;
-    let mut interner = Interner::new();
-    let module = Desugarer::new(&mut interner)
-        .program(&sprogram)
-        .map_err(RunError::Desugar)?;
+    let module = Desugarer::new(interner).program(&sprogram).map_err(RunError::Desugar)?;
 
     let io = Rc::new(RefCell::new(HostIo::default()));
-    let env = prelude_env(&mut interner);
-    install_host_effects(&mut interner, &env, &io);
+    let env = prelude_env(interner);
+    install_host_effects(interner, &env, &io);
 
-    let value = Oracle::new(&mut interner)
-        .run_module_in(&module, &env)
-        .map_err(RunError::Trap)?;
+    let value = Oracle::new(interner).run_module_in(&module, &env).map_err(RunError::Trap)?;
     let captured = std::mem::take(&mut *io.borrow_mut());
     Ok((value, captured))
 }

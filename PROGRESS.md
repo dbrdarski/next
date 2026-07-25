@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-25 · induction tail step 8 — the completion tri-state (three-voice expecting-seat verdicts + callee threading).
+**Snapshot:** 2026-07-25 · induction tail step 9 — realized-witness refutation + the fuel/depth-bounded oracle.
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **298 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **302 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -31,7 +31,9 @@ H-01…05 green · **Phase A** 6 recorded stubs · **μ** MU-19 green / MU-18 ig
 The 13 ignores, by reason:
 - **module system staged** (5): P-27b, MOD-01, MOD-03, MOD-04, MOD-05 — imports
   parse; linking, module-file world distinction, and project errors are unbuilt.
-- **fuel harness absent** (1): M-04 (`DIVERGES` verdicts).
+- **program-level fuel harness owed** (1): M-04 (`DIVERGES` verdicts) — the eval-level
+  bound now exists (`eval_expr_bounded`, tail step 9); a bounded `run_module` + the M-04
+  wiring is the remaining step.
 - **PENDING-§5** (1): MU-18 (open-member observation trap needs the group window).
 - **Phase A** (6): program-level analyzer verdicts pending (A-WRK's RECOVER is now
   discharged — grids recovered; verification still needs the analyzer).
@@ -105,7 +107,8 @@ Low-stakes / for-info only:
 | Application & induction §6 — return-fact **inference** (autonomous claim proposal: `Contract::generalize` over a Bottom-pinned group summary, then the driver) | v0.8.1 | ✅ tail step 6 (factorial→Number over its domain; even/odd→Boolean; identity→sound over-approx; baseless→no fact) |
 | Application & induction §6/C§13.2 — **`analyze_apply` rewiring** (`call_return`: recursive call sites infer their return over the call-site args; re-entrancy guard in `summarize_instance`) | v0.8.1 | ✅ tail step 7 (`f(x:Number)`→Number; `even(x)` satisfies a tested seat; `f(x:Top)` stays sound) |
 | E10 / §1.6 — **completion tri-state** (`Completion` on `Analysis`; three-voice `demand`; remainder inhabitance via `has_proven_inhabitant`; callee completion threaded — partial/mutator callee flagged) | v0.8.1 | ✅ tail step 8 (partial callee at expecting seat → error; guarded fall-through → warning; closes the mutator-only gap) |
-| Application & induction §6/§5 — realized-witness `(e,x,v)` refutation, **AP-30 `ProvenPresent`** structured witness (outcome algebra), domain-indexed facts, the C§13.4 evaluation cache | v0.8.1 | ⬜ **next**: refutation + the structured ProvenPresent witness + cache (with A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
+| §6 — **realized-witness refutation** (`realized_refutation`/`check_return_claim`, three-voiced: permanent refute vs per-compilation unproven) + the **fuel/call-depth-bounded oracle** (`eval_expr_bounded`, `run_source_in`) | v0.8.1 | ✅ tail step 9 (factorial: Number Proven / String Refuted-with-witness / Greater(0) Unproven; divergence → OutOfFuel, no hang) |
+| Application & induction §6/§5 — **AP-30 `ProvenPresent`** structured witness (outcome algebra), domain-indexed facts, the C§13.4 evaluation cache, `where`/demand consumers of `check_return_claim` | v0.8.1 | ⬜ **next**: the structured ProvenPresent witness + cache + a claim consumer (A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
 | Reactive layer / concurrency / UI | G1 fence | 🚫 fenced, out of scope |
 
@@ -120,15 +123,16 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
-1. **Application & induction — the induction tail** (steps 1–8 done: body walk, input
+1. **Application & induction — the induction tail** (steps 1–9 done: body walk, input
    obligation, outcome contribution, the joint vector pass, the multi-SCC driver,
-   autonomous return-fact inference, the `analyze_apply` rewiring, **and the completion
-   tri-state**): next is (a) the realized-witness `(e, x, v)` **refutation** (the third
-   voice, permanent in-namespace); (b) **AP-30's structured `ProvenPresent` witness** in
-   the outcome algebra (a represented `(callee, args)` fall-through feeding `seat_demand`
-   — the wired analyzer path already gets the three-voice from `Completion`, so this is
-   the algebra half); (c) the **C§13.4 evaluation cache** (one call site drives one
-   bounded inference today); (d) §5 domain-indexed facts and the sampled γ soundness
+   autonomous return-fact inference, the `analyze_apply` rewiring, the completion
+   tri-state, **and realized-witness refutation**): next is (a) **AP-30's structured
+   `ProvenPresent` witness** in the outcome algebra (a represented `(callee, args)`
+   fall-through feeding `seat_demand`); (b) a **consumer for `check_return_claim`** — a
+   `where` return-check (E11) or a demand-driven return obligation, the natural home for
+   the three-voiced verdict; (c) the **C§13.4 evaluation cache** (one call site drives
+   one bounded inference today); (d) the **program-level bounded run + M-04 wiring**
+   (eval-level fuel exists now); (e) §5 domain-indexed facts and the sampled γ soundness
    battery. That set activates **A-ACC/A-SND** (A-NEG's `factorial → REJECT` needs the
    separate **C§10 grounding / derived-input-contract** arc — not this tail). (Deferred
    non-blocking: per-alternative `witness_status`; rest-parameter length-precise domain
@@ -183,4 +187,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `c467764` | Induction tail step 5: multi-SCC driver — call-graph SCC decomposition + reverse-topo, carry proven facts to dependents (double/quad; order-independent; mutual; failure isolation) | “Induction tail, step 5: the multi-SCC driver” |
 | 2026-07-25 | `4660634` | Induction tail step 6: return-fact inference — autonomous claim proposal (`Contract::generalize` over a Bottom-pinned group summary + the driver); factorial/even-odd/identity/baseless | “Induction tail, step 6: return-fact inference” |
 | 2026-07-25 | `25793dd` | Induction tail step 7: analyze_apply rewiring — `call_return` infers a known callee's return over call-site args; re-entrancy guard in `summarize_instance` (f(x:Number)→Number; even(x) tested seat; f(x:Top) sound) | “Induction tail, step 7: the analyze_apply rewiring” |
-| 2026-07-25 | (this) | Induction tail step 8: completion tri-state — `Completion` on `Analysis`, three-voice `demand`, remainder inhabitance, callee completion threaded (partial callee → error; guarded → warning) | “Induction tail, step 8: the completion tri-state” |
+| 2026-07-25 | `1472fdf` | Induction tail step 8: completion tri-state — `Completion` on `Analysis`, three-voice `demand`, remainder inhabitance, callee completion threaded (partial callee → error; guarded → warning) | “Induction tail, step 8: the completion tri-state” |
+| 2026-07-25 | (this) | Induction tail step 9: realized-witness refutation (`refute.rs`, three-voiced) + fuel/call-depth-bounded oracle (`eval_expr_bounded`, `run_source_in`, `proven_members`) | “Induction tail, step 9: realized-witness refutation” |

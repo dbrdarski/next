@@ -148,7 +148,16 @@ impl Contract {
     /// deliberately incomplete). Used by the analyzer to prove a `Match` fall-through
     /// reachable (E10 completion).
     pub fn has_proven_inhabitant(&self, interner: &mut crate::interner::Interner) -> bool {
-        subcontract::sample(self, interner).into_iter().any(|v| self.contains(&v))
+        !self.proven_members(interner).is_empty()
+    }
+
+    /// Sampled values that **genuinely belong** to this contract (`sample` ∩
+    /// `contains`) — represented witnesses for its inhabitance. Deliberately
+    /// incomplete (the sampler is a fixed, finite probe): a member the sampler misses
+    /// is simply not returned. Used by the analyzer to run concrete inputs (E10
+    /// fall-through; §6 realized-witness refutation).
+    pub fn proven_members(&self, interner: &mut crate::interner::Interner) -> Vec<ValueRef> {
+        subcontract::sample(self, interner).into_iter().filter(|v| self.contains(v)).collect()
     }
 
     /// Smart constructor for [`Contract::Concat`], applying the family's normal

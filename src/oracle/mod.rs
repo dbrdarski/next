@@ -36,8 +36,8 @@ mod poly;
 mod tests;
 
 pub use equal::values_equal;
-pub use eval::{eval_expr, eval_prim, run_program_commits, run_program_value};
-pub use harness::{HostIo, RunError, run_source, run_with_io};
+pub use eval::{BoundedOutcome, eval_expr, eval_expr_bounded, eval_prim, run_program_commits, run_program_value};
+pub use harness::{HostIo, RunError, run_source, run_source_in, run_with_io};
 
 /// An oracle trap: a non-value, non-catchable halt (§6). Its class is the
 /// analyzer obligation it mirrors.
@@ -123,16 +123,68 @@ impl Store {
 }
 
 /// The oracle: owns the interner and the store while evaluating. `pending` is the
-/// pending set π — present only inside a mutation transaction (B5).
+/// pending set π — present only inside a mutation transaction (B5). `fuel` bounds the
+/// number of evaluation steps: `None` is unlimited (the truth-source default); `Some(n)`
+/// aborts after `n` steps by setting `out_of_fuel` — a **machine limit** (Part A: never
+/// a trap, never a value), used by the analyzer's realized-witness refutation to skip a
+/// non-completing input without hanging.
 pub struct Oracle<'a> {
     interner: &'a mut Interner,
     store: Store,
     pending: Option<HashMap<SlotId, ValueRef>>,
+    fuel: Option<u64>,
+    out_of_fuel: bool,
+    call_depth: u32,
+    max_call_depth: Option<u32>,
 }
+
+/// The recursion-depth bound for a fueled run. A loop-free functional program can only
+/// diverge by unbounded call depth, so this is the primary divergence guard — and it
+/// caps the interpreter's own Rust stack use, so a diverging input yields `OutOfFuel`
+/// rather than a stack overflow. Small enough for the debug stack; far above the depth
+/// any refutation sample needs.
+const FUELED_MAX_CALL_DEPTH: u32 = 256;
 
 impl<'a> Oracle<'a> {
     pub fn new(interner: &'a mut Interner) -> Oracle<'a> {
-        Oracle { interner, store: Store::default(), pending: None }
+        Oracle {
+            interner,
+            store: Store::default(),
+            pending: None,
+            fuel: None,
+            out_of_fuel: false,
+            call_depth: 0,
+            max_call_depth: None,
+        }
+    }
+
+    /// An oracle bounded to `fuel` evaluation steps and [`FUELED_MAX_CALL_DEPTH`]
+    /// recursion depth (see [`Oracle::fuel`]).
+    pub fn new_fueled(interner: &'a mut Interner, fuel: u64) -> Oracle<'a> {
+        Oracle {
+            interner,
+            store: Store::default(),
+            pending: None,
+            fuel: Some(fuel),
+            out_of_fuel: false,
+            call_depth: 0,
+            max_call_depth: Some(FUELED_MAX_CALL_DEPTH),
+        }
+    }
+
+    /// Charge one evaluation step; `true` once fuel is exhausted (thereafter the eval
+    /// short-circuits). Unlimited (`fuel = None`) never charges.
+    fn burn_fuel(&mut self) -> bool {
+        if self.out_of_fuel {
+            return true;
+        }
+        if let Some(f) = &mut self.fuel {
+            match f.checked_sub(1) {
+                Some(rem) => *f = rem,
+                None => self.out_of_fuel = true,
+            }
+        }
+        self.out_of_fuel
     }
 
     /// Read a slot with **read-your-writes** (B5): the staged value if the

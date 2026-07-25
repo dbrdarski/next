@@ -45,6 +45,31 @@ pub fn eval_expr(expr: &Expr, interner: &mut Interner) -> EvalResult {
     oracle.eval(expr, &crate::env::Scope::root(), World::Pure)
 }
 
+/// The outcome of a **fuel-bounded** pure evaluation ([`eval_expr_bounded`]) — the
+/// completion triple plus the two halts a bounded run distinguishes: a genuine language
+/// `Trapped` (§6) and `OutOfFuel` (a non-completing input the bound cut off — a machine
+/// limit, never a witness against a return bound, §6).
+#[derive(Clone, Debug)]
+pub enum BoundedOutcome {
+    Produced(ValueRef),
+    CompletedWithoutValue,
+    Trapped(Trap),
+    OutOfFuel,
+}
+
+/// Evaluate a closed pure expression under a `fuel`-step bound. Used by the analyzer's
+/// realized-witness refutation to run a concrete input to completion *safely*: a
+/// diverging input exhausts the bound and yields `OutOfFuel` rather than hanging.
+pub fn eval_expr_bounded(expr: &Expr, fuel: u64, interner: &mut Interner) -> BoundedOutcome {
+    let mut oracle = Oracle::new_fueled(interner, fuel);
+    match oracle.eval(expr, &crate::env::Scope::root(), World::Pure) {
+        _ if oracle.out_of_fuel => BoundedOutcome::OutOfFuel,
+        Ok(Outcome::Produced(v)) => BoundedOutcome::Produced(v),
+        Ok(Outcome::CompletedWithoutValue) => BoundedOutcome::CompletedWithoutValue,
+        Err(t) => BoundedOutcome::Trapped(t),
+    }
+}
+
 /// Like [`run_program_value`], but also returns the number of *actual* slot
 /// commits — test-observable evidence of the interning-exact equality guard.
 pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
@@ -136,6 +161,12 @@ impl<'a> Oracle<'a> {
     // ── Expressions ──────────────────────────────────────────────────────────
 
     pub(super) fn eval(&mut self, e: &Expr, env: &Env, world: World) -> EvalResult {
+        // Fuel bound (analyzer refutation only; unlimited by default). Exhaustion is a
+        // machine limit, surfaced via `out_of_fuel` and checked at the bounded entry —
+        // never a language trap (Part A).
+        if self.burn_fuel() {
+            return Err(Trap { class: TrapClass::OperationSafety, message: "evaluation fuel exhausted".into() });
+        }
         match e {
             Expr::Const(v) => Ok(Outcome::Produced(v.clone())),
             Expr::Ref(r) => self.eval_ref(r, env),
@@ -656,11 +687,23 @@ impl<'a> Oracle<'a> {
         }
         let body = closure.lambda.body.clone();
 
-        match callee_kind {
+        // Call-depth bound (fueled runs only): a diverging call would otherwise deepen
+        // the interpreter's own stack without limit. Exhaustion is `out_of_fuel` — a
+        // machine limit, not a trap (Part A).
+        if let Some(max) = self.max_call_depth
+            && self.call_depth >= max
+        {
+            self.out_of_fuel = true;
+            return Err(Trap { class: TrapClass::OperationSafety, message: "call-depth bound exceeded".into() });
+        }
+        self.call_depth += 1;
+        let result = match callee_kind {
             ActKind::Pure => self.eval(&body, &call_env, World::Pure),
             ActKind::Effect => self.eval(&body, &call_env, World::Effect),
             ActKind::Mutator => self.apply_mutator(&body, &call_env, world),
-        }
+        };
+        self.call_depth -= 1;
+        result
     }
 
     /// Apply a mutator callee (semantics §3): from mutator world **join** the

@@ -6,6 +6,57 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 9: realized-witness refutation + the fuel/depth-bounded oracle (§6)
+
+The permanent third voice for return facts: a concrete completing execution that
+disproves a claim. Needs a **bounded** oracle run (a non-completing input is never a
+witness, §6), which is also the long-owed M-04 fuel mechanism at the eval level. New
+`src/analyzer/refute.rs`; fuel + call-depth bound on the oracle; `run_source_in`;
+`Contract::proven_members`; 4 tests. Full tree 302 lib + 111 conformance, clippy clean.
+
+- **The bounded oracle [mandated — §6's "non-completing input is never a witness"].**
+  `eval_expr_bounded(expr, fuel, interner) → BoundedOutcome` (Produced / CompletedWithoutValue
+  / Trapped / **OutOfFuel**). Two bounds on `Oracle` (unlimited by default — the truth
+  source is unchanged): a step `fuel`, and — the load-bearing one — a **call-depth
+  bound** (`FUELED_MAX_CALL_DEPTH = 256`). A loop-free functional program can only
+  diverge by unbounded recursion depth, so the depth bound is the primary divergence
+  guard **and** it caps the interpreter's own Rust stack — a diverging input yields
+  `OutOfFuel`, never a stack overflow (the step-fuel bound alone overflowed the stack
+  first). Exhaustion is a **machine limit** (Part A), surfaced via `out_of_fuel`, never
+  a language trap.
+- **`realized_refutation(callee, args, claim, interner) [mandated — §6].** Samples
+  genuine argument tuples (`Contract::proven_members`), runs each through the bounded
+  oracle, and returns the first `(arguments, v)` that **completes** with `v ∉ γ(claim)`
+  — a *represented* completing execution. OutOfFuel / CompletedWithoutValue / Trapped
+  are all skipped (never a witness against a return bound). The closure carries a
+  concrete environment, so `e` is fixed and the search is over inputs `x`.
+- **`check_return_claim` — three-voiced (§6).** Refutation is tried **first**
+  (permanent in-namespace) — it is the sound ground truth, catching a false claim the
+  abstract vector pass could otherwise leave merely unproven — then the inductive proof
+  (per-compilation). Verified: `factorial : Number` → Proven; `factorial : String` →
+  Refuted (witness `f(0)=1 ∉ String`); `factorial : Greater(0)` → Unproven (true, but
+  the abstract pass can't prove it and no *completing* input disproves it — negatives
+  diverge).
+- **`run_source_in(src, interner)` [chose — the cross-interner subtlety].** Interned
+  `==` is pointer identity, so a value **evaluated** in a different interner than it was
+  built in gets `n == 0` wrong (cross-interner numbers compare unequal → factorial never
+  grounds). `run_source_in` builds into a supplied interner; the refutation tests use one
+  interner throughout. Analysis alone is cross-interner-safe (structural), which is why
+  every prior test got away with two.
+- **The bounds are sound-only [chose].** `FUELED_MAX_CALL_DEPTH`/`REFUTE_FUEL` govern
+  only *what gets skipped* — a skipped input is never mistaken for a witness, so no
+  bound value can produce a false refutation; a larger bound only finds *more* real
+  witnesses. Far above the depth any refutation sample needs (`factorial(100)` is depth
+  100).
+- **Not yet consumed [scope].** `check_return_claim` is the building block a `where`
+  return-check (E11) or a demand-driven return obligation will call; those aren't wired,
+  and the driver's *proposed* claims are base-derived (sound, not refutable), so this
+  changes no current verdict. The eval-level fuel now exists; a **program-level bounded
+  run + the M-04 `DIVERGES` wiring** is a small remaining step (registered).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-25 — Induction tail, step 8: the completion tri-state — three-voice expecting-seat verdicts + callee threading (E10 / §1.6)
 
 Closes a real soundness gap and adds the three-voice severity. `analyze_apply` only

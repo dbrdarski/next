@@ -1774,3 +1774,79 @@ mod apply_wiring {
         assert!(matches!(subcontract(&Contract::Kind(Kind::Number), &a.contract, &mut i), Verdict::Proven), "Number ⊑ {:?}", a.contract);
     }
 }
+
+// ── Realized-witness refutation §6 — the permanent third voice (tail) ──────────
+
+mod refute {
+    use crate::analyzer::refute::{ClaimVerdict, check_return_claim, realized_refutation};
+    use crate::ast::{Arg, Expr};
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+    use crate::oracle::{BoundedOutcome, eval_expr_bounded, run_source_in};
+    use crate::rational::Rational;
+    use crate::value::ValueRef;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+    fn string() -> Contract {
+        Contract::Kind(Kind::String)
+    }
+    /// factorial, built **in `i`** — evaluating it needs the same interner (interned
+    /// `==` is pointer identity, so a cross-interner `n == 0` would never fire).
+    fn factorial(i: &mut Interner) -> ValueRef {
+        run_source_in("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf", i).unwrap().0
+    }
+    fn call(callee: ValueRef, arg: ValueRef) -> Expr {
+        Expr::Apply { callee: Box::new(Expr::Const(callee)), args: vec![Arg::Expr(Expr::Const(arg))] }
+    }
+
+    #[test]
+    fn realized_refutation_disproves_a_wrong_return_claim() {
+        // f does not return String: f(0) = 1 (a Number) ∉ String — a represented witness.
+        let mut i = Interner::new();
+        let f = factorial(&mut i);
+        let w = realized_refutation(&f, &[num()], &string(), &mut i).expect("String claim is refuted");
+        assert!(!string().contains(&w.produced), "the witness value is genuinely not a String");
+        assert_eq!(w.arguments.len(), 1, "a represented single-argument tuple");
+    }
+
+    #[test]
+    fn a_true_claim_has_no_realized_witness_and_terminates() {
+        // f DOES return Number over Number. The [Number] sample includes -1, on which f
+        // diverges — the call-depth bound skips it (OutOfFuel), so the search both finds
+        // no witness AND terminates (divergence-safety).
+        let mut i = Interner::new();
+        let f = factorial(&mut i);
+        assert!(realized_refutation(&f, &[num()], &num(), &mut i).is_none());
+    }
+
+    #[test]
+    fn check_return_claim_is_three_voiced() {
+        let mut i = Interner::new();
+        let f = factorial(&mut i);
+        // Proven by induction; refuted by a realized witness (permanent); and true but
+        // neither provable (n could be negative → n·positive not provably positive) nor
+        // disprovable (no *completing* input yields a non-positive) → Unproven.
+        assert!(matches!(check_return_claim(&f, &[num()], &num(), &cenv(), &mut i), ClaimVerdict::Proven));
+        assert!(matches!(check_return_claim(&f, &[num()], &string(), &cenv(), &mut i), ClaimVerdict::Refuted(_)));
+        let positive = Contract::Greater(Rational::from(0));
+        assert!(matches!(check_return_claim(&f, &[num()], &positive, &cenv(), &mut i), ClaimVerdict::Unproven));
+    }
+
+    #[test]
+    fn the_depth_bound_cuts_off_divergence() {
+        // A baseless recursion never completes → OutOfFuel (the call-depth bound), not a
+        // hang; a terminating call completes within the bound.
+        let mut i = Interner::new();
+        let loop_fn = run_source_in("loop = (n) => loop(n)\nloop", &mut i).unwrap().0;
+        let zero = i.integer(0);
+        assert!(matches!(eval_expr_bounded(&call(loop_fn, zero), 5_000, &mut i), BoundedOutcome::OutOfFuel));
+        let f = factorial(&mut i);
+        let five = i.integer(5);
+        assert!(matches!(eval_expr_bounded(&call(f, five), 200_000, &mut i), BoundedOutcome::Produced(_)));
+    }
+}
