@@ -639,7 +639,9 @@ fn callee_completion(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool
 /// than the untyped-domain `Number ∪ Indeterminate` (let alone `Top`). Falls back to
 /// `Top` when nothing informative is inferred (sound).
 fn call_return(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool, cenv: &ContractEnv, interner: &mut Interner) -> Contract {
-    if let Some(c) = cv.as_fn().and_then(|f| induction::hypothesis_for(f.shape())) {
+    // An active hypothesis applies only to the **same instance over a containing input
+    // domain** (§6 / C§13.2 domain-indexed facts) — never by shape alone.
+    if let Some(c) = induction::hypothesis_for(cv, arg_contracts, interner) {
         return c;
     }
     if cv.as_fn().is_none() || has_spread || induction::currently_inferring() {

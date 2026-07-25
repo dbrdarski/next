@@ -1850,3 +1850,68 @@ mod refute {
         assert!(matches!(eval_expr_bounded(&call(f, five), 200_000, &mut i), BoundedOutcome::Produced(_)));
     }
 }
+
+// ── Fact identity — instance + domain keyed hypotheses (Archive4 review §5) ─────
+
+mod fact_identity {
+    use crate::analyzer::bodywalk::callee_targets;
+    use crate::analyzer::induction::infer_return_fact;
+    use crate::contract::{Contract, ContractEnv, Kind, Verdict, subcontract};
+    use crate::interner::Interner;
+    use crate::oracle::run_source_in;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn is_num(c: &Contract, i: &mut Interner) -> bool {
+        matches!(subcontract(c, &Contract::Kind(Kind::Number), i), Verdict::Proven)
+    }
+
+    #[test]
+    fn same_shape_different_captures_are_not_aliased() {
+        // `make(1)` and `make("s")` are one shape, different captures. A candidate/return
+        // fact must stay attached to the concrete instance, not the shape.
+        let mut i = Interner::new();
+        let h = run_source_in(
+            "make = (v) => () => v\n\
+             a = make(1)\n\
+             b = make(\"s\")\n\
+             h = (c, d) => c ? 0 : (d ? a() : b())\n\
+             h",
+            &mut i,
+        )
+        .unwrap()
+        .0;
+        let targets = callee_targets(&h);
+        assert_eq!(targets.len(), 2, "h calls two closures");
+        assert_ne!(targets[0], targets[1], "a and b are distinct values despite one shape");
+
+        // Each closure keeps its own return fact — one Number, one String.
+        let facts: Vec<Contract> =
+            targets.iter().filter_map(|c| infer_return_fact(c, None, &cenv(), &mut i)).collect();
+        assert_eq!(facts.len(), 2, "both closures infer a fact: {facts:?}");
+        let a_num = is_num(&facts[0], &mut i);
+        let b_num = is_num(&facts[1], &mut i);
+        assert!(a_num ^ b_num, "exactly one is Number, one is String — not aliased: {facts:?}");
+
+        // The adversarial payoff: with shape-only keying, `a()`/`b()` would share a fact
+        // and `h : Number` could falsely close — but `h(false,false) → "s"`. The instance
+        // key rejects the false Number.
+        let h_fact = infer_return_fact(&h, None, &cenv(), &mut i);
+        assert!(
+            !matches!(&h_fact, Some(f) if is_num(f, &mut i)),
+            "h must not falsely infer a Number return: {h_fact:?}"
+        );
+    }
+
+    // The domain-escape guard (v0.8.1's `call input ⊆ fact input domain`) is exercised
+    // by the mutual `even`/`odd`-over-`[Number]` path: `odd` analyzed over its wider
+    // accepted domain feeds `even(n-1)` a `Top`-domain Indeterminate-passthrough that is
+    // *not* `⊑ [Number]`, so `even`'s domain-indexed fact correctly declines it — which is
+    // exactly why `infer_inner` propagates a consistent domain to same-arity partners.
+    // `analyzer::tests::apply_wiring::an_inferred_boolean_return_satisfies_a_tested_seat`
+    // covers it end-to-end. A standalone self-recursive escape is not tested here because
+    // a closed escaping call (`f("x")`) folds through the *unbounded* `eval_expr` and
+    // diverges — a pre-existing fold-path gap registered in OwedItems, orthogonal to the
+    // hypothesis key.
+}

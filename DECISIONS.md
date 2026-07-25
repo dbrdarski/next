@@ -6,6 +6,51 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Review correction: instance + domain-indexed hypothesis key (Archive4 §3/§4 — soundness blocker)
+
+The author's Archive(4) review flagged the **one soundness blocker** before the tail is
+complete: return-induction hypotheses were keyed by `Lambda` **shape** only, but
+v0.8.1 requires `(shape, annotated env, input domain)` — "shape alone never suffices."
+Now a soundness issue because `analyze_apply` consumes these facts. Fixed. Full tree
+303 lib + 111 conformance, clippy clean.
+
+- **The bug [mandated — v0.8.1 domain-indexed facts].** `HYPOTHESES: Vec<(Lambda,
+  Contract)>` / `hypothesis_for(shape)` discarded the instance and input domain. Two
+  aliasing classes: (a) **same shape, different captures** — `make=(v)=>()=>v; a=make(1);
+  b=make("s")` share a shape, so a shape lookup could return `b`'s `String` fact for `a`;
+  `h=(c,d)=>c?0:(d?a():b())` could falsely close `h:Number` though `h(false,false)→"s"`;
+  (b) **wrong argument domain** — a fact proved over `[Number]` must not be reused on a
+  `[String]` call.
+- **The fix.** `Hypothesis { callee: ValueRef, input: Vec<Contract>, contract }`, keyed
+  by the **concrete instance** (the closure value carries its captured environment) and
+  the **input domain**. `hypothesis_for(callee, args, interner)` applies a fact only when
+  `hyp.callee == callee` **and** `args ⊑ hyp.input` (`args_within` via `subcontract`) —
+  the interim of the spec's `(shape, annotated env, I)` key. `call_return` passes the
+  call's `(cv, arg_contracts)`, never `f.shape()`.
+- **Consequence — mutual groups need a consistent domain [chose, sound].** With the root
+  `even` pinned to the call-site `[Number]` but the partner `odd` analyzed over its wider
+  accepted `[Top]`, `odd`'s `even(n-1)` carries the `Top`-domain Indeterminate-passthrough
+  (`Number ∪ Indeterminate`), which is **not** `⊑ [Number]`, so `even`'s domain-indexed
+  fact correctly declines it — breaking the mutual proof. Fix: `infer_inner` propagates
+  the root's call-site domain to **same-arity partners**, so a mutual nest is analyzed
+  over one consistent domain. Sound: the driver verifies each member over its assigned
+  domain, so a mismatched propagation only fails, never falsely proves. Factorial's
+  call-site sharpening (`f(k:Number)→Number`) is preserved.
+- **Instance identity via `ValueRef ==` [chose].** Sound whichever way closure equality
+  resolves (pointer or structural bisimulation): equal ⇒ genuinely the same instance
+  (same captures) ⇒ same behavior ⇒ reuse is sound; unequal ⇒ no reuse (at worst a
+  precision miss, never an alias).
+- **Verified — `fact_identity::same_shape_different_captures_are_not_aliased`:** `a`/`b`
+  are distinct values, keep distinct return facts (one Number, one String), and `h` does
+  **not** falsely infer a Number return (with shape-only keying it would). The mutual
+  `even(x)`-satisfies-a-tested-seat wiring test now exercises the consistent-domain path.
+- **`// [ask-author]`:** none. Registered in OwedItems: the fold-path divergence (a
+  *closed* recursive call like `f("x")` folds through the **unbounded** `eval_expr` and
+  can diverge — orthogonal to the key, related to the review's oracle-boundary point) and
+  the two remaining review items (`segment_nullable(..., 8)`, `REFUTE_FUEL` scope).
+
+---
+
 ## 2026-07-25 — Induction tail, step 9: realized-witness refutation + the fuel/depth-bounded oracle (§6)
 
 The permanent third voice for return facts: a concrete completing execution that

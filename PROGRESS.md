@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-25 · induction tail step 9 — realized-witness refutation + the fuel/depth-bounded oracle.
+**Snapshot:** 2026-07-26 · review correction — instance + domain-indexed hypothesis key (Archive4 soundness blocker fixed).
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **302 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **303 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -106,6 +106,7 @@ Low-stakes / for-info only:
 | Application & induction §6/§13.2a — multi-SCC driver (call-graph SCC decomposition + reverse-topo; carry each proven component's facts to its dependents) | v0.8.1 | ✅ tail step 5 (dependent-after-dependency; order-independent; mutual-as-one-component; vector-failure isolation) |
 | Application & induction §6 — return-fact **inference** (autonomous claim proposal: `Contract::generalize` over a Bottom-pinned group summary, then the driver) | v0.8.1 | ✅ tail step 6 (factorial→Number over its domain; even/odd→Boolean; identity→sound over-approx; baseless→no fact) |
 | Application & induction §6/C§13.2 — **`analyze_apply` rewiring** (`call_return`: recursive call sites infer their return over the call-site args; re-entrancy guard in `summarize_instance`) | v0.8.1 | ✅ tail step 7 (`f(x:Number)`→Number; `even(x)` satisfies a tested seat; `f(x:Top)` stays sound) |
+| C§13.2 domain-indexed facts — **hypotheses keyed by instance + input domain** (`Hypothesis{callee, input, contract}`; `args ⊑ input` guard; mutual groups over a consistent domain) | v0.8.1 | ✅ Archive4 §3/§4 fix (same-shape/diff-captures not aliased; false `h:Number` rejected; `make(1)`/`make("s")` distinct) |
 | E10 / §1.6 — **completion tri-state** (`Completion` on `Analysis`; three-voice `demand`; remainder inhabitance via `has_proven_inhabitant`; callee completion threaded — partial/mutator callee flagged) | v0.8.1 | ✅ tail step 8 (partial callee at expecting seat → error; guarded fall-through → warning; closes the mutator-only gap) |
 | §6 — **realized-witness refutation** (`realized_refutation`/`check_return_claim`, three-voiced: permanent refute vs per-compilation unproven) + the **fuel/call-depth-bounded oracle** (`eval_expr_bounded`, `run_source_in`) | v0.8.1 | ✅ tail step 9 (factorial: Number Proven / String Refuted-with-witness / Greater(0) Unproven; divergence → OutOfFuel, no hang) |
 | Application & induction §6/§5 — **AP-30 `ProvenPresent`** structured witness (outcome algebra), domain-indexed facts, the C§13.4 evaluation cache, `where`/demand consumers of `check_return_claim` | v0.8.1 | ⬜ **next**: the structured ProvenPresent witness + cache + a claim consumer (A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
@@ -188,4 +189,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `4660634` | Induction tail step 6: return-fact inference — autonomous claim proposal (`Contract::generalize` over a Bottom-pinned group summary + the driver); factorial/even-odd/identity/baseless | “Induction tail, step 6: return-fact inference” |
 | 2026-07-25 | `25793dd` | Induction tail step 7: analyze_apply rewiring — `call_return` infers a known callee's return over call-site args; re-entrancy guard in `summarize_instance` (f(x:Number)→Number; even(x) tested seat; f(x:Top) sound) | “Induction tail, step 7: the analyze_apply rewiring” |
 | 2026-07-25 | `1472fdf` | Induction tail step 8: completion tri-state — `Completion` on `Analysis`, three-voice `demand`, remainder inhabitance, callee completion threaded (partial callee → error; guarded → warning) | “Induction tail, step 8: the completion tri-state” |
-| 2026-07-25 | (this) | Induction tail step 9: realized-witness refutation (`refute.rs`, three-voiced) + fuel/call-depth-bounded oracle (`eval_expr_bounded`, `run_source_in`, `proven_members`) | “Induction tail, step 9: realized-witness refutation” |
+| 2026-07-25 | `9d72f90` | Induction tail step 9: realized-witness refutation (`refute.rs`, three-voiced) + fuel/call-depth-bounded oracle (`eval_expr_bounded`, `run_source_in`, `proven_members`) | “Induction tail, step 9: realized-witness refutation” |
+| 2026-07-26 | (this) | Review correction (Archive4 §3/§4): instance + domain-indexed hypothesis key — `Hypothesis{callee,input,contract}`, `args ⊑ input`, same-arity domain propagation; aliasing adversarial test | “Review correction: instance + domain-indexed hypothesis key” |

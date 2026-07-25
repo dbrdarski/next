@@ -90,6 +90,33 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      §7 discipline. The represented-witness construction (feeding `seat_demand`'s
      `Refuted`) is the deferred AP-30 half.
 
+8. **Archive(4) review items [2026-07-26]** — the shape-only hypothesis-key **soundness
+   blocker is fixed** (instance + input-domain key; DECISIONS 2026-07-26). Remaining
+   from that review:
+   - **`segment_nullable(..., 8)` in `recursive.rs`** — a hard-coded recursion-depth cap
+     inside analyzer reasoning (returns `false` on exhaustion: conservative, not unsound,
+     but Principle-7-violating — precision on a magic number). Replace with an
+     advance-bounded finite algorithm from the `RecGroup` graph (visited-state / SCC /
+     precomputed bound). **The one genuine analyzer-internal fuel to remove.**
+   - **`REFUTE_FUEL` / `OutOfFuel` must stay non-normative** — acceptable only as
+     external bounded witness-search / diagnostics. `check_return_claim`'s refutation
+     path is not wired into any normative verdict yet; when a consumer lands, a
+     `Refuted` must not become effort-dependent (bound from finite analysis structure,
+     not a constant). Keep the oracle a reference/validation layer, never required for
+     exec / canon / equality / proof / verdicts.
+   - **Fold-path unbounded divergence** — `analyze_apply`'s constant-fold runs a *closed*
+     call through the **unbounded** `eval_expr`; a closed diverging call (`f("x")`) hangs
+     / overflows the analyzer. Pre-existing; related to the review's oracle-boundary
+     point. A bounded fold (→ fall through to open analysis on `OutOfFuel`) fixes the
+     hang but makes fold *precision* effort-dependent — so the real fix is the analyzer
+     not depending on the oracle for folding (architectural, deferred).
+   - **`may_not_complete = false` hard-coded** — `summarize_instance` never sets the
+     gray non-completion possibility (§1.5); no false rejection today, but the
+     application-outcome semantics are not yet conformant.
+   - **μ-body-walk is "μ-compatible for the current closure repr"** — resolves captures
+     through `@capᵢ → free_vars → env`; the final μ architecture keeps same-group refs in
+     the GroupTemplate. Integration debt, not a present flaw.
+
 5. **`Known(∅)` normalization — doc-integration mismatch [analyzer review, 07-25]** —
    the application spec (`next-application-induction-specification-v0-8.md:19`)
    normalizes `(C, Known(∅)) → Bottom` for the function-position `AnalysisContract`.

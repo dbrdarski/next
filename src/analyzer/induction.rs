@@ -30,16 +30,14 @@ use std::cell::{Cell, RefCell};
 use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
 use crate::analyzer::obligation::accepted_domain;
 use crate::analyzer::outcome::summarize_instance;
-use crate::ast::Lambda;
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::interner::Interner;
 use crate::value::ValueRef;
 
 thread_local! {
-    /// Dynamic-scope return-induction hypotheses: each shape's assumed return
-    /// contract, consulted by `analyze_apply` during a vector pass. A `Vec` (linear
-    /// lookup) — components are small.
-    static HYPOTHESES: RefCell<Vec<(Lambda, Contract)>> = const { RefCell::new(Vec::new()) };
+    /// Dynamic-scope return-induction hypotheses, consulted by `analyze_apply` during a
+    /// vector pass. A `Vec` (linear lookup) — components are small.
+    static HYPOTHESES: RefCell<Vec<Hypothesis>> = const { RefCell::new(Vec::new()) };
 
     /// Set while an [`infer_return_fact`] run is in progress — the **re-entrancy
     /// guard**. A driver pass analyzes bodies, whose calls reach `analyze_apply` again;
@@ -67,15 +65,47 @@ pub(crate) fn without_inference<R>(body: impl FnOnce() -> R) -> R {
     out
 }
 
-/// The assumed return contract for a callee shape, if one is under an active
-/// hypothesis. Consulted by the analyzer's application rule for recursive/mutual calls.
-pub(crate) fn hypothesis_for(shape: &Lambda) -> Option<Contract> {
-    HYPOTHESES.with(|h| h.borrow().iter().find(|(s, _)| s == shape).map(|(_, c)| c.clone()))
+/// An active return-induction hypothesis (§6 / C§13.2), keyed by the **concrete
+/// instance** (`callee` — a closure value, which carries its captured environment) and
+/// the **input domain** (`input`) it is assumed over. Shape alone never suffices: two
+/// closures of one shape with different captures (`make(1)` vs `make("s")`) hold
+/// distinct facts, and a fact proved over one domain must not be reused on a wider one.
+/// This is the interim of the spec's `(shape, annotated env, input domain)` key —
+/// instance identity subsumes shape+env, `input` is I.
+#[derive(Clone)]
+struct Hypothesis {
+    callee: ValueRef,
+    input: Vec<Contract>,
+    contract: Contract,
+}
+
+/// The assumed return contract for a call to `callee` over `args`, if a live hypothesis
+/// applies: **the same instance** (`hyp.callee == callee`) **and** the call's argument
+/// domain **contained in** the fact's input domain (`args ⊑ hyp.input`). Consulted by
+/// the analyzer's application rule for recursive/mutual calls — the aliasing guard the
+/// v0.8.1 domain-indexed-fact rule requires.
+pub(crate) fn hypothesis_for(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> Option<Contract> {
+    // Collect the same-instance hypotheses first (dropping the borrow before the
+    // subcontract check, which may itself want the interner but never HYPOTHESES).
+    let same_instance: Vec<Hypothesis> =
+        HYPOTHESES.with(|h| h.borrow().iter().filter(|hyp| hyp.callee == *callee).cloned().collect());
+    same_instance
+        .into_iter()
+        .find(|hyp| args_within(args, &hyp.input, interner))
+        .map(|hyp| hyp.contract)
+}
+
+/// Whether a call's argument domain `args` is contained in a fact's `domain` — the
+/// per-tuple subcontract `Tuple(args) ⊑ Tuple(domain)`.
+fn args_within(args: &[Contract], domain: &[Contract], interner: &mut Interner) -> bool {
+    let call = Contract::Tuple(args.to_vec());
+    let dom = Contract::Tuple(domain.to_vec());
+    matches!(subcontract(&call, &dom, interner), Verdict::Proven)
 }
 
 /// Run `body` with `hyps` installed as the active hypotheses, restoring the previous
 /// table afterward (so nested/stacked passes compose).
-fn with_hypotheses<R>(hyps: Vec<(Lambda, Contract)>, body: impl FnOnce() -> R) -> R {
+fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R) -> R {
     let saved = HYPOTHESES.with(|h| std::mem::replace(&mut *h.borrow_mut(), hyps));
     let out = body();
     HYPOTHESES.with(|h| *h.borrow_mut() = saved);
@@ -103,7 +133,7 @@ pub fn joint_vector_pass(members: &[Candidate], cenv: &ContractEnv, interner: &m
 /// facts of dependency components the driver has already settled (§6). Installs `base`
 /// plus every member's own claim, then verifies each member's body produces a
 /// subcontract of its claimed contract. `true` iff **all** members verify.
-fn run_pass(base: &[(Lambda, Contract)], members: &[Candidate], cenv: &ContractEnv, interner: &mut Interner) -> bool {
+fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, interner: &mut Interner) -> bool {
     let mut hyps = base.to_vec();
     hyps.extend(member_hypotheses(members));
 
@@ -117,11 +147,13 @@ fn run_pass(base: &[(Lambda, Contract)], members: &[Candidate], cenv: &ContractE
     })
 }
 
-/// Each member's claim as a shape-keyed hypothesis (the form [`hypothesis_for`] reads).
-fn member_hypotheses(members: &[Candidate]) -> Vec<(Lambda, Contract)> {
+/// Each member's claim as an instance-and-domain-keyed hypothesis ([`hypothesis_for`]'s
+/// form): the concrete callee, the input domain the claim is over (`c.args`), and the
+/// claimed return.
+fn member_hypotheses(members: &[Candidate]) -> Vec<Hypothesis> {
     members
         .iter()
-        .filter_map(|c| c.callee.as_fn().map(|f| (f.shape().clone(), c.contract.clone())))
+        .map(|c| Hypothesis { callee: c.callee.clone(), input: c.args.clone(), contract: c.contract.clone() })
         .collect()
 }
 
@@ -156,7 +188,7 @@ pub fn prove_facts(candidates: Vec<Candidate>, cenv: &ContractEnv, interner: &mu
     let adj = call_edges(&candidates);
     let components = scc_reverse_topo(&adj);
 
-    let mut settled: Vec<(Lambda, Contract)> = Vec::new();
+    let mut settled: Vec<Hypothesis> = Vec::new();
     let mut proven = Vec::new();
     let mut unproven = Vec::new();
     for comp in components {
@@ -216,29 +248,52 @@ fn infer_inner(
     interner: &mut Interner,
 ) -> Option<Contract> {
     let group = reachable_closures(callee.clone());
-    let bottoms: Vec<(Lambda, Contract)> = group
+
+    // Each reachable function's proposal domain. The root takes the call-site domain;
+    // so do **same-arity partners**, so a mutual group is analyzed over one consistent
+    // domain. (Otherwise a partner analyzed over its wider accepted domain — `Top` for a
+    // bare param — feeds the root arguments carrying the `Top`-domain Indeterminate
+    // passthrough, which the domain-indexed hypothesis then correctly declines, breaking
+    // the mutual proof.) A function with no sound domain — a rest param — drops out (a
+    // call to it coarsens to `Top`, sound). Sound throughout: the driver verifies each
+    // member over its assigned domain, so a mismatched propagation only fails, never
+    // falsely proves.
+    let with_args: Vec<(ValueRef, Vec<Contract>)> = group
         .iter()
-        .filter_map(|g| g.as_fn().map(|gf| (gf.shape().clone(), Contract::Bottom)))
+        .filter_map(|g| {
+            let args = match root_args {
+                Some(a) if g == callee => a.to_vec(),
+                Some(a) => {
+                    let dom = domain_args(g, cenv)?;
+                    if dom.len() == a.len() { a.to_vec() } else { dom }
+                }
+                None => domain_args(g, cenv)?,
+            };
+            Some((g.clone(), args))
+        })
         .collect();
 
-    let candidates: Vec<Candidate> = group
+    // Bottom-pin the whole group over their own domains, so a mutual/identity recursive
+    // tail call (in-domain) drops out of the base union. The instance+domain key means
+    // an out-of-domain recursive call is *not* pinned — it coarsens to `Top`, and the
+    // proposal then yields no informative claim (sound).
+    let bottoms: Vec<Hypothesis> = with_args
         .iter()
-        .filter_map(|f| {
-            // The root callee takes the call-site domain (when supplied); every other
-            // reachable function takes its own accepted domain.
-            let args = match root_args {
-                Some(a) if f == callee => a.to_vec(),
-                _ => domain_args(f, cenv)?,
-            };
+        .map(|(g, args)| Hypothesis { callee: g.clone(), input: args.clone(), contract: Contract::Bottom })
+        .collect();
+
+    let candidates: Vec<Candidate> = with_args
+        .iter()
+        .filter_map(|(f, args)| {
             let produced =
-                with_hypotheses(bottoms.clone(), || summarize_instance(f, &args, cenv, interner))?.produced.erase();
+                with_hypotheses(bottoms.clone(), || summarize_instance(f, args, cenv, interner))?.produced.erase();
             let claim = produced.generalize();
             // Top proves trivially (no information); Bottom claims no value (a baseless
             // recursion) — neither is an informative fact.
             if matches!(claim, Contract::Top | Contract::Bottom) {
                 return None;
             }
-            Some(Candidate { callee: f.clone(), args, contract: claim })
+            Some(Candidate { callee: f.clone(), args: args.clone(), contract: claim })
         })
         .collect();
 
