@@ -6,6 +6,28 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Review cleanup: remove `segment_nullable(..., 8)` magic depth (Archive4 §11)
+
+The review's one genuine analyzer-internal fuel: recursive-contract nullability
+(`segment_nullable`, `recursive.rs`) bounded `Ref` recursion by a hard-coded `fuel = 8`,
+returning `false` on exhaustion — conservative (not unsound) but Principle-7-violating
+(precision on a magic number). Replaced with **path-based cycle detection**: a group
+member already on the active unfolding path is a back-edge admitting no *new* length-0
+realization → `false` for that branch; the path holds each member at most once, so its
+depth is bounded by the group's member count — an advance bound from the finite
+`RecGroup`, not a constant.
+
+- **Strictly more precise:** a *non-cyclic* segment of any depth is now followed fully
+  (the old cap wrongly cut at 8); only genuine `Ref` cycles are stopped.
+- **No regression:** all RC-01…19 (and the full 303 lib + 111 conformance) pass
+  unchanged — no tested case had depth > 8, so behavior on them is identical; the change
+  only removes the false-negative tail and the magic number.
+- **`// [ask-author]`:** none. `REFUTE_FUEL`/`OutOfFuel` (the other fuel the review
+  audited) stays as external bounded witness-search / diagnostics — not wired into any
+  normative verdict; kept in OwedItems as a standing scope rule.
+
+---
+
 ## 2026-07-26 — Review correction: instance + domain-indexed hypothesis key (Archive4 §3/§4 — soundness blocker)
 
 The author's Archive(4) review flagged the **one soundness blocker** before the tail is

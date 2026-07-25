@@ -93,11 +93,9 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
 8. **Archive(4) review items [2026-07-26]** — the shape-only hypothesis-key **soundness
    blocker is fixed** (instance + input-domain key; DECISIONS 2026-07-26). Remaining
    from that review:
-   - **`segment_nullable(..., 8)` in `recursive.rs`** — a hard-coded recursion-depth cap
-     inside analyzer reasoning (returns `false` on exhaustion: conservative, not unsound,
-     but Principle-7-violating — precision on a magic number). Replace with an
-     advance-bounded finite algorithm from the `RecGroup` graph (visited-state / SCC /
-     precomputed bound). **The one genuine analyzer-internal fuel to remove.**
+   - ~~**`segment_nullable(..., 8)`**~~ **DONE [2026-07-26]** — replaced with path-based
+     cycle detection over group members (advance-bounded by the finite `RecGroup`, and
+     more precise — non-cyclic depth > 8 now followed). DECISIONS 2026-07-26.
    - **`REFUTE_FUEL` / `OutOfFuel` must stay non-normative** — acceptable only as
      external bounded witness-search / diagnostics. `check_return_claim`'s refutation
      path is not wired into any normative verdict yet; when a consumer lands, a

@@ -1019,21 +1019,33 @@ fn fixed_arity(c: &Contract) -> Option<usize> {
 /// Certain evidence that a segment can contribute **zero** positions (its
 /// denotation contains a length-0 realization). Sound-must: `false` when unsure,
 /// so a residual proof that relies on nullability is only ever conservative.
+///
+/// Recursion through group `Ref`s is bounded by **path-based cycle detection**, not a
+/// magic depth: a member already on the active unfolding path is a back-edge that
+/// admits no *new* empty realization → `false` for that branch. The path holds each
+/// member at most once, so its length is bounded by the group's member count — an
+/// advance bound derived from the finite `RecGroup`, and strictly more precise than the
+/// old fixed cap (a non-cyclic segment of any depth is now followed fully).
 fn segment_nullable(group: &RecGroup, s: &Contract) -> bool {
-    fn go(group: &RecGroup, s: &Contract, fuel: usize) -> bool {
-        if fuel == 0 {
-            return false;
-        }
+    fn go(group: &RecGroup, s: &Contract, path: &mut Vec<String>) -> bool {
         match s {
             Contract::Tuple(e) => e.is_empty(),
             Contract::Kind(Kind::Tuple) => true,
-            Contract::Union(a, b) => go(group, a, fuel - 1) || go(group, b, fuel - 1),
-            Contract::Concat(segs) => segs.iter().all(|x| go(group, x, fuel - 1)),
-            Contract::Ref(n) if group.is_member(n) => go(group, group.get(n), fuel - 1),
+            Contract::Union(a, b) => go(group, a, path) || go(group, b, path),
+            Contract::Concat(segs) => segs.iter().all(|x| go(group, x, path)),
+            Contract::Ref(name) if group.is_member(name) => {
+                if path.iter().any(|p| p == name) {
+                    return false; // cyclic back-edge — no new length-0 realization
+                }
+                path.push(name.clone());
+                let nullable = go(group, group.get(name), path);
+                path.pop();
+                nullable
+            }
             _ => false,
         }
     }
-    go(group, s, 8)
+    go(group, s, &mut Vec::new())
 }
 
 /// Align source segments `sa` against target segments `sb` (tuple family §4).
