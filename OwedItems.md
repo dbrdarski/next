@@ -54,6 +54,15 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      branch) — refutation returns the complete concrete inhabitant, a strictly
      stronger witness, so this is a presentation detail only.
 
+6. **Rest-parameter accepted domain — length-precise form owed [induction tail, 07-25]** —
+   `accepted_domain` (§1 step 3) derives the callee's accepted input set from its
+   parameter pattern via `pattern_contract`, which is sound only for **no-rest**
+   patterns; a rest parameter `(a, …rest)` widens to `Kind(Tuple)` (unsound as an
+   accepted domain, since it would admit the empty tuple). It currently **declines**
+   rest patterns (`None` → obligation `Unproven`). The sound length-precise domain is
+   the tuple-family §4 `restrictLen`/`Concat` form (`≥ k` positions) — a precision
+   refinement, not a soundness gap.
+
 5. **`Known(∅)` normalization — doc-integration mismatch [analyzer review, 07-25]** —
    the application spec (`next-application-induction-specification-v0-8.md:19`)
    normalizes `(C, Known(∅)) → Bottom` for the function-position `AnalysisContract`.

@@ -1274,3 +1274,94 @@ mod bodywalk {
         assert_eq!(reach.len(), 2, "g and h");
     }
 }
+
+// ── Input obligation §1 step 3 — accepted-domain derivation (induction tail) ───
+
+mod obligation {
+    use super::{ActKind, closure, konst, name};
+    use crate::analyzer::application::SeatVerdict;
+    use crate::analyzer::obligation::{accepted_domain, input_obligation};
+    use crate::ast::{BindingRef, Pat, PatElem, Ref};
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+    use crate::value::ValueRef;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn eq(v: ValueRef) -> Contract {
+        Contract::Equals(v)
+    }
+    fn two_params() -> Pat {
+        Pat::Tuple(vec![PatElem::Pat(Pat::Bind("a".into())), PatElem::Pat(Pat::Bind("b".into()))])
+    }
+    fn const_param(v: ValueRef) -> Pat {
+        Pat::Tuple(vec![PatElem::Pat(Pat::Const(v))])
+    }
+    fn contract_param(nm: &str) -> Pat {
+        Pat::Tuple(vec![PatElem::Pat(Pat::Contract(Ref::Immutable(BindingRef::Name(nm.into()))))])
+    }
+    fn rest_param() -> Pat {
+        Pat::Tuple(vec![PatElem::Pat(Pat::Bind("a".into())), PatElem::Rest(Some("rest".into()))])
+    }
+    fn proven(v: &SeatVerdict) -> bool {
+        matches!(v, SeatVerdict::Proven)
+    }
+
+    #[test]
+    fn arity_obligation_proves_and_refutes_with_a_witness() {
+        let mut i = Interner::new();
+        let f = closure(&mut i, two_params(), name("a"), ActKind::Pure);
+        let (a1, a2) = (i.integer(1), i.integer(2));
+        // f(1, 2): arity matches → proven.
+        assert!(proven(&input_obligation(&f, &[eq(a1.clone()), eq(a2)], &cenv(), &mut i)));
+        // f(1): wrong arity → refuted, with a represented (callee, args) witness.
+        match input_obligation(&f, &[eq(a1)], &cenv(), &mut i) {
+            SeatVerdict::Refuted(w) => {
+                assert_eq!(w.callee, f, "witness carries the callee");
+                assert_eq!(w.arguments.len(), 1, "and the rejecting argument tuple");
+            }
+            other => panic!("arity mismatch must refute, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_param_domain_governs_the_argument() {
+        let mut i = Interner::new();
+        let one = i.integer(1);
+        let f = closure(&mut i, contract_param("Number"), konst(one), ActKind::Pure);
+        // Sanity: the derived domain is a single-Number tuple.
+        assert_eq!(accepted_domain(&f, &cenv()), Some(Contract::Tuple(vec![Contract::Kind(Kind::Number)])));
+        let five = i.integer(5);
+        let hi = i.string("hi");
+        assert!(proven(&input_obligation(&f, &[eq(five)], &cenv(), &mut i)), "5 : Number accepted");
+        match input_obligation(&f, &[eq(hi.clone())], &cenv(), &mut i) {
+            SeatVerdict::Refuted(w) => assert_eq!(w.arguments, vec![hi], "\"hi\" rejected, witnessed"),
+            other => panic!("String arg must refute a Number param, got {other:?}"),
+        }
+        // A Top argument neither proves nor refutes.
+        assert!(matches!(input_obligation(&f, &[Contract::Top], &cenv(), &mut i), SeatVerdict::Unproven));
+    }
+
+    #[test]
+    fn const_param_accepts_only_its_value() {
+        let mut i = Interner::new();
+        let zero = i.integer(0);
+        let one = i.integer(1);
+        let f = closure(&mut i, const_param(zero.clone()), konst(one), ActKind::Pure);
+        assert!(proven(&input_obligation(&f, &[eq(zero)], &cenv(), &mut i)), "0 accepted");
+        let five = i.integer(5);
+        assert!(matches!(input_obligation(&f, &[eq(five)], &cenv(), &mut i), SeatVerdict::Refuted(_)), "5 rejected");
+    }
+
+    #[test]
+    fn rest_param_domain_is_deferred_not_unsound() {
+        // A rest parameter's sound domain is length-precise (§4 restrictLen), owed.
+        // Until then accepted_domain declines it, so the obligation is Unproven — never
+        // the unsound over-approximation that would bless f() against `(a, ...rest)`.
+        let mut i = Interner::new();
+        let f = closure(&mut i, rest_param(), name("a"), ActKind::Pure);
+        assert_eq!(accepted_domain(&f, &cenv()), None);
+        assert!(matches!(input_obligation(&f, &[], &cenv(), &mut i), SeatVerdict::Unproven));
+    }
+}

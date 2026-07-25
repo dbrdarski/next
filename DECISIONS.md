@@ -6,6 +6,38 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 2: the input obligation (accepted-domain derivation)
+
+Second tail step — the real §1 step 3, replacing bridge-2's test-only `accepts`
+callback. New module `src/analyzer/obligation.rs`; 4 tests. Full tree 278 lib + 111
+conformance, clippy clean.
+
+- **`accepted_domain(callee, cenv)`** — the contract the callee's parameter pattern
+  requires of the argument tuple, via `pattern_contract` (now `pub(crate)`; contract-
+  pattern names survive canonicalization, so the same derivation works on the shape).
+- **Soundness subtlety [chose]** — `pattern_contract` is built for *narrowing* and
+  **over-approximates** matched values, so it is a sound accepted domain **only when
+  the pattern has no tuple rest**: `(a, …rest)` widens to `Kind(Tuple)`, which would
+  bless `f()` even though the pattern rejects the empty tuple. `accepted_domain`
+  therefore **declines a rest-bearing pattern** (returns `None` → the obligation is
+  `Unproven`) rather than emit an unsound domain. The length-precise domain for rest
+  parameters is the tuple-family (§4 `restrictLen`) refinement — **owed** (OwedItems).
+- **`input_obligation(callee, arg_contracts, cenv, interner)`** — `Tuple(arg_contracts)
+  ⊑ AcceptedInputs`, three-valued: `Proven` on subcontract; `Refuted` with a
+  **represented** `ApplicationWitness { callee, arguments }` (the concrete callee + the
+  rejecting argument tuple from `subcontract`'s counterexample — the §7 witness
+  discipline, now on a real derivation); else `Unproven`. Tested: arity match/mismatch,
+  `(Number)` accepting `5` / refuting `"hi"` (witnessed) / `Top` unproven, a const
+  param accepting only its value, and the rest-param deferral.
+- **Chose / scoped** — operates on a **concrete callee closure value** (the tail's
+  working representation from step 1's body walk), where a refutation can carry the
+  actual callee. Wiring it into the abstract driver (`analyze_application`) and into
+  `analyze_apply` at real call sites is a later step; the callback in bridge-2's tests
+  is now backed by this real derivation.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-25 — Induction tail, step 1: the μ-aware body walk (call graph)
 
 First step of the return-induction tail (the bridge having passed the follow-up

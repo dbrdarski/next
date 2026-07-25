@@ -39,6 +39,7 @@ pub mod application;
 pub mod bodywalk;
 pub mod domain;
 pub mod inventory;
+pub mod obligation;
 
 #[cfg(test)]
 mod tests;
@@ -774,7 +775,7 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
 
 /// The contract of values a pattern matches — a **superset** of the true match set
 /// (sound for narrowing by intersection).
-fn pattern_contract(pat: &crate::ast::Pat, cenv: &ContractEnv) -> Contract {
+pub(crate) fn pattern_contract(pat: &crate::ast::Pat, cenv: &ContractEnv) -> Contract {
     use crate::ast::{Pat, PatElem, PatField};
     match pat {
         Pat::Const(v) => Contract::Equals(v.clone()),
