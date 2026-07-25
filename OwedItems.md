@@ -102,12 +102,25 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      `Refuted` must not become effort-dependent (bound from finite analysis structure,
      not a constant). Keep the oracle a reference/validation layer, never required for
      exec / canon / equality / proof / verdicts.
-   - **Fold-path unbounded divergence** — `analyze_apply`'s constant-fold runs a *closed*
-     call through the **unbounded** `eval_expr`; a closed diverging call (`f("x")`) hangs
-     / overflows the analyzer. Pre-existing; related to the review's oracle-boundary
-     point. A bounded fold (→ fall through to open analysis on `OutOfFuel`) fixes the
-     hang but makes fold *precision* effort-dependent — so the real fix is the analyzer
-     not depending on the oracle for folding (architectural, deferred).
+   - **Analyzer executes user functions via `eval_expr` for closed-call folding
+     [Archive5 §8/§9]** — `analyze_apply`'s closed-call fold runs the whole user call
+     through the **unbounded** `eval_expr` (a closed *recursive* diverging call hangs).
+     The review wants the analyzer to stop executing user functions for normal
+     judgments. **Not a bare deletion:** measured, removing it breaks no test, but the
+     fold also *catches body traps* in closed calls (`badFn()` with body `1 + "x"`) —
+     `infer_return_fact` analyzes the body but **discards findings**, so removal without
+     replacement silently accepts a closed call to an unconditionally-trapping function
+     (unsoundness gap). Sound removal must **pair with lambda-body analysis** (surface the
+     callee body's findings — the standing "Lambda bodies type as Top" increment). Only
+     *recursive* closed calls can diverge. `eval_prim` (primops) and `eval_expr` on a
+     `Const` *access* are finite and OK to keep, ideally re-homed into neutral
+     `semantics::*` shared by oracle and analyzer (naming/architecture, not soundness).
+   - **Same-arity domain propagation is interim [Archive5 §5]** — `infer_inner` propagates
+     the root's call-site domain to reachable **same-arity** closures (not the recursive
+     SCC specifically), an interim precision heuristic. The domain guard prevents any
+     mismatched-fact consumption, so it is safe, but it is **not** the final §5/§6
+     call-edge/domain-derived candidate construction. Restricting it to the SCC would be
+     cleaner; replacing it with call-edge-derived candidates is the real fix.
    - **`may_not_complete = false` hard-coded** — `summarize_instance` never sets the
      gray non-completion possibility (§1.5); no false rejection today, but the
      application-outcome semantics are not yet conformant.

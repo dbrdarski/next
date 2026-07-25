@@ -1904,6 +1904,29 @@ mod fact_identity {
         );
     }
 
+    #[test]
+    fn a_hypothesis_applies_only_within_its_input_domain() {
+        // Lock the domain-indexed lookup law *directly* (Archive5 §4) — no execution,
+        // recursion, or oracle. A fact `f : [Number] → Boolean` is consumable exactly
+        // when the call's argument domain is `⊑ [Number]`.
+        use crate::analyzer::induction::{Hypothesis, hypothesis_for, with_hypotheses};
+        let mut i = Interner::new();
+        let f = run_source_in("f = (n) => n\nf", &mut i).unwrap().0;
+        let hyp = Hypothesis {
+            callee: f.clone(),
+            input: vec![Contract::Kind(Kind::Number)],
+            contract: Contract::Kind(Kind::Boolean),
+        };
+        let one = Contract::Equals(i.integer(1));
+        with_hypotheses(vec![hyp], || {
+            let boolean = Some(Contract::Kind(Kind::Boolean));
+            assert_eq!(hypothesis_for(&f, &[Contract::Kind(Kind::Number)], &mut i), boolean, "[Number] ⊑ [Number]");
+            assert_eq!(hypothesis_for(&f, std::slice::from_ref(&one), &mut i), boolean, "[Equals(1)] ⊑ [Number]");
+            assert_eq!(hypothesis_for(&f, &[Contract::Kind(Kind::String)], &mut i), None, "[String] ⊄ [Number]");
+            assert_eq!(hypothesis_for(&f, &[Contract::Top], &mut i), None, "[Top] ⊄ [Number]");
+        });
+    }
+
     // The domain-escape guard (v0.8.1's `call input ⊆ fact input domain`) is exercised
     // by the mutual `even`/`odd`-over-`[Number]` path: `odd` analyzed over its wider
     // accepted domain feeds `even(n-1)` a `Top`-domain Indeterminate-passthrough that is

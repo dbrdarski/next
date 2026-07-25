@@ -6,6 +6,41 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Archive5 §4: direct out-of-domain hypothesis regression + the §8/§9 fold-removal analysis
+
+Archive(5) signed off on both Archive(4) fixes and asked for two follow-ups. The first
+is landed; the second is analyzed and sharpened (it is larger than a deletion). Full
+tree 304 lib + 111 conformance, clippy clean.
+
+- **§4 — direct out-of-domain regression [done].** The even/odd mutual test no longer
+  exercises domain *rejection* (the same-arity domain propagation removed the
+  out-of-domain lookup), so the review asked for a direct unit test of the law.
+  `fact_identity::a_hypothesis_applies_only_within_its_input_domain` installs `f :
+  [Number] → Boolean` via the now-`pub(crate)` `with_hypotheses`/`Hypothesis` and locks:
+  `hypothesis_for(f, [Number]) = hypothesis_for(f, [Equals(1)]) = Boolean`;
+  `hypothesis_for(f, [String]) = hypothesis_for(f, [Top]) = None`. No execution,
+  recursion, or oracle.
+- **§8/§9 — remove the full-function `eval_expr` fold [analyzed; larger than a
+  deletion].** Measured: disabling the closed-call fold in `analyze_apply` breaks **no**
+  test (304 + 111 still green). But the fold is **not only precision** — for a *closed*
+  call it also executes the body, so it **catches body traps** (`badFn()` with body
+  `1 + "x"`). Removing it, `call_return → infer_return_fact` analyzes the body via
+  `summarize` but **discards its findings**, so the analyzer would silently accept a
+  closed call to an unconditionally-trapping function — an **unsoundness gap** the
+  conformance suite happens not to cover. So the sound removal must **pair with
+  lambda-body analysis** (surface the callee body's findings at the call site / at
+  definition — the standing "Lambda bodies type as Top" increment), not a bare deletion.
+  Also note: only *recursive* closed calls can diverge (a non-recursive callee's call
+  graph is acyclic → terminates), so the divergence risk is narrower than the
+  architectural coupling. Registered in OwedItems with this dependency; the same-arity
+  domain propagation stays flagged **interim** (§5), to be replaced by call-edge/domain-
+  derived candidates.
+- **`// [ask-author]`:** none. The §8/§9 removal is real debt but its sound form is an
+  increment (lambda-body findings), not a one-liner — flagged for a deliberate call
+  rather than rushed.
+
+---
+
 ## 2026-07-26 — Review cleanup: remove `segment_nullable(..., 8)` magic depth (Archive4 §11)
 
 The review's one genuine analyzer-internal fuel: recursive-contract nullability

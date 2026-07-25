@@ -73,10 +73,10 @@ pub(crate) fn without_inference<R>(body: impl FnOnce() -> R) -> R {
 /// This is the interim of the spec's `(shape, annotated env, input domain)` key —
 /// instance identity subsumes shape+env, `input` is I.
 #[derive(Clone)]
-struct Hypothesis {
-    callee: ValueRef,
-    input: Vec<Contract>,
-    contract: Contract,
+pub(crate) struct Hypothesis {
+    pub(crate) callee: ValueRef,
+    pub(crate) input: Vec<Contract>,
+    pub(crate) contract: Contract,
 }
 
 /// The assumed return contract for a call to `callee` over `args`, if a live hypothesis
@@ -104,8 +104,9 @@ fn args_within(args: &[Contract], domain: &[Contract], interner: &mut Interner) 
 }
 
 /// Run `body` with `hyps` installed as the active hypotheses, restoring the previous
-/// table afterward (so nested/stacked passes compose).
-fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R) -> R {
+/// table afterward (so nested/stacked passes compose). `pub(crate)` so the analyzer
+/// suite can lock the lookup law directly.
+pub(crate) fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R) -> R {
     let saved = HYPOTHESES.with(|h| std::mem::replace(&mut *h.borrow_mut(), hyps));
     let out = body();
     HYPOTHESES.with(|h| *h.borrow_mut() = saved);

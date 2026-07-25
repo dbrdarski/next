@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-26 · review correction — instance + domain-indexed hypothesis key (Archive4 soundness blocker fixed).
+**Snapshot:** 2026-07-26 · Archive5 follow-up — direct out-of-domain regression landed; full-function-fold removal analyzed (needs lambda-body analysis).
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **303 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **304 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -191,4 +191,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `1472fdf` | Induction tail step 8: completion tri-state — `Completion` on `Analysis`, three-voice `demand`, remainder inhabitance, callee completion threaded (partial callee → error; guarded → warning) | “Induction tail, step 8: the completion tri-state” |
 | 2026-07-25 | `9d72f90` | Induction tail step 9: realized-witness refutation (`refute.rs`, three-voiced) + fuel/call-depth-bounded oracle (`eval_expr_bounded`, `run_source_in`, `proven_members`) | “Induction tail, step 9: realized-witness refutation” |
 | 2026-07-26 | `124d604` | Review correction (Archive4 §3/§4): instance + domain-indexed hypothesis key — `Hypothesis{callee,input,contract}`, `args ⊑ input`, same-arity domain propagation; aliasing adversarial test | “Review correction: instance + domain-indexed hypothesis key” |
-| 2026-07-26 | (this) | Review cleanup (Archive4 §11): remove `segment_nullable(..., 8)` magic depth → path-based cycle detection (advance-bounded by the RecGroup, more precise) | “Review cleanup: remove segment_nullable magic depth” |
+| 2026-07-26 | `efae058` | Review cleanup (Archive4 §11): remove `segment_nullable(..., 8)` magic depth → path-based cycle detection (advance-bounded by the RecGroup, more precise) | “Review cleanup: remove segment_nullable magic depth” |
+| 2026-07-26 | (this) | Archive5 §4: direct out-of-domain hypothesis regression (`hypothesis_for` law locked); §8/§9 fold-removal analyzed (needs lambda-body analysis — OwedItems) | “Archive5 §4: direct out-of-domain hypothesis regression” |
