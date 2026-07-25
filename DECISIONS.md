@@ -6,6 +6,49 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Analyzer-core bridge: the correlated structural AnalysisContract
+
+Responds to the author's checkpoint review (`NEXT-analyzer-core-checkpoint-review-
+8.1a-8.1c.md`), which **held the return-induction tail for one bridge increment**: my
+`AnalysisContract { contract, metadata }` carried function metadata only at the top
+level, so metadata nested in a tuple/union alternative was lost and `[numFn, 5] |
+[strFn, "hi"]` would flatten into false cross-pairs. Full tree 267 lib + 111
+conformance, clippy clean.
+
+- **`AnalysisContract` is now structural / correlated** — an enum `Leaf { contract,
+  metadata } | Tuple(Vec<AC>) | Record(Vec<(String, AC)>) | Alt(Vec<AC>) | Bottom`.
+  Function metadata survives through tuples, record fields, and **correlated union
+  alternatives** (never positionally flattened). `erase`, `gamma_contains`,
+  `prove_subcontract_a`, and `intersect_a` all recurse through the structure;
+  constructors (`tuple`/`record`/`alt`) Bottom-normalize and collapse.
+- **The finding, tested directly** — `correlated_alternatives_do_not_synthesize_cross_pairs`:
+  γ of `Alt(Tuple(f, 5), Tuple(g, "hi"))` holds `[f,5]` and `[g,"hi"]` but **not** the
+  synthesized `[f,"hi"]` / `[g,5]`. `union_ac` (8.1b) now builds an `Alt`, not a
+  positional `Union`.
+- **⊑ᴬ / intersectA structural** — `Alt`-left ⊑ X iff every alternative ⊑ X; X ⊑
+  `Alt`-right iff X ⊑ some alternative (sound, incomplete); tuples/records pointwise;
+  the leaf/mixed path proves through the erased contracts only when the **target is
+  metadata-free** (then `γ(b) = ⟦erase b⟧`) or both sides are leaves with covering
+  metadata, and refutes only with a **γ-representable** witness. `intersect_a`
+  distributes over `Alt`, meets tuples/records structurally, and falls back to a leaf
+  over the erased intersection for mixed pairs.
+- **Review's smaller items, closed:** the mislabeled `ap24_union_join_*` test renamed
+  to `outcome_join_*` (it is the join algebra, **not** spec AP-24); the inventory §4a
+  ordering claim corrected — the returned `Vec` is documented as a discovery-ordered
+  **set** representation (not canonical), with `membership_is_independent_of_root_and_
+  transition_order` added; the `Known(∅)` doc-integration mismatch registered in
+  `OwedItems` (my generalized off-function-position reading — defensible, owed a spec
+  wording).
+- **Still owed for the tail (author's sequence):** the joint operand **application
+  driver** (per-live-alternative processing) with a structural `ApplicationWitness
+  { callee, arguments }` (replacing the `ProvenPresent(ValueRef)` token) + the real
+  **AP-24 / AP-29 / AP-30** batteries — that is bridge-2, before the μ body-walk →
+  candidate graph → SCC return induction → `analyze_apply` → Phase A.
+- **`// [ask-author]`:** the `Known(∅)` off-function-position semantics (registered) —
+  no other judgment calls.
+
+---
+
 ## 2026-07-25 — Application/induction 8.1c: the instance-chain inventory (§4a)
 
 Third sub-step of the analyzer-core rebuild. New module `src/analyzer/inventory.rs`,

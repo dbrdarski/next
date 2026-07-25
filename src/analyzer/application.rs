@@ -16,7 +16,7 @@
 
 use crate::analyzer::domain::{AnalysisContract, InstanceMetadata};
 use crate::ast::ActKind;
-use crate::contract::{Contract, Verdict};
+use crate::contract::Verdict;
 use crate::value::ValueRef;
 
 /// Whether a **completed-without-value** (fall-through, E10) execution is present
@@ -62,7 +62,8 @@ impl ApplicationOutcome {
 }
 
 /// The union of two produced contracts (§1.7, produced-by-union). `Bottom` is the
-/// identity; otherwise the ordinary-contract union with the metadata joined.
+/// identity; otherwise the correlated union — a structural `Alt` that keeps each
+/// branch's internal correlation (never a positional flatten).
 pub fn union_ac(a: &AnalysisContract, b: &AnalysisContract) -> AnalysisContract {
     if a.is_bottom() {
         return b.clone();
@@ -70,10 +71,7 @@ pub fn union_ac(a: &AnalysisContract, b: &AnalysisContract) -> AnalysisContract 
     if b.is_bottom() {
         return a.clone();
     }
-    AnalysisContract::new(
-        Contract::Union(Box::new(a.contract.clone()), Box::new(b.contract.clone())),
-        InstanceMetadata::join(&a.metadata, &b.metadata),
-    )
+    AnalysisContract::alt(vec![a.clone(), b.clone()])
 }
 
 /// The evidence-preserving completion join (§1.7): any `ProvenPresent` dominates with

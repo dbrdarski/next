@@ -3,7 +3,9 @@
 //! The **admitted-instance inventory** is the projection onto instances of a finite
 //! state closure over `InventoryState = (analysis instance, active shape sequence)`.
 //! It is **constructed, traversal-free** — a closure that depends on the program
-//! alone, never an effort-dependent fixpoint — so its result is order-independent:
+//! alone, never an effort-dependent fixpoint — so its *membership* is
+//! order-independent (the returned `Vec` is discovery-ordered, a set representation,
+//! never a canonical sequence):
 //!
 //! 1. Seed with the instances the program's nonrecursive/root demands reach, each
 //!    with its shape appended to an empty sequence.
@@ -45,9 +47,13 @@ fn is_cutoff(active_shapes: &[Lambda], target: &Instance) -> bool {
 
 /// Construct the admitted-instance inventory (§4a). `roots` are the instances the
 /// program's root demands reach; `transitions` symbolically enumerates an instance's
-/// call targets. Returns the deduplicated admitted instances — the projection of the
-/// state closure. Order-independent: the result depends on `roots`/`transitions`, not
-/// on the traversal order (verified across seed orders in the suite).
+/// call targets. Returns the deduplicated admitted instances.
+///
+/// **The result is a set** — its *membership* depends on `roots`/`transitions` alone,
+/// not on the traversal order (the suite checks this across reversed root and
+/// transition orders). The returned `Vec` is discovery-ordered and is **not** a
+/// canonical sequence; a consumer that needs stable candidate identity must sort it
+/// by its own key, never rely on this order.
 pub fn build_inventory(roots: Vec<Instance>, transitions: impl Fn(&Instance) -> Vec<Instance>) -> Vec<Instance> {
     let mut inventory: Vec<Instance> = Vec::new();
     let mut visited: Vec<(Instance, Vec<Lambda>)> = Vec::new();

@@ -54,6 +54,16 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      branch) — refutation returns the complete concrete inhabitant, a strictly
      stronger witness, so this is a presentation detail only.
 
+5. **`Known(∅)` normalization — doc-integration mismatch [analyzer review, 07-25]** —
+   the application spec (`next-application-induction-specification-v0-8.md:19`)
+   normalizes `(C, Known(∅)) → Bottom` for the function-position `AnalysisContract`.
+   My `AnalysisContract::leaf` collapses to `Bottom` **only when `C` is function-only**;
+   off function positions the metadata is vacuous (`(Number, Known(∅)) → Number`). The
+   reviewer calls this generalization *defensible* if `AnalysisContract` may represent
+   arbitrary values (non-function members stay inhabited while the function alternative
+   is empty) — but it must be made explicit in the spec before the domain is frozen.
+   **Not unsound**; a wording reconciliation owed from the author.
+
 ## Still owed in the docs (Compendium C§17, patch 1.0.8)
 
 - **Per-pair contract tables** — `Geo`, `Difference`/emptiness, finite-interval

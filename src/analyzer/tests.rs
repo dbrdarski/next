@@ -667,7 +667,7 @@ mod domain {
         Instance { shape: shape.clone(), env: vec![AnalysisContract::of_contract(cap)] }
     }
     fn known(insts: Vec<Instance>) -> AnalysisContract {
-        AnalysisContract::new(Contract::Kind(Kind::Function), InstanceMetadata::Known(insts))
+        AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(insts))
     }
     fn unknown_fn() -> AnalysisContract {
         AnalysisContract::of_contract(Contract::Kind(Kind::Function))
@@ -690,10 +690,10 @@ mod domain {
             InstanceMetadata::Unknown,
         );
         // Normalization to the one canonical bottom.
-        assert!(AnalysisContract::new(Contract::Bottom, InstanceMetadata::Unknown).is_bottom());
+        assert!(AnalysisContract::leaf(Contract::Bottom, InstanceMetadata::Unknown).is_bottom());
         assert!(known(vec![]).is_bottom(), "function-only + Known(∅) ⇒ bottom");
         // A non-function contract with Known(∅) is NOT empty — metadata is vacuous.
-        let num_empty = AnalysisContract::new(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
+        let num_empty = AnalysisContract::leaf(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
         assert!(!num_empty.is_bottom());
     }
 
@@ -724,7 +724,12 @@ mod domain {
         // never Bottom (AP-28).
         let meet = intersect_a(&known(vec![eq1.clone()]), &known(vec![r15]), &mut i);
         assert!(!meet.is_bottom());
-        assert_eq!(meet.metadata, InstanceMetadata::Known(vec![eq1]));
+        match &meet {
+            AnalysisContract::Leaf { metadata, .. } => {
+                assert_eq!(*metadata, InstanceMetadata::Known(vec![eq1]));
+            }
+            other => panic!("expected a Leaf meet, got {other:?}"),
+        }
         // Disjoint shapes have an empty meet — a sound Bottom by disjointness.
         let z = konst_zero(&mut i);
         let s2 = shape_of(&closure(&mut i, one_param("x"), z, ActKind::Pure));
@@ -748,14 +753,47 @@ mod domain {
         assert!(realizes(&idv, &id_inst, &mut i));
         assert!(!realizes(&zerov, &id_inst, &mut i), "a different shape does not realize");
         // γ over Known(S): the id closure is in, the zero closure is out.
-        let ac = AnalysisContract::new(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![id_inst]));
+        let ac = AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![id_inst]));
         assert!(gamma_contains(&ac, &idv, &mut i));
         assert!(!gamma_contains(&ac, &zerov, &mut i));
         // Unknown admits every function; non-functions are governed by the contract alone.
         assert!(gamma_contains(&unknown_fn(), &zerov, &mut i));
         let five = i.integer(5);
-        let num = AnalysisContract::new(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
+        let num = AnalysisContract::leaf(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
         assert!(gamma_contains(&num, &five, &mut i), "metadata is vacuous for a non-function");
+    }
+
+    #[test]
+    fn correlated_alternatives_do_not_synthesize_cross_pairs() {
+        // The review's core case: `[f, 5] | [g, "hi"]` keeps f⟷5 and g⟷"hi"
+        // correlated. γ holds the two represented pairs but NOT a synthesized
+        // cross-pair — function metadata survives structurally through the tuple, and
+        // the alternatives are never positionally flattened.
+        let mut i = Interner::new();
+        let f = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
+        let z = konst_zero(&mut i);
+        let g = closure(&mut i, one_param("x"), z, ActKind::Pure);
+        let f_inst = Instance { shape: shape_of(&f), env: vec![] };
+        let g_inst = Instance { shape: shape_of(&g), env: vec![] };
+        let five = i.integer(5);
+        let hi = i.string("hi");
+        let fn_leaf = |inst: Instance| {
+            AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![inst]))
+        };
+        let val_leaf = |v: ValueRef| AnalysisContract::leaf(Contract::Equals(v), InstanceMetadata::Unknown);
+        let alt1 = AnalysisContract::tuple(vec![fn_leaf(f_inst), val_leaf(five.clone())]);
+        let alt2 = AnalysisContract::tuple(vec![fn_leaf(g_inst), val_leaf(hi.clone())]);
+        let operand = AnalysisContract::alt(vec![alt1, alt2]);
+        // The two represented pairs are in γ.
+        let pair1 = i.tuple(vec![f.clone(), five.clone()]);
+        let pair2 = i.tuple(vec![g.clone(), hi.clone()]);
+        assert!(gamma_contains(&operand, &pair1, &mut i));
+        assert!(gamma_contains(&operand, &pair2, &mut i));
+        // The synthesized cross-pairs are NOT — correlation survives.
+        let cross1 = i.tuple(vec![f.clone(), hi]);
+        let cross2 = i.tuple(vec![g.clone(), five]);
+        assert!(!gamma_contains(&operand, &cross1, &mut i), "[f, \"hi\"] is not represented");
+        assert!(!gamma_contains(&operand, &cross2, &mut i), "[g, 5] is not represented");
     }
 }
 
@@ -823,8 +861,10 @@ mod application {
         assert!(proven(&seat_demand(&o, false)));
     }
 
+    // NB: the outcome-join algebra — NOT spec AP-24 (the correlated numFn/strFn
+    // application), which lands with the joint operand driver (bridge-2).
     #[test]
-    fn ap24_union_join_is_componentwise_and_evidence_preserving() {
+    fn outcome_join_is_componentwise_and_evidence_preserving() {
         let mut i = Interner::new();
         let w = i.integer(1);
         // may_not_complete by or; produced by union; completion evidence-preserving.
@@ -833,7 +873,7 @@ mod application {
         let j = join(a, b);
         assert!(j.may_not_complete, "or of the flags");
         assert!(matches!(&j.completion, C::ProvenPresent(got) if *got == w), "ProvenPresent dominates");
-        assert!(matches!(j.produced.contract, Contract::Union(_, _)), "produced by union");
+        assert!(matches!(j.produced, AnalysisContract::Alt(_)), "produced by correlated union");
         // UnprovenPossible beats ProvenAbsent; the empty join is the Known(∅) identity.
         let mixed = join(out(num(), C::UnprovenPossible, false), out(num(), C::ProvenAbsent, false));
         assert!(matches!(mixed.completion, C::UnprovenPossible));
@@ -954,5 +994,48 @@ mod inventory {
         for x in [&a, &b, &c, &d] {
             assert!(inv.contains(x));
         }
+    }
+
+    #[test]
+    fn membership_is_independent_of_root_and_transition_order() {
+        // The inventory is a set: reversing the roots and the transition enumeration
+        // yields the same membership (the returned Vec order may differ, and callers
+        // must not depend on it).
+        let mut i = Interner::new();
+        let a = mk(&mut i, name("x"));
+        let b0 = konst(i.integer(0));
+        let b = mk(&mut i, b0);
+        let c0 = konst(i.integer(1));
+        let c = mk(&mut i, c0);
+        let sa = a.shape.clone();
+        let (b2, c2) = (b.clone(), c.clone());
+        // A → {B, C}; forward and reversed target enumeration.
+        let fwd = {
+            let (b2, c2, sa) = (b2.clone(), c2.clone(), sa.clone());
+            move |inst: &Instance| {
+                if inst.shape == sa {
+                    vec![b2.clone(), c2.clone()]
+                } else {
+                    vec![]
+                }
+            }
+        };
+        let rev = move |inst: &Instance| {
+            if inst.shape == sa {
+                vec![c2.clone(), b2.clone()] // reversed
+            } else {
+                vec![]
+            }
+        };
+        let mut one = build_inventory(vec![a.clone()], fwd);
+        let mut two = build_inventory(vec![a.clone()], rev);
+        // Compare as sets: same membership regardless of order.
+        let key = |v: &mut Vec<Instance>| {
+            v.sort_by_key(|x| format!("{:?}", x.shape));
+        };
+        key(&mut one);
+        key(&mut two);
+        assert_eq!(one, two, "inventory membership is order-independent");
+        assert_eq!(one.len(), 3);
     }
 }

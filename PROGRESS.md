@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **265 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **267 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -94,10 +94,11 @@ Low-stakes / for-info only:
 | Tuple-length family §4 (segment alignment: forced-boundary peeling, interior residual, uninhabited-shape guard) | family v0.3.1 | ✅ (TL-01a/18/21) |
 | Tuple-length family §5 (grapheme boundary-state seams: segmenter-owned `compose`/`seam_delta`, merges-only bound) | family v0.3.1 | ✅ (TL-09); 🟡 finite-state lift to string *contracts* owed |
 | Analyzer, expression layer: Const/Ref/PrimOp/Tuple/Record/Template/Access/Match/Apply — exact closed-expression trap concordance + sound open-term reasoning, narrowing, named contracts | §6 concordance | ✅ for the listed nodes; 🟡 `Lambda` bodies, `Write`/worlds type as Top; open-call returns Top |
-| Application & induction §2 — `AnalysisContract` abstract domain (γ, metadata lattice, `intersectA`/`meetInstance`, `proveSubcontractA`) | v0.8.1 | ✅ 8.1a (AP-27/28 + γ membership) |
+| Application & induction §2 — `AnalysisContract` **structural/correlated** domain (Leaf/Tuple/Record/Alt, γ, `intersectA`/`meetInstance`, `proveSubcontractA`) | v0.8.1 | ✅ 8.1a + bridge (AP-27/28, correlation survival) |
 | Application & induction §1 — the outcome algebra (`ApplicationOutcome` tri-state, `seat_demand`, `join`, `admit_callee`) | v0.8.1 | ✅ 8.1b (AP-15/17/18/21/23/24) |
-| Application & induction §4a — the constructed instance-chain inventory (traversal-free closure + shape-repeat cutoff) | v0.8.1 | ✅ 8.1c (AP-16 mutual/self/diamond) |
-| Application & induction §1 steps 2–4 + §6/§5 — μ-structure body-walk (real transitions), body-summary (input obligation, row selection), candidate graph + return induction, `analyze_apply` rewiring | v0.8.1 | ⬜ **next**: the induction tail (unblocks A-NEG/A-ACC/A-SND/A-VER) |
+| Application & induction §4a — the constructed instance-chain inventory (traversal-free closure + shape-repeat cutoff) | v0.8.1 | ✅ 8.1c (AP-16 mutual/self/diamond, order-independent set) |
+| Application & induction — **bridge-2**: joint operand application driver (per-live-alternative), structural `ApplicationWitness`, real AP-24/29/30 | v0.8.1 | ⬜ **next** (author's held prerequisite before the tail) |
+| Application & induction §1 steps 2–4 + §6/§5 — μ-structure body-walk, body-summary, candidate graph + return induction, `analyze_apply` rewiring | v0.8.1 | ⬜ the induction tail (unblocks A-NEG/A-ACC/A-SND/A-VER; **on HOLD** until bridge-2) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
 | Reactive layer / concurrency / UI | G1 fence | 🚫 fenced, out of scope |
 
@@ -112,11 +113,15 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
-1. **Application & induction — the induction tail** — the μ-structure body-walk
-   (real `transitions` from a closure body), §1 steps 2–4 (body-summary: input
-   obligation over E×A, row selection), §6 candidate graph + SCC-ordered return
-   induction with realized-witness refutation, §5 domain-indexed facts; rewire
-   `analyze_apply` onto the outcome algebra; the sampled γ soundness battery.
+1. **Application & induction — bridge-2** (author's held prerequisite): the joint
+   operand application driver (per-live-alternative admission + input obligation over
+   the correlated operand state), a structural `ApplicationWitness { callee,
+   arguments }` replacing the `ProvenPresent(ValueRef)` token, and the real AP-24 /
+   AP-29 (projected cross-pair → unproven not refuted) / AP-30 batteries.
+2. **Application & induction — the induction tail** (HOLD until bridge-2): the
+   μ-structure body-walk (real `transitions`), §1 steps 2–4 body-summary, §6 candidate
+   graph + SCC-ordered return induction with realized-witness refutation, §5
+   domain-indexed facts; rewire `analyze_apply`; the sampled γ soundness battery.
    Activates the Phase A batteries.
 3. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
    fuel harness (M-04); the string-length contract form + §5 finite-state lift.
@@ -156,4 +161,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `90f9c85` | Tuple family §5: string boundary-state seams — segmenter-owned (TL-09) | “Tuple family §5” |
 | 2026-07-25 | `e581e72` | App/induction 8.1a: AnalysisContract abstract domain — γ, lattice, ⊑ᴬ, intersectA (AP-27/28) | “App/induction 8.1a” |
 | 2026-07-25 | `2e693c0` | App/induction 8.1b: application transfer rule §1 outcome algebra — tri-state completion, seat demand, join, admission (AP-15/17/18/21/23/24) | “App/induction 8.1b” |
-| 2026-07-25 | (this) | App/induction 8.1c: instance-chain inventory §4a — traversal-free closure + shape-repeat cutoff (AP-16) | “App/induction 8.1c” |
+| 2026-07-25 | `eae2b43` | App/induction 8.1c: instance-chain inventory §4a — traversal-free closure + shape-repeat cutoff (AP-16) | “App/induction 8.1c” |
+| 2026-07-25 | (this) | Analyzer-core bridge: correlated structural AnalysisContract (Leaf/Tuple/Record/Alt) — no false cross-pairs; review items closed | “Analyzer-core bridge” |
