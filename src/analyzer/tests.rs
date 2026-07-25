@@ -394,6 +394,48 @@ fn match_exhaustiveness_and_expecting_seat() {
 }
 
 #[test]
+fn a_partial_callee_at_an_expecting_seat_is_an_error() {
+    // g's body `n :: { 0 => 1 }` may fall through (over Number, n = 1 is uncovered — a
+    // proven-reachable fall-through), so binding g(x) at the `+` operand seat is an
+    // expecting-seat ERROR (the completion threaded from the callee, closing the gap
+    // where only mutators were flagged).
+    let mut i = Interner::new();
+    let g = crate::oracle::run_source("g = (n) => n :: { 0 => 1 }\ng").unwrap().0;
+    let mut env = empty();
+    env.insert("g".into(), Contract::Equals(g));
+    env.insert("x".into(), Contract::Kind(Kind::Number));
+    let e = prim(PrimOp::Add, vec![apply(name("g"), vec![name("x")]), konst(i.integer(1))]);
+    let a = analyze(&e, &env, &nc(), &mut i);
+    assert!(!a.accepted(), "a proven fall-through at an expecting seat is an error: {:?}", a.findings);
+    assert!(
+        a.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat && f.severity == Severity::Error),
+        "expecting-seat error present: {:?}",
+        a.findings
+    );
+}
+
+#[test]
+fn a_guarded_fall_through_is_a_warning_not_an_error() {
+    // `n :: { when b => 1 }` — a guard, not a pattern, decides, and guards consume
+    // nothing, so the remainder over-approximates: the fall-through is *possible* but
+    // not *proven*. The three-voice verdict at an expecting seat is a WARNING, not an
+    // error (the precision the tri-state buys over the old may_complete → error).
+    let mut i = Interner::new();
+    let m = matchx(Some(name("n")), vec![arm(None, Some(name("b")), konst(i.integer(1)))]);
+    let e = prim(PrimOp::Add, vec![m, konst(i.integer(1))]);
+    let mut env = empty();
+    env.insert("n".into(), Contract::Kind(Kind::Number));
+    env.insert("b".into(), Contract::Kind(Kind::Boolean));
+    let a = analyze(&e, &env, &nc(), &mut i);
+    assert!(a.accepted(), "a guarded (unproven) fall-through must not be an error: {:?}", a.findings);
+    assert!(
+        a.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat && f.severity == Severity::Warning),
+        "but it warns: {:?}",
+        a.findings
+    );
+}
+
+#[test]
 fn match_arm_narrows_scrutinee() {
     let mut i = Interner::new();
     // match x { [a, b] => a + b }  with x : Tuple([Number, Number]).
@@ -474,12 +516,12 @@ fn user_contract_pattern_narrows() {
 
     // Resolved: a Number need not be a Percent, so the match is NOT exhaustive.
     let a = analyze(&m, &env, &cenv, &mut i);
-    assert!(a.may_complete, "Percent must narrow — Number is not covered by Range(0,100)");
+    assert!(a.may_complete(), "Percent must narrow — Number is not covered by Range(0,100)");
 
     // Unresolved (empty contract env): the pattern widens to Top and covers
     // everything — the discriminating control for the test above.
     let a = analyze(&m, &env, &nc(), &mut i);
-    assert!(!a.may_complete, "an unresolved contract name widens to Top");
+    assert!(!a.may_complete(), "an unresolved contract name widens to Top");
 }
 
 #[test]

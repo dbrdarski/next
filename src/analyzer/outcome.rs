@@ -7,8 +7,10 @@
 //! maps its result:
 //!
 //! - **produced** = the body's inferred contract (the union over selected rows);
-//! - **completion** = `may_complete ? UnprovenPossible : ProvenAbsent` — a possible
-//!   fall-through is the third voice; a body that always produces is `ProvenAbsent`.
+//! - **completion** = `ProvenAbsent` when the body always produces, else
+//!   `UnprovenPossible` — **conservative here**: a *proven* fall-through is not yet
+//!   promoted to `ProvenPresent` (the structured AP-30 witness is owed); the call site
+//!   reads the finer three-voice `Completion` off [`analyze_instance_body`] directly.
 //!
 //! **Recursion is coarse and terminating here.** A recursive/mutual call resolves its
 //! callee to a captured `Equals(closure)`; with abstract (non-singleton) argument
@@ -22,22 +24,24 @@
 
 use crate::analyzer::application::{ApplicationOutcome, CompletionWithoutValue};
 use crate::analyzer::domain::AnalysisContract;
-use crate::analyzer::{TypeEnv, analyze, bind_pattern};
+use crate::analyzer::{Analysis, Completion, TypeEnv, analyze, bind_pattern};
 use crate::contract::{Contract, ContractEnv};
 use crate::env::Binding;
 use crate::interner::Interner;
 use crate::value::ValueRef;
 
-/// Summarize applying the callee closure `callee` to arguments described by
-/// `arg_contracts`. `None` for a non-function. The captures are bound to their exact
-/// values (`Equals`), the parameters narrowed by the argument tuple, and the body
-/// analyzed in that environment.
-pub fn summarize_instance(
+/// Analyze one instance's body in its environment — captures bound to their exact
+/// values (`Equals`), parameters narrowed by the argument tuple — **coarsely**: the
+/// guard keeps recursive/non-hypothesis calls resolving through the active hypotheses
+/// or `Top`, never a nested inference, so the driver stays in control of fact-proving
+/// (§6). `None` for a non-function. The shared core of the outcome summary and the
+/// call-site completion read ([`crate::analyzer`]'s `callee_completion`).
+pub(crate) fn analyze_instance_body(
     callee: &ValueRef,
     arg_contracts: &[Contract],
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> Option<ApplicationOutcome> {
+) -> Option<Analysis> {
     let closure = callee.as_closure()?;
     let free: Vec<String> = callee.as_fn()?.free_vars().to_vec();
 
@@ -52,14 +56,24 @@ pub fn summarize_instance(
     let arg_tuple = Contract::Tuple(arg_contracts.to_vec());
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut tenv);
 
-    // Coarse by construction: recursive/non-hypothesis calls in the body resolve
-    // through the active hypotheses or `Top`, never a nested inference (the guard) — so
-    // the driver stays in control of fact-proving (§6).
-    let a = crate::analyzer::induction::without_inference(|| analyze(&closure.lambda.body, &tenv, cenv, interner));
-    let completion = if a.may_complete {
-        CompletionWithoutValue::UnprovenPossible
-    } else {
-        CompletionWithoutValue::ProvenAbsent
+    Some(crate::analyzer::induction::without_inference(|| analyze(&closure.lambda.body, &tenv, cenv, interner)))
+}
+
+/// Summarize applying the callee closure to arguments described by `arg_contracts`
+/// (§1 steps 4–5). `None` for a non-function. Completion is **conservative here**: a
+/// proven and a merely-possible fall-through both map to `UnprovenPossible` — the
+/// structured `ProvenPresent` witness (AP-30) is owed, and the call site reads the
+/// finer `Completion` tri-state directly.
+pub fn summarize_instance(
+    callee: &ValueRef,
+    arg_contracts: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<ApplicationOutcome> {
+    let a = analyze_instance_body(callee, arg_contracts, cenv, interner)?;
+    let completion = match a.completion {
+        Completion::Produces => CompletionWithoutValue::ProvenAbsent,
+        Completion::MayFallThrough | Completion::FallsThrough => CompletionWithoutValue::UnprovenPossible,
     };
     Some(ApplicationOutcome {
         produced: AnalysisContract::of_contract(a.contract),

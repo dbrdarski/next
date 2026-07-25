@@ -82,10 +82,13 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      inference per call site; repeated calls to the same function re-run the driver. The
      **C§13.4 evaluation cache** (keyed on the seat/world-independent core) is the
      optimization; correctness holds without it (the re-entrancy guard bounds each run).
-   - **Completion not threaded** — `analyze_apply`'s `may_complete` is still the
-     mutator-only check; the inferred callee's completion tri-state (AP-30, the outcome
-     contribution) is not yet threaded into it, so a call to a partial-Match callee is
-     not yet flagged at an expecting seat. Owed with the AP-30 half.
+   - **AP-30 structured `ProvenPresent` witness** — the *wired* analyzer path now
+     carries the three-voice completion (`Completion` on `Analysis`; a partial/mutator
+     callee is flagged, guarded fall-throughs warn), but the **outcome algebra**'s
+     `summarize_instance` still maps a proven fall-through to `UnprovenPossible`, not
+     `ProvenPresent(witness)` — minting a fake `(callee, args)` witness would violate the
+     §7 discipline. The represented-witness construction (feeding `seat_demand`'s
+     `Refuted`) is the deferred AP-30 half.
 
 5. **`Known(∅)` normalization — doc-integration mismatch [analyzer review, 07-25]** —
    the application spec (`next-application-induction-specification-v0-8.md:19`)

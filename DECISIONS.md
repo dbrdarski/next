@@ -6,6 +6,53 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 8: the completion tri-state — three-voice expecting-seat verdicts + callee threading (E10 / §1.6)
+
+Closes a real soundness gap and adds the three-voice severity. `analyze_apply` only
+set `may_complete` for mutators, so a call to a **partial-`Match` pure callee** bound
+at an expecting seat was **not** flagged — yet the oracle traps expecting-seat. Now the
+callee's completion threads through, and the seat verdict is three-voiced. New
+`Completion` enum on `Analysis`; `Contract::has_proven_inhabitant`; 2 tests. Full tree
+298 lib + 111 conformance, clippy clean.
+
+- **`Analysis.may_complete: bool` → `completion: Completion` [mandated — E10 / §1.6].**
+  `Produces` (ProvenAbsent) / `MayFallThrough` (UnprovenPossible) / `FallsThrough`
+  (ProvenPresent). `demand` maps them to the **three voices**: `Produces` → ok;
+  `FallsThrough` → **error** (a represented input completes without a value — refuted);
+  `MayFallThrough` → **warning** (unproven, never a rejection). `may_complete()` stays
+  as a bool helper.
+- **`analyze_match` classifies the remainder [mandated].** Proven empty → `Produces`;
+  **proven inhabited** (a sampled witness, `Contract::has_proven_inhabitant`) **and no
+  guarded arm** → `FallsThrough`; else → `MayFallThrough`. The **guard exclusion** is
+  load-bearing: a guard (not the pattern) decides and consumes nothing, so an inhabited
+  remainder no longer *proves* a fall-through — at most `MayFallThrough`. This is
+  strictly more precise than the old `may_complete = !exhaustive → error`: proven cases
+  stay errors (`match 5 { 1 => 10 }`), opaque/guarded cases become warnings.
+- **Callee completion threading [mandated — the soundness fix].** `callee_completion`
+  reads the callee's body completion (via the factored `analyze_instance_body`) at the
+  call site: a partial-`Match` callee → `FallsThrough`; a **mutator** → `FallsThrough`
+  (its return is discarded, by law); a total callee → `Produces`. So `g(x) + 1` with
+  `g = (n) => n :: { 0 => 1 }` is now the expecting-seat error it should be.
+- **The re-entrancy guard extends to `callee_completion` [chose — required].**
+  `analyze_instance_body` re-enters `analyze` (hence `callee_completion`), so a
+  recursive callee overflowed the stack. Fix: `callee_completion` returns coarse
+  `Produces` while `currently_inferring()` — the same bound `call_return` uses, and
+  `analyze_instance_body` already sets that guard. One level of body analysis, bounded.
+- **`summarize_instance` stays conservative [chose].** It still maps a proven
+  fall-through to `UnprovenPossible` (not `ProvenPresent`) — the structured
+  `ProvenPresent` **witness** (an represented `(callee, args)` that falls through, §7
+  discipline) is genuinely owed and I will not mint a fake one. The wired analyzer path
+  gets the precise three-voice from `Completion` directly; the outcome **algebra**'s
+  `ProvenPresent` (feeding `seat_demand`) is the deferred AP-30 half.
+- **Verified** — `a_partial_callee_at_an_expecting_seat_is_an_error` (`g(x) + 1` →
+  error); `a_guarded_fall_through_is_a_warning_not_an_error` (`n :: { when b => 1 }` →
+  warning, accepted). Existing `match_exhaustiveness_and_expecting_seat` and the
+  outcome/inference tests pass **unchanged**.
+- **`// [ask-author]`:** none. The structured `ProvenPresent` witness (AP-30) and the
+  realized-witness `(e,x,v)` refutation remain the tail's open items.
+
+---
+
 ## 2026-07-25 — Induction tail, step 7: the analyze_apply rewiring — recursive call sites infer their return (§6/C§13.2)
 
 The payoff: top-level program analysis now uses the induction. A call to a known

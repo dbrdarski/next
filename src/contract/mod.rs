@@ -142,6 +142,15 @@ impl Contract {
         }
     }
 
+    /// Whether this contract has a **proven** inhabitant — a sampled value that
+    /// genuinely belongs (`sample` ∩ `contains`). Sound one-way: `true` ⇒ inhabited
+    /// (with a witness); `false` is **not** a proof of emptiness (the sampler is
+    /// deliberately incomplete). Used by the analyzer to prove a `Match` fall-through
+    /// reachable (E10 completion).
+    pub fn has_proven_inhabitant(&self, interner: &mut crate::interner::Interner) -> bool {
+        subcontract::sample(self, interner).into_iter().any(|v| self.contains(&v))
+    }
+
     /// Smart constructor for [`Contract::Concat`], applying the family's normal
     /// forms (§1): nested Concats flatten associatively; the canonical empty-tuple
     /// segment **erases** (a structural fact); an **uninhabited segment never

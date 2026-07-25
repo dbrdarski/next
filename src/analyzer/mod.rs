@@ -63,39 +63,64 @@ pub struct Finding {
     pub message: String,
 }
 
+/// Whether an expression completes **without** producing a value (E10 — a `Match`
+/// that may fall through), three-voiced (the application spec's `CompletionWithoutValue`
+/// at the expression layer): the seat demand's compile-time face.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Completion {
+    /// Every path produces a value (`ProvenAbsent`) — an expecting seat is satisfied.
+    Produces,
+    /// A fall-through is possible but **not proven reachable** (`UnprovenPossible`) —
+    /// an expecting seat is the third voice: a *warning*, never a rejection.
+    MayFallThrough,
+    /// A fall-through is **proven reachable** (`ProvenPresent`) — a represented input
+    /// completes without a value, so an expecting seat is *refuted* (an error).
+    FallsThrough,
+}
+
 /// The result of analyzing an expression: the inferred contract, any findings
-/// gathered from it and its subexpressions, and whether evaluation can complete
-/// *without* producing a value (a `Match` that may fall through — E10). The last
-/// drives the expecting-seat demand.
+/// gathered from it and its subexpressions, and its completion (E10).
 #[derive(Clone, Debug)]
 pub struct Analysis {
     pub contract: Contract,
     pub findings: Vec<Finding>,
-    pub may_complete: bool,
+    pub completion: Completion,
 }
 
 impl Analysis {
     /// An expression that always produces a value.
     fn produced(contract: Contract, findings: Vec<Finding>) -> Analysis {
-        Analysis { contract, findings, may_complete: false }
+        Analysis { contract, findings, completion: Completion::Produces }
     }
 
     /// Whether the expression is accepted — no error-level findings.
     pub fn accepted(&self) -> bool {
         self.findings.iter().all(|f| f.severity != Severity::Error)
     }
+
+    /// Whether evaluation may complete without a value (either voice of fall-through).
+    pub fn may_complete(&self) -> bool {
+        !matches!(self.completion, Completion::Produces)
+    }
 }
 
-/// An expecting seat (E10) demands `Produced`; if the sub-analysis `may_complete`
-/// without a value, that is the expecting-seat trap's compile-time mirror.
+/// An expecting seat (E10) demands `Produced`. The compile-time mirror of the
+/// expecting-seat trap is **three-voiced** (E10 / application §1.6): a **proven**
+/// fall-through refutes (error); a merely **possible** one is unproven (warning); a
+/// guaranteed producer is fine.
 fn demand(a: &Analysis, findings: &mut Vec<Finding>) {
-    if a.may_complete {
-        findings.push(Finding {
-            class: TrapClass::ExpectingSeat,
-            severity: Severity::Error,
-            message: "a value is demanded here, but this expression may complete without one".into(),
-        });
-    }
+    let (severity, message) = match a.completion {
+        Completion::Produces => return,
+        Completion::FallsThrough => (
+            Severity::Error,
+            "a value is demanded here, but this expression completes without one on some input",
+        ),
+        Completion::MayFallThrough => (
+            Severity::Warning,
+            "a value is demanded here, but this expression cannot be proven to produce one",
+        ),
+    };
+    findings.push(Finding { class: TrapClass::ExpectingSeat, severity, message: message.into() });
 }
 
 /// A contract environment: immutable-binding name → its contract.
@@ -545,7 +570,8 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         };
         return match eval_expr(&node, interner) {
             Ok(Outcome::Produced(v)) => Analysis::produced(Contract::Equals(v), findings),
-            Ok(Outcome::CompletedWithoutValue) => Analysis { contract: Contract::Top, findings, may_complete: true },
+            // A closed call that completes without a value is a *proven* fall-through.
+            Ok(Outcome::CompletedWithoutValue) => Analysis { contract: Contract::Top, findings, completion: Completion::FallsThrough },
             Err(trap) => {
                 findings.push(Finding { class: trap.class, severity: Severity::Error, message: trap.message });
                 Analysis::produced(Contract::Bottom, findings)
@@ -564,9 +590,15 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
     }
 
     // With a known callee value, check its act-kind and parameter obligation.
-    let may_complete = match &cc {
-        Contract::Equals(cv) => analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner),
-        _ => false, // unknown callee: shape not derivable yet (owed)
+    if let Contract::Equals(cv) = &cc {
+        analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
+    }
+    // Completion (E10): the callee's body may complete without a value (a partial Match,
+    // or a mutator whose return is discarded), which an expecting seat then demands
+    // against. Unknown callee: not derivable yet (owed) — assume it produces.
+    let completion = match &cc {
+        Contract::Equals(cv) => callee_completion(cv, &arg_contracts, has_spread, cenv, interner),
+        _ => Completion::Produces,
     };
     // The callee's return contract (§6 / C§13.2): an active induction hypothesis if
     // inside a driver pass; else the return fact inferred over the call-site arguments;
@@ -575,7 +607,27 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         Contract::Equals(cv) => call_return(cv, &arg_contracts, has_spread, cenv, interner),
         _ => Contract::Top,
     };
-    Analysis { contract, findings, may_complete }
+    Analysis { contract, findings, completion }
+}
+
+/// The callee's body completion (E10) at a call site: a **mutator** discards its return
+/// (always completes without a value — proven by law); a pure/effect callee inherits
+/// its body's completion, summarized coarsely over the call-site arguments. A spread
+/// call or a non-closure callee is treated as producing (not derivable yet — owed).
+fn callee_completion(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool, cenv: &ContractEnv, interner: &mut Interner) -> Completion {
+    let Some(closure) = cv.as_closure() else { return Completion::Produces };
+    if matches!(closure.lambda.act_kind, ActKind::Mutator) {
+        return Completion::FallsThrough; // the return is discarded — always without a value
+    }
+    // Coarse (assume it produces) during fact-proving or on a spread call: `analyze_
+    // instance_body` re-enters `analyze` (hence `callee_completion`), so a recursive
+    // callee would recurse without the guard — the same bound `call_return` uses.
+    if has_spread || induction::currently_inferring() {
+        return Completion::Produces;
+    }
+    crate::analyzer::outcome::analyze_instance_body(cv, arg_contracts, cenv, interner)
+        .map(|a| a.completion)
+        .unwrap_or(Completion::Produces)
 }
 
 /// The inferred return contract for a call to the known closure `cv` over
@@ -595,8 +647,8 @@ fn call_return(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool, cenv
     induction::infer_return_fact(cv, Some(arg_contracts), cenv, interner).unwrap_or(Contract::Top)
 }
 
-/// Check a known callee's act-kind (world admission) and argument obligation.
-/// Returns whether the call `may_complete` without a value.
+/// Check a known callee's act-kind (world admission) and argument obligation, pushing
+/// any findings. Completion is handled separately ([`callee_completion`]).
 fn analyze_known_callee(
     cv: &ValueRef,
     arg_contracts: &[Contract],
@@ -604,7 +656,7 @@ fn analyze_known_callee(
     findings: &mut Vec<Finding>,
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> bool {
+) {
     // Analysis world is pure (see `analyze_apply`); only pure callees are admitted.
     let admit = |kind: ActKind, findings: &mut Vec<Finding>| {
         if !matches!(kind, ActKind::Pure) {
@@ -638,13 +690,11 @@ fn analyze_known_callee(
                 });
             }
         }
-        // A mutator's return is discarded — the call completes without a value.
-        return matches!(closure.lambda.act_kind, ActKind::Mutator);
+        return;
     }
     if let Some(native) = cv.as_native() {
         admit(native.get().act_kind, findings);
     }
-    false
 }
 
 /// A spread must evaluate to the expected kind — Tuple for argument/tuple spreads
@@ -738,6 +788,10 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
     let mut body_env = env.clone();
     let mut remainder = scrut.clone();
     let mut results: Vec<Contract> = Vec::new();
+    // Any guarded arm makes the remainder an *over*-approximation (a guard, not the
+    // pattern, decides, and guards consume nothing) — so an inhabited remainder no
+    // longer *proves* a fall-through: at most `MayFallThrough`.
+    let mut any_guarded = false;
 
     for item in &m.items {
         match item {
@@ -766,6 +820,7 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
                 let mut guarded = false;
                 if let Some(g) = &arm.guard {
                     guarded = true;
+                    any_guarded = true;
                     let ga = analyze(g, &arm_env, cenv, interner);
                     demand(&ga, &mut findings);
                     findings.extend(ga.findings);
@@ -793,10 +848,24 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
         }
     }
 
-    // Exhaustive iff no scrutinee value escapes every arm.
-    let exhaustive = matches!(subcontract(&remainder, &Contract::Bottom, interner), Verdict::Proven);
     let contract = union_of(results);
-    Analysis { contract, findings, may_complete: !exhaustive }
+    Analysis { contract, findings, completion: classify_remainder(&remainder, any_guarded, interner) }
+}
+
+/// Classify a `Match`'s completion (E10) from its uncovered `remainder` (three-voiced):
+/// - **proven empty** → `Produces` (exhaustive — no scrutinee value escapes every arm);
+/// - **proven inhabited** by a sampled witness, and **no guarded arm** muddied the
+///   remainder → `FallsThrough` (that witness is a represented input that falls
+///   through — a real expecting-seat trap);
+/// - otherwise (not proven empty, no witness, or guards present) → `MayFallThrough`.
+fn classify_remainder(remainder: &Contract, any_guarded: bool, interner: &mut Interner) -> Completion {
+    if matches!(subcontract(remainder, &Contract::Bottom, interner), Verdict::Proven) {
+        return Completion::Produces;
+    }
+    if !any_guarded && remainder.has_proven_inhabitant(interner) {
+        return Completion::FallsThrough;
+    }
+    Completion::MayFallThrough
 }
 
 /// The contract of values a pattern matches — a **superset** of the true match set
