@@ -6,6 +6,41 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Analyzer-core bridge-2: the joint operand driver + structural witness
+
+Completes the review's held bridge before the induction tail. `src/analyzer/
+application.rs` extended; 2 new tests (AP-24/29, AP-30), the existing algebra tests
+migrated to the structural witness. Full tree 269 lib + 111 conformance, clippy clean.
+
+- **`analyze_application`** processes the joint operand — the correlated
+  `[callee, …args]` AnalysisContract — **per live alternative** (admission step 1 +
+  the input obligation step 3 via an `accepts` callback), conjunctively across
+  alternatives. `live_alternatives` distinguishes **correlated** (an `Alt` of tuples,
+  or a bare tuple) from **projected** (a tuple carrying positional `Alt`s → the
+  cross-product); a correlated alternative may refute with its witness, a projected
+  cross-pair failure **degrades to `Unproven`, never `Refuted`** (AP-29).
+- **AP-24 / AP-29 tested end-to-end** — the operand `[numFn, 5] | [strFn, "hi"]`
+  proves (each callee accepts its own arg, cross-pairs never formed); the projected
+  `[numFn|strFn, 5|"hi"]` expands to four cross-pairs, `(numFn,"hi")`/`(strFn,5)` fail,
+  and the driver lands **Unproven** — never a refutation from a pair the program does
+  not represent.
+- **Structural witness (review §7)** — `ProvenPresent(ValueRef)` → `ProvenPresent(
+  ApplicationWitness { callee: ValueRef, arguments: Vec<ValueRef> })`, and the seat
+  demand now returns a `SeatVerdict { Proven | Refuted(ApplicationWitness) | Unproven }`.
+  A refutation carries the **represented execution** (callee applied to arguments),
+  not a fakeable token (AP-30 asserts the witness is `numFn` applied to `"hi"`).
+- **Chose / scoped:** the input obligation is supplied by an `accepts` callback so the
+  correlation discipline is exercised independently — deriving the accepted domain from
+  the callee's param pattern (§1 step 3 proper) is threaded in the induction tail.
+  `analyze_apply` is still the coarse path; the driver is not yet wired into it.
+- **`// [ask-author]`:** none.
+
+The review's bridge prerequisite is now discharged (correlated domain + joint witness
++ AP-24/29/30). The **induction tail** — μ body-walk → candidate graph → SCC return
+induction → `analyze_apply` → Phase A — is unblocked.
+
+---
+
 ## 2026-07-25 — Analyzer-core bridge: the correlated structural AnalysisContract
 
 Responds to the author's checkpoint review (`NEXT-analyzer-core-checkpoint-review-

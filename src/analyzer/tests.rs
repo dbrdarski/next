@@ -802,13 +802,15 @@ mod domain {
 mod application {
     use super::{ActKind, closure, name, one_param};
     use crate::analyzer::application::{
-        ApplicationOutcome, CompletionWithoutValue as C, admit_callee, join, join_all,
-        pure_world_admits, seat_demand,
+        ApplicationOutcome, ApplicationWitness, CompletionWithoutValue as C, SeatVerdict,
+        admit_callee, analyze_application, join, join_all, live_alternatives, pure_world_admits,
+        seat_demand,
     };
     use crate::analyzer::domain::{AnalysisContract, Instance, InstanceMetadata};
     use crate::ast::Lambda;
     use crate::contract::{Contract, Kind, Verdict};
     use crate::interner::Interner;
+    use crate::value::ValueRef;
 
     fn shape(i: &mut Interner, act: ActKind) -> Lambda {
         closure(i, one_param("x"), name("x"), act).as_fn().unwrap().shape().clone()
@@ -825,24 +827,30 @@ mod application {
     fn proven(v: &Verdict) -> bool {
         matches!(v, Verdict::Proven)
     }
+    /// A nominal represented-execution witness for the algebra tests.
+    fn dummy_witness(i: &mut Interner) -> ApplicationWitness {
+        let f = closure(i, one_param("x"), name("x"), ActKind::Pure);
+        let a = i.integer(0);
+        ApplicationWitness { callee: f, arguments: vec![a] }
+    }
 
     #[test]
     fn ap23_completion_tri_state_at_the_seat() {
         let mut i = Interner::new();
-        let w = i.integer(7); // a fall-through witness token
+        let w = dummy_witness(&mut i);
         let absent = out(num(), C::ProvenAbsent, false);
         let present = out(num(), C::ProvenPresent(w.clone()), false);
         let unproven = out(num(), C::UnprovenPossible, false);
         // Expecting seat: absent proven, present refuted-with-witness, unproven unproven.
-        assert!(proven(&seat_demand(&absent, true)));
+        assert!(matches!(seat_demand(&absent, true), SeatVerdict::Proven));
         match seat_demand(&present, true) {
-            Verdict::Refuted(got) => assert_eq!(got, w),
+            SeatVerdict::Refuted(got) => assert_eq!(got.callee, w.callee),
             other => panic!("expected Refuted(witness), got {other:?}"),
         }
-        assert!(matches!(seat_demand(&unproven, true), Verdict::Unproven));
+        assert!(matches!(seat_demand(&unproven, true), SeatVerdict::Unproven));
         // Statement seat accepts all three.
         for o in [&absent, &present, &unproven] {
-            assert!(proven(&seat_demand(o, false)));
+            assert!(matches!(seat_demand(o, false), SeatVerdict::Proven));
         }
     }
 
@@ -851,28 +859,26 @@ mod application {
         // produced = Bottom, a witnessed fall-through: binding it (expecting seat) is
         // the violation; the statement seat accepts.
         let mut i = Interner::new();
-        let w = i.integer(0);
+        let w = dummy_witness(&mut i);
         let o = ApplicationOutcome {
             produced: AnalysisContract::bottom(),
-            completion: C::ProvenPresent(w.clone()),
+            completion: C::ProvenPresent(w),
             may_not_complete: false,
         };
-        assert!(matches!(seat_demand(&o, true), Verdict::Refuted(_)));
-        assert!(proven(&seat_demand(&o, false)));
+        assert!(matches!(seat_demand(&o, true), SeatVerdict::Refuted(_)));
+        assert!(matches!(seat_demand(&o, false), SeatVerdict::Proven));
     }
 
-    // NB: the outcome-join algebra — NOT spec AP-24 (the correlated numFn/strFn
-    // application), which lands with the joint operand driver (bridge-2).
     #[test]
     fn outcome_join_is_componentwise_and_evidence_preserving() {
         let mut i = Interner::new();
-        let w = i.integer(1);
+        let w = dummy_witness(&mut i);
         // may_not_complete by or; produced by union; completion evidence-preserving.
         let a = out(num(), C::UnprovenPossible, false);
-        let b = out(Contract::Kind(Kind::String), C::ProvenPresent(w.clone()), true);
+        let b = out(Contract::Kind(Kind::String), C::ProvenPresent(w), true);
         let j = join(a, b);
         assert!(j.may_not_complete, "or of the flags");
-        assert!(matches!(&j.completion, C::ProvenPresent(got) if *got == w), "ProvenPresent dominates");
+        assert!(matches!(&j.completion, C::ProvenPresent(_)), "ProvenPresent dominates");
         assert!(matches!(j.produced, AnalysisContract::Alt(_)), "produced by correlated union");
         // UnprovenPossible beats ProvenAbsent; the empty join is the Known(∅) identity.
         let mixed = join(out(num(), C::UnprovenPossible, false), out(num(), C::ProvenAbsent, false));
@@ -908,7 +914,132 @@ mod application {
         // may_not_complete = true rides alongside a ProvenAbsent completion and does
         // not turn the expecting-seat demand into a violation.
         let o = out(num(), C::ProvenAbsent, true);
-        assert!(matches!(seat_demand(&o, true), Verdict::Proven));
+        assert!(matches!(seat_demand(&o, true), SeatVerdict::Proven));
+    }
+
+    // ── The joint operand driver: AP-24 / AP-29 (correlation discipline) ─────────
+
+    /// A callee leaf carrying a single known instance of `shape`.
+    fn callee_leaf(shape: Lambda) -> AnalysisContract {
+        AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![inst(shape)]))
+    }
+    /// A value leaf `Equals(v)`.
+    fn val_leaf(v: ValueRef) -> AnalysisContract {
+        AnalysisContract::leaf(Contract::Equals(v), InstanceMetadata::Unknown)
+    }
+    fn callee_shape(ac: &AnalysisContract) -> Option<Lambda> {
+        match ac {
+            AnalysisContract::Leaf { metadata: InstanceMetadata::Known(s), .. } if s.len() == 1 => {
+                Some(s[0].shape.clone())
+            }
+            _ => None,
+        }
+    }
+    fn arg_value(ac: &AnalysisContract) -> Option<ValueRef> {
+        match ac {
+            AnalysisContract::Leaf { contract: Contract::Equals(v), .. } => Some(v.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn ap24_ap29_correlated_vs_projected_application() {
+        // numFn (`x => x`) is used as "accepts Numbers"; strFn (`x => 0`) as "accepts
+        // Strings". The operand is [numFn, 5] | [strFn, "hi"].
+        let mut i = Interner::new();
+        let numfn = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
+        let z = zero_body(&mut i);
+        let strfn = closure(&mut i, one_param("x"), z, ActKind::Pure);
+        let num_shape = numfn.as_fn().unwrap().shape().clone();
+        let str_shape = strfn.as_fn().unwrap().shape().clone();
+        let five = i.integer(5);
+        let hi = i.string("hi");
+
+        // `accepts`: numFn takes a numeric arg, strFn a string arg (interner-free).
+        let (ns, ss) = (num_shape.clone(), str_shape.clone());
+        let (nfv, sfv) = (numfn.clone(), strfn.clone());
+        let accepts = move |callee: &AnalysisContract, args: &[AnalysisContract]| -> SeatVerdict {
+            let (Some(shape), Some(av)) = (callee_shape(callee), args.first().and_then(arg_value)) else {
+                return SeatVerdict::Unproven;
+            };
+            let ok = if shape == ns {
+                av.as_number().is_some()
+            } else if shape == ss {
+                av.as_str_units().is_some()
+            } else {
+                false
+            };
+            if ok {
+                SeatVerdict::Proven
+            } else {
+                let callee_val = if shape == ns { nfv.clone() } else { sfv.clone() };
+                SeatVerdict::Refuted(ApplicationWitness { callee: callee_val, arguments: vec![av] })
+            }
+        };
+
+        // AP-24: the correlated operand proves — each callee accepts its own arg, and
+        // the cross-pairs are never formed.
+        let correlated = AnalysisContract::alt(vec![
+            AnalysisContract::tuple(vec![callee_leaf(num_shape.clone()), val_leaf(five.clone())]),
+            AnalysisContract::tuple(vec![callee_leaf(str_shape.clone()), val_leaf(hi.clone())]),
+        ]);
+        let (a, correlated_flag) = live_alternatives(&correlated);
+        assert_eq!(a.len(), 2, "two live correlated alternatives");
+        assert!(correlated_flag);
+        assert!(
+            matches!(analyze_application(&correlated, pure_world_admits, &accepts), SeatVerdict::Proven),
+            "correlated application proves; no synthesized cross-pair",
+        );
+
+        // AP-29: the projected operand [numFn|strFn, 5|"hi"] expands to the four
+        // cross-pairs; (numFn,"hi") and (strFn,5) fail, but a synthesized cross-pair
+        // failure must be UNPROVEN, never refuted.
+        let projected = AnalysisContract::tuple(vec![
+            AnalysisContract::alt(vec![callee_leaf(num_shape.clone()), callee_leaf(str_shape.clone())]),
+            AnalysisContract::alt(vec![val_leaf(five), val_leaf(hi)]),
+        ]);
+        let (pa, projected_flag) = live_alternatives(&projected);
+        assert_eq!(pa.len(), 4, "four projected cross-pairs");
+        assert!(!projected_flag, "projected form is uncorrelated");
+        assert!(
+            matches!(analyze_application(&projected, pure_world_admits, &accepts), SeatVerdict::Unproven),
+            "a cross-pair failure degrades to unproven, never refuted (AP-29)",
+        );
+    }
+
+    #[test]
+    fn ap30_refutation_witness_is_a_represented_execution() {
+        // A genuinely-failing CORRELATED alternative refutes with a structural
+        // witness — the callee applied to the argument, not a bare token.
+        let mut i = Interner::new();
+        let numfn = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
+        let num_shape = numfn.as_fn().unwrap().shape().clone();
+        let hi = i.string("hi");
+        let ns = num_shape.clone();
+        let nfv = numfn.clone();
+        let accepts = move |callee: &AnalysisContract, args: &[AnalysisContract]| -> SeatVerdict {
+            let (Some(shape), Some(av)) = (callee_shape(callee), args.first().and_then(arg_value)) else {
+                return SeatVerdict::Unproven;
+            };
+            if shape == ns && av.as_number().is_some() {
+                SeatVerdict::Proven
+            } else {
+                SeatVerdict::Refuted(ApplicationWitness { callee: nfv.clone(), arguments: vec![av] })
+            }
+        };
+        // [numFn, "hi"] — a single correlated alternative that genuinely rejects.
+        let operand = AnalysisContract::tuple(vec![callee_leaf(num_shape), val_leaf(hi.clone())]);
+        match analyze_application(&operand, pure_world_admits, &accepts) {
+            SeatVerdict::Refuted(w) => {
+                assert_eq!(w.callee, numfn, "witness carries the represented callee");
+                assert_eq!(w.arguments, vec![hi], "and the represented argument");
+            }
+            other => panic!("expected a witnessed refutation, got {other:?}"),
+        }
+    }
+
+    fn zero_body(i: &mut Interner) -> crate::ast::Expr {
+        crate::ast::Expr::Const(i.integer(0))
     }
 }
 

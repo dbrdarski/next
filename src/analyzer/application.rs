@@ -1,57 +1,63 @@
-//! The application transfer rule (§1) — the **outcome algebra**.
+//! The application transfer rule (§1) — the **outcome algebra** and the **joint
+//! operand driver**.
 //!
-//! `analyzeOperation(application, AC_operands)` combines the per-instance outcomes of
-//! a call site into one seat verdict. This module is the algebra of that combination
-//! — steps **1** (act-kind admission), **5** (the outcome summary), **6** (the
-//! three-voiced completion demand), and **7** (union of callees) — as pure,
-//! seat-applied combinators over the [`AnalysisContract`] domain.
+//! `analyzeOperation(application, AC_operands)` receives **one joint correlated**
+//! [`AnalysisContract`] denoting `[callee, …arguments]` tuples, and processes it
+//! **per live correlated alternative** — so a correlated union like `[numFn, 5] |
+//! [strFn, "hi"]` is handled as `(numFn, 5)` OR `(strFn, "hi")`, never as the
+//! synthesized cross-pairs `(numFn, "hi")` / `(strFn, 5)`. A **projecting** operand
+//! (correlation already flattened positionally) is permitted, but any failure that
+//! arises only from a synthesized cross-pair degrades to **unproven, never refuted**
+//! (AP-29).
 //!
-//! What is **not** here yet: computing a single instance's summary from its body
-//! (steps 2–4 — instance resolution, the `E × A` input obligation, row selection).
-//! That requires the constructed instance inventory (§4) and the candidate graph
-//! (§6) so recursive callees are summarized soundly under the cutoff, and lands with
-//! 8.1c. Until then the existing `analyze_apply` stays as the sound coarse path
-//! (return `Top`); this algebra is unit-tested against synthetic per-instance
-//! summaries, exactly as the domain layer was.
+//! This module carries: the outcome algebra (steps 1/5/6/7 — admission, the summary
+//! shape, the three-voiced completion demand, union of callees) and [`analyze_application`],
+//! the per-alternative driver over the correlated operand state. Computing a single
+//! instance's summary from its body (steps 2–4) is still the induction tail; the
+//! input obligation here is supplied by an `accepts` callback so the correlation
+//! discipline can be exercised independently.
 
 use crate::analyzer::domain::{AnalysisContract, InstanceMetadata};
 use crate::ast::ActKind;
 use crate::contract::Verdict;
 use crate::value::ValueRef;
 
+/// A **represented application execution** — the structural refutation / fall-through
+/// witness (checkpoint review §7). A witness is a concrete callee applied to concrete
+/// arguments, never a bare token or two independently plausible values.
+#[derive(Clone, Debug)]
+pub struct ApplicationWitness {
+    pub callee: ValueRef,
+    pub arguments: Vec<ValueRef>,
+}
+
 /// Whether a **completed-without-value** (fall-through, E10) execution is present
-/// (§1.5, tri-state — round 4). A Boolean erased the three-voice distinction between
-/// a witnessed fall-through and a merely-undisproved live row.
+/// (§1.5, tri-state — round 4).
 #[derive(Clone, Debug)]
 pub enum CompletionWithoutValue {
-    /// `(E × A) ∩ Row = ∅` for every fall-through row — the product legitimately
-    /// proves *absence*.
+    /// `(E × A) ∩ Row = ∅` for every fall-through row — the product proves *absence*.
     ProvenAbsent,
     /// A fall-through is present, witnessed by a **jointly-represented** completing
     /// execution (never a synthesized cross-pair, §1.5 / AP-29).
-    ProvenPresent(ValueRef),
-    /// A live fall-through row whose intersection is not proven empty, but whose
-    /// joint inhabitance is not proved — the third voice.
+    ProvenPresent(ApplicationWitness),
+    /// A live fall-through row whose intersection is not proven empty, but whose joint
+    /// inhabitance is not proved — the third voice.
     UnprovenPossible,
 }
 
 /// The application outcome summary (§1.5). `produced = Bottom` only when the absence
-/// of every `Produced` outcome is proven (empty selection, all rows fall-through, or
-/// all rows proven non-completing) — **grayness never implies Bottom**.
+/// of every `Produced` outcome is proven — grayness never implies Bottom.
 #[derive(Clone, Debug)]
 pub struct ApplicationOutcome {
     pub produced: AnalysisContract,
     pub completion: CompletionWithoutValue,
-    /// At least one represented execution may not complete (E10's triple) — a
-    /// conservative possibility feeding **no** safety verdict, so it needs no
-    /// divergence witness.
+    /// At least one represented execution may not complete — a conservative
+    /// possibility feeding **no** safety verdict, so it needs no divergence witness.
     pub may_not_complete: bool,
 }
 
 impl ApplicationOutcome {
-    /// The identity of the union join (§1.7) — the `Known(∅)` cached core: absence
-    /// proven vacuously, no completion, complete. Also the summary of a call with no
-    /// live callee.
+    /// The identity of the union join (§1.7) — the `Known(∅)` cached core.
     pub fn empty() -> ApplicationOutcome {
         ApplicationOutcome {
             produced: AnalysisContract::bottom(),
@@ -61,9 +67,23 @@ impl ApplicationOutcome {
     }
 }
 
-/// The union of two produced contracts (§1.7, produced-by-union). `Bottom` is the
-/// identity; otherwise the correlated union — a structural `Alt` that keeps each
-/// branch's internal correlation (never a positional flatten).
+/// The three-valued verdict of a **seat** demand or the application driver, carrying a
+/// **structural** witness on refutation (never a bare value).
+#[derive(Clone, Debug)]
+pub enum SeatVerdict {
+    Proven,
+    Refuted(ApplicationWitness),
+    Unproven,
+}
+
+impl SeatVerdict {
+    fn is_proven(&self) -> bool {
+        matches!(self, SeatVerdict::Proven)
+    }
+}
+
+/// The union of two produced contracts (§1.7): the correlated union — a structural
+/// `Alt` that keeps each branch's internal correlation.
 pub fn union_ac(a: &AnalysisContract, b: &AnalysisContract) -> AnalysisContract {
     if a.is_bottom() {
         return b.clone();
@@ -87,8 +107,7 @@ fn join_completion(a: CompletionWithoutValue, b: CompletionWithoutValue) -> Comp
     }
 }
 
-/// The union of callees (§1.7): summaries join componentwise — produced by union,
-/// completion by the evidence-preserving join, `may_not_complete` by `or`.
+/// The union of callees (§1.7): summaries join componentwise.
 pub fn join(a: ApplicationOutcome, b: ApplicationOutcome) -> ApplicationOutcome {
     ApplicationOutcome {
         produced: union_ac(&a.produced, &b.produced),
@@ -97,45 +116,37 @@ pub fn join(a: ApplicationOutcome, b: ApplicationOutcome) -> ApplicationOutcome 
     }
 }
 
-/// Join a set of per-instance/per-alternative outcomes (§1.7). The empty set folds to
+/// Join a set of per-instance/per-alternative outcomes; the empty set folds to
 /// [`ApplicationOutcome::empty`] — the `Known(∅)` identity.
 pub fn join_all(outcomes: impl IntoIterator<Item = ApplicationOutcome>) -> ApplicationOutcome {
     outcomes.into_iter().fold(ApplicationOutcome::empty(), join)
 }
 
 /// The **completion demand** at the seat (§1.6) — three-voiced, seat-applied, never
-/// cached. An expecting seat (E10 `demand`) rejects only a *witnessed* fall-through;
-/// a statement seat accepts all three. `may_not_complete` violates nothing anywhere.
-pub fn seat_demand(outcome: &ApplicationOutcome, expecting: bool) -> Verdict {
+/// cached. An expecting seat rejects *only* a witnessed fall-through; a statement seat
+/// accepts all three. `may_not_complete` violates nothing.
+pub fn seat_demand(outcome: &ApplicationOutcome, expecting: bool) -> SeatVerdict {
     if !expecting {
-        return Verdict::Proven; // statement seats accept ProvenAbsent / Present / Unproven
+        return SeatVerdict::Proven;
     }
     match &outcome.completion {
-        CompletionWithoutValue::ProvenAbsent => Verdict::Proven,
-        CompletionWithoutValue::ProvenPresent(w) => Verdict::Refuted(w.clone()),
-        CompletionWithoutValue::UnprovenPossible => Verdict::Unproven,
+        CompletionWithoutValue::ProvenAbsent => SeatVerdict::Proven,
+        CompletionWithoutValue::ProvenPresent(w) => SeatVerdict::Refuted(w.clone()),
+        CompletionWithoutValue::UnprovenPossible => SeatVerdict::Unproven,
     }
 }
 
-/// **Act-kind admission** in the seat's world (§1.1) — the one world-dependent step,
-/// applied at the seat, outside the cache. Over `Known(S)`: every non-empty member
-/// admitted by `world_admits` → proven; `Known(∅)` passes **vacuously** (no
-/// represented application exists — the seat's unreachability is emptiness's
-/// diagnostic, not admission's refutation). Over `Unknown`: **unproven** — no witness
-/// can exist, and coarsening never invents evidence. An inadmissible member refutes
-/// only with an inhabitance-backed **represented-closure** witness; the algebra layer
-/// carries none, so an inadmissible member lands `unproven` here — the witness-backed
-/// refutation arrives with real callees in 8.1c.
+/// **Act-kind admission** in the seat's world (§1.1). Over `Known(S)` every non-empty
+/// member's act-kind must be admitted (`Known(∅)` vacuous); over `Unknown` → unproven.
+/// An inadmissible member is unproven at this layer (the witness-backed refutation
+/// needs a represented closure — the tail).
 pub fn admit_callee(meta: &InstanceMetadata, world_admits: impl Fn(ActKind) -> bool) -> Verdict {
     match meta {
         InstanceMetadata::Unknown => Verdict::Unproven,
         InstanceMetadata::Known(s) => {
-            let all_admitted = s
-                .iter()
-                .filter(|i| !i.is_empty()) // a proven-empty member is dropped from S
-                .all(|i| world_admits(i.shape.act_kind));
+            let all_admitted = s.iter().filter(|i| !i.is_empty()).all(|i| world_admits(i.shape.act_kind));
             if all_admitted {
-                Verdict::Proven // includes Known(∅): the `all` is vacuously true
+                Verdict::Proven
             } else {
                 Verdict::Unproven
             }
@@ -143,9 +154,140 @@ pub fn admit_callee(meta: &InstanceMetadata, world_admits: impl Fn(ActKind) -> b
     }
 }
 
-/// The pure-world admission predicate (the analysis world for pure seats): only
-/// `Pure` act-kinds are admitted (B4 — a mutator/effect call is inadmissible in the
-/// pure world).
+/// The pure-world admission predicate: only `Pure` act-kinds are admitted (B4).
 pub fn pure_world_admits(kind: ActKind) -> bool {
     matches!(kind, ActKind::Pure)
+}
+
+// ── The joint operand driver (§1, per live alternative) ───────────────────────
+
+/// One **live correlated alternative** of the joint operand state — a `[callee,
+/// …arguments]` tuple whose callee⟷argument correlation is preserved.
+#[derive(Clone, Debug)]
+pub struct Alternative {
+    pub callee: AnalysisContract,
+    pub arguments: Vec<AnalysisContract>,
+}
+
+/// Extract the live correlated alternatives of a joint operand denoting `[callee,
+/// …arguments]`, and whether they are **correlated**:
+/// - an `Alt` of tuples → one alternative per branch, **correlated**;
+/// - a bare `Tuple([callee, args…])` with no positional `Alt` → one alternative,
+///   **correlated**;
+/// - a `Tuple` carrying positional `Alt`s (correlation already flattened) → the
+///   **cross-product** of the positions, **not correlated** — a projecting read whose
+///   failures the driver must degrade;
+/// - anything else → no analyzable alternatives (unproven).
+pub fn live_alternatives(operand: &AnalysisContract) -> (Vec<Alternative>, bool) {
+    match operand {
+        AnalysisContract::Alt(branches) => {
+            let mut out = Vec::new();
+            let mut correlated = true;
+            for b in branches {
+                let (alts, c) = live_alternatives(b);
+                correlated &= c;
+                out.extend(alts);
+            }
+            (out, correlated)
+        }
+        AnalysisContract::Tuple(elems) if !elems.is_empty() => {
+            if elems.iter().any(|e| matches!(e, AnalysisContract::Alt(_))) {
+                // Projected form: expand the positional cross-product (uncorrelated).
+                let positions: Vec<Vec<AnalysisContract>> = elems
+                    .iter()
+                    .map(|e| match e {
+                        AnalysisContract::Alt(bs) => bs.clone(),
+                        other => vec![other.clone()],
+                    })
+                    .collect();
+                let combos = cross_product(&positions);
+                let out = combos
+                    .into_iter()
+                    .map(|combo| Alternative { callee: combo[0].clone(), arguments: combo[1..].to_vec() })
+                    .collect();
+                (out, false)
+            } else {
+                let alt = Alternative { callee: elems[0].clone(), arguments: elems[1..].to_vec() };
+                (vec![alt], true)
+            }
+        }
+        _ => (vec![], false),
+    }
+}
+
+/// The Cartesian product of per-position choice lists.
+fn cross_product(positions: &[Vec<AnalysisContract>]) -> Vec<Vec<AnalysisContract>> {
+    let mut combos: Vec<Vec<AnalysisContract>> = vec![vec![]];
+    for choices in positions {
+        let mut next = Vec::new();
+        for prefix in &combos {
+            for choice in choices {
+                let mut row = prefix.clone();
+                row.push(choice.clone());
+                next.push(row);
+            }
+        }
+        combos = next;
+    }
+    combos
+}
+
+/// Analyze the application over the joint operand state (§1, steps 1 + 3, per live
+/// alternative). For each alternative: act-kind admission over the callee metadata,
+/// then the input obligation via `accepts` (the args accepted by the callee). The
+/// verdict is **conjunctive** across alternatives (the operand may be any of them at
+/// runtime). Correlated alternatives may refute with their witness; an **uncorrelated
+/// (projected)** operand degrades every obligation failure to `Unproven` — never a
+/// refutation from a synthesized cross-pair (AP-29).
+pub fn analyze_application(
+    operand: &AnalysisContract,
+    world_admits: impl Fn(ActKind) -> bool + Copy,
+    accepts: impl Fn(&AnalysisContract, &[AnalysisContract]) -> SeatVerdict,
+) -> SeatVerdict {
+    let (alts, correlated) = live_alternatives(operand);
+    if alts.is_empty() {
+        return SeatVerdict::Unproven; // no analyzable structure — sound, unproven
+    }
+    let mut result = SeatVerdict::Proven;
+    for alt in &alts {
+        let admit = match admit_callee(&callee_metadata(&alt.callee), world_admits) {
+            Verdict::Proven => SeatVerdict::Proven,
+            _ => SeatVerdict::Unproven, // admission never refutes at this layer
+        };
+        let oblig = accepts(&alt.callee, &alt.arguments);
+        let mut combined = conj(admit, oblig);
+        if !correlated {
+            combined = degrade(combined); // synthesized cross-pair: never refute
+        }
+        result = conj(result, combined);
+    }
+    result
+}
+
+/// The callee's metadata (for admission). A `Leaf` carries it directly; any other
+/// shape coarsens to `Unknown` (no proven callee set).
+fn callee_metadata(callee: &AnalysisContract) -> InstanceMetadata {
+    match callee {
+        AnalysisContract::Leaf { metadata, .. } => metadata.clone(),
+        _ => InstanceMetadata::Unknown,
+    }
+}
+
+/// Conjunction of seat verdicts: both proven → proven; any refuted → that refutation;
+/// else unproven.
+fn conj(a: SeatVerdict, b: SeatVerdict) -> SeatVerdict {
+    match (a, b) {
+        (SeatVerdict::Refuted(w), _) => SeatVerdict::Refuted(w),
+        (_, SeatVerdict::Refuted(w)) => SeatVerdict::Refuted(w),
+        (x, y) if x.is_proven() && y.is_proven() => SeatVerdict::Proven,
+        _ => SeatVerdict::Unproven,
+    }
+}
+
+/// Degrade a refutation to unproven (the projected-operand rule, AP-29).
+fn degrade(v: SeatVerdict) -> SeatVerdict {
+    match v {
+        SeatVerdict::Refuted(_) => SeatVerdict::Unproven,
+        other => other,
+    }
 }
