@@ -758,3 +758,116 @@ mod domain {
         assert!(gamma_contains(&num, &five, &mut i), "metadata is vacuous for a non-function");
     }
 }
+
+// ── Application transfer rule §1 — the outcome algebra (v0.8.1, 8.1b) ──────────
+
+mod application {
+    use super::{ActKind, closure, name, one_param};
+    use crate::analyzer::application::{
+        ApplicationOutcome, CompletionWithoutValue as C, admit_callee, join, join_all,
+        pure_world_admits, seat_demand,
+    };
+    use crate::analyzer::domain::{AnalysisContract, Instance, InstanceMetadata};
+    use crate::ast::Lambda;
+    use crate::contract::{Contract, Kind, Verdict};
+    use crate::interner::Interner;
+
+    fn shape(i: &mut Interner, act: ActKind) -> Lambda {
+        closure(i, one_param("x"), name("x"), act).as_fn().unwrap().shape().clone()
+    }
+    fn inst(shape: Lambda) -> Instance {
+        Instance { shape, env: vec![] }
+    }
+    fn out(produced: Contract, completion: C, mnc: bool) -> ApplicationOutcome {
+        ApplicationOutcome { produced: AnalysisContract::of_contract(produced), completion, may_not_complete: mnc }
+    }
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+    fn proven(v: &Verdict) -> bool {
+        matches!(v, Verdict::Proven)
+    }
+
+    #[test]
+    fn ap23_completion_tri_state_at_the_seat() {
+        let mut i = Interner::new();
+        let w = i.integer(7); // a fall-through witness token
+        let absent = out(num(), C::ProvenAbsent, false);
+        let present = out(num(), C::ProvenPresent(w.clone()), false);
+        let unproven = out(num(), C::UnprovenPossible, false);
+        // Expecting seat: absent proven, present refuted-with-witness, unproven unproven.
+        assert!(proven(&seat_demand(&absent, true)));
+        match seat_demand(&present, true) {
+            Verdict::Refuted(got) => assert_eq!(got, w),
+            other => panic!("expected Refuted(witness), got {other:?}"),
+        }
+        assert!(matches!(seat_demand(&unproven, true), Verdict::Unproven));
+        // Statement seat accepts all three.
+        for o in [&absent, &present, &unproven] {
+            assert!(proven(&seat_demand(o, false)));
+        }
+    }
+
+    #[test]
+    fn ap18_fall_through_only_callee_binds_at_expecting_seat() {
+        // produced = Bottom, a witnessed fall-through: binding it (expecting seat) is
+        // the violation; the statement seat accepts.
+        let mut i = Interner::new();
+        let w = i.integer(0);
+        let o = ApplicationOutcome {
+            produced: AnalysisContract::bottom(),
+            completion: C::ProvenPresent(w.clone()),
+            may_not_complete: false,
+        };
+        assert!(matches!(seat_demand(&o, true), Verdict::Refuted(_)));
+        assert!(proven(&seat_demand(&o, false)));
+    }
+
+    #[test]
+    fn ap24_union_join_is_componentwise_and_evidence_preserving() {
+        let mut i = Interner::new();
+        let w = i.integer(1);
+        // may_not_complete by or; produced by union; completion evidence-preserving.
+        let a = out(num(), C::UnprovenPossible, false);
+        let b = out(Contract::Kind(Kind::String), C::ProvenPresent(w.clone()), true);
+        let j = join(a, b);
+        assert!(j.may_not_complete, "or of the flags");
+        assert!(matches!(&j.completion, C::ProvenPresent(got) if *got == w), "ProvenPresent dominates");
+        assert!(matches!(j.produced.contract, Contract::Union(_, _)), "produced by union");
+        // UnprovenPossible beats ProvenAbsent; the empty join is the Known(∅) identity.
+        let mixed = join(out(num(), C::UnprovenPossible, false), out(num(), C::ProvenAbsent, false));
+        assert!(matches!(mixed.completion, C::UnprovenPossible));
+        let empty = join_all(std::iter::empty());
+        assert!(empty.produced.is_bottom());
+        assert!(matches!(empty.completion, C::ProvenAbsent));
+        assert!(!empty.may_not_complete);
+    }
+
+    #[test]
+    fn ap15_ap21_act_kind_admission_over_metadata() {
+        let mut i = Interner::new();
+        let pure = inst(shape(&mut i, ActKind::Pure));
+        let eff = inst(shape(&mut i, ActKind::Effect));
+        // All-pure Known(S) admitted in the pure world.
+        let known_pure = InstanceMetadata::Known(vec![pure.clone()]);
+        assert!(proven(&admit_callee(&known_pure, pure_world_admits)));
+        // An effect member is inadmissible — unproven (no witness at the algebra layer).
+        let known_eff = InstanceMetadata::Known(vec![eff]);
+        assert!(matches!(admit_callee(&known_eff, pure_world_admits), Verdict::Unproven));
+        // Known(∅) passes vacuously (AP-21); Unknown is unproven (AP-15).
+        assert!(proven(&admit_callee(&InstanceMetadata::Known(vec![]), pure_world_admits)));
+        assert!(matches!(admit_callee(&InstanceMetadata::Unknown, pure_world_admits), Verdict::Unproven));
+        // A proven-empty member is dropped, so it does not block admission.
+        let dead = Instance { shape: pure.shape.clone(), env: vec![AnalysisContract::bottom()] };
+        let known_dead = InstanceMetadata::Known(vec![dead]);
+        assert!(proven(&admit_callee(&known_dead, pure_world_admits)));
+    }
+
+    #[test]
+    fn may_not_complete_feeds_no_seat_verdict() {
+        // may_not_complete = true rides alongside a ProvenAbsent completion and does
+        // not turn the expecting-seat demand into a violation.
+        let o = out(num(), C::ProvenAbsent, true);
+        assert!(matches!(seat_demand(&o, true), Verdict::Proven));
+    }
+}

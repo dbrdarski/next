@@ -6,6 +6,45 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Application/induction 8.1b: the application transfer rule §1 (outcome algebra)
+
+Second sub-step of the analyzer-core rebuild. New module `src/analyzer/application.rs`,
+5 tests. Full tree 262 lib + 111 conformance, clippy clean.
+
+- **What this is.** The **outcome algebra** of `analyzeOperation(application,
+  AC_operands)` — steps **1** (act-kind admission), **5** (the summary shape), **6**
+  (the three-voiced completion demand), **7** (union of callees) — as pure,
+  seat-applied combinators over the `AnalysisContract` domain (8.1a).
+- **`ApplicationOutcome { produced: AnalysisContract, completion, may_not_complete }`**
+  with `CompletionWithoutValue = ProvenAbsent | ProvenPresent(witness) |
+  UnprovenPossible` — the §1.5 tri-state (a Boolean erased the witnessed-vs-
+  undisproved distinction; `may_not_complete` stays Boolean because it feeds no
+  safety verdict).
+- **`seat_demand` (step 6)** — three-voiced at the seat, never cached: an expecting
+  seat rejects *only* a witnessed fall-through (`ProvenPresent → Refuted(witness)`,
+  `ProvenAbsent → Proven`, `UnprovenPossible → Unproven`); a statement seat accepts
+  all three; `may_not_complete` violates nothing (AP-23; AP-18 for the
+  fall-through-only / `produced = Bottom` callee).
+- **`join` / `join_all` (step 7)** — componentwise: produced by `union_ac` (Bottom is
+  the identity; metadata joined), completion by the evidence-preserving join (any
+  `ProvenPresent` dominates with its witness, else `UnprovenPossible`, else
+  `ProvenAbsent`), `may_not_complete` by `or`. The empty join is
+  `ApplicationOutcome::empty` — the `Known(∅)` cached core (AP-21/24).
+- **`admit_callee` (step 1)** — over `Known(S)` every non-empty member's act-kind
+  must be admitted (proven-empty members dropped); `Known(∅)` passes **vacuously**
+  (AP-21); `Unknown → Unproven` (no witness can exist, AP-15). **Chose:** an
+  inadmissible member lands `Unproven` at this layer — the witness-backed refutation
+  needs a represented closure, which flows in 8.1c; unproven is sound.
+- **Scoped to 8.1c (deliberately not here):** computing a single instance's summary
+  from its body — steps **2–4** (instance resolution, the `E × A` input obligation,
+  row selection) — and rewiring `analyze_apply`. Those need the constructed instance
+  inventory (§4) and the candidate graph (§6) so a **recursive** callee is summarized
+  soundly under the cutoff; wiring body analysis now would be unsound on self-
+  application. The current `analyze_apply` stays the sound coarse path (return `Top`).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-25 — Application/induction 8.1a: the AnalysisContract abstract domain (§2)
 
 First sub-step of the analyzer-core rebuild (Application & Induction v0.8.1). The
