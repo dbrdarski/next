@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **282 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **285 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -100,7 +100,8 @@ Low-stakes / for-info only:
 | Application & induction — μ-aware body walk (call graph off closure values, §4a shape-cutoff over real recursion) | v0.8.1 | ✅ tail step 1 (self / mutual / leaf / chain) |
 | Application & induction §1 step 3 — input obligation (`accepted_domain` from the param pattern, `input_obligation` with structural witness) | v0.8.1 | ✅ tail step 2 (arity / contract / const; rest-domain owed §4) |
 | Application & induction §1 steps 4–5 — outcome contribution (`summarize_instance`: produced + completion off the body, recursion coarse-Top) | v0.8.1 | ✅ tail step 3 (identity / const / partial-match / recursion; AP-30 `ProvenPresent` half owed to §6) |
-| Application & induction §6/§5 — candidate graph + SCC return induction (sharpens recursive `Top`; **AP-30 `ProvenPresent`**), domain-indexed facts, `analyze_apply` rewiring | v0.8.1 | ⬜ **next**: the fixpoint (unlocks A-NEG/A-ACC/A-SND/A-VER) |
+| Application & induction §6 — return induction, the joint vector pass (hypothesis injection in `analyze_apply`; sharpens recursive `Top`) | v0.8.1 | ✅ tail step 4 (factorial → Number; false-claim reject; mutual even/odd + vector failure) |
+| Application & induction §6/§5 — multi-SCC driver (call-graph SCC decomposition + reverse-topo), realized-witness refutation, **AP-30 `ProvenPresent`**, domain-indexed facts, `analyze_apply` rewiring | v0.8.1 | ⬜ **next**: the driver + wiring (unlocks A-NEG/A-ACC/A-SND/A-VER) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
 | Reactive layer / concurrency / UI | G1 fence | 🚫 fenced, out of scope |
 
@@ -115,15 +116,15 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
-1. **Application & induction — the induction tail** (steps 1–3 done: body walk,
-   input obligation, outcome contribution): next is the **§6 candidate graph +
-   SCC-ordered return induction** — the fixpoint that sharpens the coarse recursive
-   `Top` to a proven return contract under the induction hypothesis, with
-   realized-witness `(e, x, v)` refutation, and where **AP-30's `ProvenPresent` half**
-   (proven-reachable fall-through) lands; then §5 domain-indexed facts, rewire
-   `analyze_apply` onto the driver, and the sampled γ soundness battery. Activates the
-   Phase A batteries. (Deferred non-blocking: per-alternative `witness_status` in
-   `live_alternatives`; rest-parameter length-precise domain via §4.)
+1. **Application & induction — the induction tail** (steps 1–4 done: body walk, input
+   obligation, outcome contribution, the joint vector pass): next is the **multi-SCC
+   driver** — call-graph SCC decomposition (via the body walk) + reverse-topological
+   ordering, carrying each proven component's contract as a hypothesis for its
+   dependents; then the realized-witness `(e, x, v)` refutation, **AP-30's
+   `ProvenPresent` half**, §5 domain-indexed facts, the `analyze_apply` rewiring, and
+   the sampled γ soundness battery. Activates the Phase A batteries. (Deferred
+   non-blocking: per-alternative `witness_status` in `live_alternatives`; rest-parameter
+   length-precise domain via §4.)
 3. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
    fuel harness (M-04); the string-length contract form + §5 finite-state lift.
 
@@ -168,4 +169,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `2006975` | Review corrections: AP-30 tail-dependent; reversed-root inventory test | commit message |
 | 2026-07-25 | `59e3ea4` | Induction tail step 1: μ-aware body walk — call graph off closure values, §4a cutoff over real recursion | “Induction tail step 1: μ body walk” |
 | 2026-07-25 | `7d14bbf` | Induction tail step 2: input obligation — accepted-domain derivation + structural witness | “Induction tail step 2: input obligation” |
-| 2026-07-25 | (this) | Induction tail step 3: outcome contribution — per-instance body summary (recursion coarse-Top, terminating) | “Induction tail step 3: outcome contribution” |
+| 2026-07-25 | `d968904` | Induction tail step 3: outcome contribution — per-instance body summary (recursion coarse-Top, terminating) | “Induction tail step 3: outcome contribution” |
+| 2026-07-25 | (this) | Induction tail step 4: return induction — joint vector pass + hypothesis injection (factorial → Number; mutual even/odd) | “Induction tail step 4: return induction” |

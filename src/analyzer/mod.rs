@@ -38,6 +38,7 @@ use crate::value::ValueRef;
 pub mod application;
 pub mod bodywalk;
 pub mod domain;
+pub mod induction;
 pub mod inventory;
 pub mod obligation;
 pub mod outcome;
@@ -567,7 +568,16 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         Contract::Equals(cv) => analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner),
         _ => false, // unknown callee: shape not derivable yet (owed)
     };
-    Analysis { contract: Contract::Top, findings, may_complete }
+    // A recursive/mutual call under an active return-induction hypothesis (§6) uses the
+    // assumed return contract; otherwise the callee's result is coarse `Top`.
+    let contract = match &cc {
+        Contract::Equals(cv) => cv
+            .as_fn()
+            .and_then(|f| induction::hypothesis_for(f.shape()))
+            .unwrap_or(Contract::Top),
+        _ => Contract::Top,
+    };
+    Analysis { contract, findings, may_complete }
 }
 
 /// Check a known callee's act-kind (world admission) and argument obligation.

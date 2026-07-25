@@ -6,6 +6,43 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 4: return induction — the joint vector pass (§6)
+
+The fixpoint step that sharpens step 3's coarse recursive `Top`. New module
+`src/analyzer/induction.rs`; a hypothesis injection in `analyze_apply`; 3 tests on
+real recursive closures. Full tree 285 lib + 111 conformance, clippy clean.
+
+- **The induction step.** `joint_vector_pass(members, cenv, interner)` — a recursive
+  component's members each claim a return contract `C`; **assume** every member returns
+  its `C` (installed as hypotheses), then verify each member's body produces `⊑ C`. The
+  component closes iff **all** members verify; any failure is a **vector failure** —
+  the whole component is unproven (§6).
+- **Hypothesis injection — a dynamic-scope table [chose].** `analyze_apply` now
+  consults a thread-local `HYPOTHESES` table: a recursive/mutual call whose callee
+  shape is under an active hypothesis returns the assumed contract instead of the
+  coarse `Top` (step 3's fallback). This is a bounded, contained mechanism (the
+  analyzer is synchronous, single-threaded) that avoids threading a hypothesis
+  parameter through the whole analyzer; `with_hypotheses` saves/restores the table so
+  passes compose. This is what turns factorial's coarse `Union(Equals(0), Top)` into a
+  proof that `f` returns `Number`.
+- **Verified on real closures** — `factorial_returns_number_by_induction`
+  (`f = (n) => n==0 ? 1 : n * f(n-1)` proves `Number`); `a_false_return_claim_is_rejected`
+  (claiming `String` fails — the body `n * f(n-1)` is a type error under it);
+  `mutual_recursion_closes_jointly` (even/odd both `Boolean`, provable **only** with
+  both hypotheses installed; and the vector-failure case — one wrong claim fails the
+  whole component).
+- **Scoped to the follow-up** — this lands the **joint vector pass over one
+  component**. The **multi-SCC driver** (call-graph SCC decomposition via the body
+  walk + reverse-topological ordering, carrying each proven component's contract as a
+  hypothesis for its dependents), the realized-witness `(e, x, v)` refutation, AP-30's
+  `ProvenPresent` half, and the `analyze_apply` rewiring onto the driver are the
+  remaining tail work.
+- **`// [ask-author]`:** the thread-local hypothesis table is an implementation
+  strategy (dynamic scope for the induction), flagged for visibility — sound, and
+  swappable for a threaded context later.
+
+---
+
 ## 2026-07-25 — Induction tail, step 3: outcome contribution (per-instance body summary)
 
 Third tail step — §1 steps 4–5, the callee body summary. New module

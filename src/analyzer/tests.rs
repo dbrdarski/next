@@ -1433,3 +1433,66 @@ mod outcome {
         assert!(matches!(o.completion, C::ProvenAbsent), "the total ternary never falls through");
     }
 }
+
+// ── Return induction §6 — the joint vector pass (induction tail) ──────────────
+
+mod induction {
+    use crate::analyzer::bodywalk::callee_targets;
+    use crate::analyzer::induction::{Candidate, joint_vector_pass};
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+    use crate::value::ValueRef;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+    fn boolean() -> Contract {
+        Contract::Kind(Kind::Boolean)
+    }
+    fn cand(callee: ValueRef, contract: Contract) -> Candidate {
+        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], contract }
+    }
+
+    #[test]
+    fn factorial_returns_number_by_induction() {
+        // Under the hypothesis `f : Number`, the recursive `f(n-1)` returns Number, so
+        // `n * f(n-1)` is Number and the body produces ⊑ Number — the induction closes.
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        assert!(joint_vector_pass(&[cand(f, num())], &cenv(), &mut i), "f returns Number");
+    }
+
+    #[test]
+    fn a_false_return_claim_is_rejected() {
+        // Claiming `f : String` fails: under that hypothesis the body `n * f(n-1)` is a
+        // type error and does not produce a String.
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        assert!(!joint_vector_pass(&[cand(f, Contract::Kind(Kind::String))], &cenv(), &mut i));
+    }
+
+    #[test]
+    fn mutual_recursion_closes_jointly() {
+        // even/odd both return Boolean — provable only with BOTH hypotheses installed
+        // (each body calls the other).
+        let even = run_source(
+            "even = (n) => n == 0 ? true : odd(n - 1)\n\
+             odd = (n) => n == 0 ? false : even(n - 1)\n\
+             even",
+        )
+        .unwrap()
+        .0;
+        let odd = callee_targets(&even)[0].clone();
+        let mut i = Interner::new();
+        let members = [cand(even.clone(), boolean()), cand(odd.clone(), boolean())];
+        assert!(joint_vector_pass(&members, &cenv(), &mut i), "even/odd jointly return Boolean");
+
+        // Vector failure: a wrong claim on one member fails the whole component.
+        let bad = [cand(even, boolean()), cand(odd, num())];
+        assert!(!joint_vector_pass(&bad, &cenv(), &mut i), "one wrong claim ⇒ component unproven");
+    }
+}
