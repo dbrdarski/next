@@ -308,6 +308,20 @@ impl ValueRef {
         }
     }
 
+    /// The function value itself (canonical shape + capture-slot names), for the
+    /// analyzer's γ realization check. `None` for non-functions.
+    pub fn as_fn(&self) -> Option<&FnValue> {
+        match self.data() {
+            ValueData::Function(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether this value is a function (for γ's function-position constraint).
+    pub fn is_function(&self) -> bool {
+        matches!(self.data(), ValueData::Function(_))
+    }
+
     pub fn as_indeterminate(&self) -> Option<IndetForm> {
         match self.data() {
             ValueData::Indeterminate(f) => Some(*f),

@@ -14,10 +14,13 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
 
 1. **C§16 obligation-3 interface [1.0.7]** — every transfer rule should be
    `analyzeOperation(op, jointOperands: Correlated<AnalysisContract>, seat) →
-   OperationOutcome { safety, produced: AnalysisContract, completion }`. My
-   `OpResult { safety, output: Contract }` is the pre-upgrade degenerate shape; the
-   reshape lands with the **application/induction package** (v0.8.1, not yet
-   implemented — it supplies `AnalysisContract` and `CompletionEvidence`).
+   OperationOutcome { safety, produced: AnalysisContract, completion }`. The
+   **`AnalysisContract` abstract domain now exists** (`src/analyzer/domain.rs`, 8.1a:
+   γ, the metadata lattice, `intersectA`/`meetInstance`, `proveSubcontractA`). Still
+   owed: the primitive `analyze_operation`'s `OpResult { safety, output: Contract }`
+   is the pre-upgrade degenerate shape — the `OperationOutcome`/`completion` reshape
+   and the joint-correlated-operand plumbing land with the **application transfer
+   rule** (8.1b, §1 of v0.8.1).
 
 2. **Universal interning (μ v0.5 §6; companion §1/§3)** — closures should intern
    shallowly (canonical-code pointer + capture pointers), runtime `==` a pointer

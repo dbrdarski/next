@@ -632,3 +632,129 @@ fn substitute(expr: &Expr, v: &ValueRef) -> Expr {
         other => other.clone(),
     }
 }
+
+// ── AnalysisContract abstract domain (§2, application/induction v0.8.1) ────────
+
+mod domain {
+    use super::{ActKind, closure, name, one_param};
+    use crate::analyzer::domain::{
+        AnalysisContract, Instance, InstanceMetadata, gamma_contains, intersect_a,
+        prove_subcontract_a, realizes,
+    };
+    use crate::ast::{Expr, Lambda};
+    use crate::contract::{Contract, Kind, Verdict};
+    use crate::interner::Interner;
+    use crate::rational::Rational;
+    use crate::value::ValueRef;
+    use num_bigint::BigInt;
+
+    fn shape_of(v: &ValueRef) -> Lambda {
+        v.as_fn().expect("a function").shape().clone()
+    }
+    /// A non-capturing identity closure `x => x`, and its canonical shape.
+    fn id_shape(i: &mut Interner) -> Lambda {
+        shape_of(&closure(i, one_param("x"), name("x"), ActKind::Pure))
+    }
+    fn eq(i: &mut Interner, k: i64) -> Contract {
+        Contract::Equals(i.integer(k))
+    }
+    fn range(a: i64, b: i64) -> Contract {
+        let r = |k: i64| Rational::from_integer(BigInt::from(k));
+        Contract::Range(r(a), r(b))
+    }
+    /// A single-capture instance of `shape` whose capture is a plain contract.
+    fn inst(shape: &Lambda, cap: Contract) -> Instance {
+        Instance { shape: shape.clone(), env: vec![AnalysisContract::of_contract(cap)] }
+    }
+    fn known(insts: Vec<Instance>) -> AnalysisContract {
+        AnalysisContract::new(Contract::Kind(Kind::Function), InstanceMetadata::Known(insts))
+    }
+    fn unknown_fn() -> AnalysisContract {
+        AnalysisContract::of_contract(Contract::Kind(Kind::Function))
+    }
+    fn proven(v: Verdict) -> bool {
+        matches!(v, Verdict::Proven)
+    }
+
+    #[test]
+    fn metadata_join_and_normalization() {
+        let mut i = Interner::new();
+        let s = id_shape(&mut i);
+        let a = inst(&s, eq(&mut i, 1));
+        let b = inst(&s, range(1, 5));
+        // Known ∪ Known = union (dedup); anything ∪ Unknown = Unknown.
+        let j = InstanceMetadata::join(&InstanceMetadata::Known(vec![a.clone()]), &InstanceMetadata::Known(vec![b.clone()]));
+        assert_eq!(j, InstanceMetadata::Known(vec![a.clone(), b.clone()]));
+        assert_eq!(
+            InstanceMetadata::join(&InstanceMetadata::Known(vec![a.clone()]), &InstanceMetadata::Unknown),
+            InstanceMetadata::Unknown,
+        );
+        // Normalization to the one canonical bottom.
+        assert!(AnalysisContract::new(Contract::Bottom, InstanceMetadata::Unknown).is_bottom());
+        assert!(known(vec![]).is_bottom(), "function-only + Known(∅) ⇒ bottom");
+        // A non-function contract with Known(∅) is NOT empty — metadata is vacuous.
+        let num_empty = AnalysisContract::new(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
+        assert!(!num_empty.is_bottom());
+    }
+
+    #[test]
+    fn ap27_instance_coverage() {
+        let mut i = Interner::new();
+        let s = id_shape(&mut i);
+        let eq1 = inst(&s, eq(&mut i, 1));
+        let r15 = inst(&s, range(1, 5));
+        // instance(shape, Equals(1)) ⊑ instance(shape, Range(1,5)) despite distinct keys.
+        assert!(proven(prove_subcontract_a(&known(vec![eq1.clone()]), &known(vec![r15.clone()]), &mut i)));
+        // Known(S) ⊑ Unknown proven; Unknown ⊑ Known(T) unproven.
+        assert!(proven(prove_subcontract_a(&known(vec![eq1.clone()]), &unknown_fn(), &mut i)));
+        assert!(!proven(prove_subcontract_a(&unknown_fn(), &known(vec![r15.clone()]), &mut i)));
+        // Known(∅) ⊑ X proven (bottom source, vacuous coverage).
+        assert!(proven(prove_subcontract_a(&AnalysisContract::bottom(), &known(vec![r15.clone()]), &mut i)));
+        // The reverse fails: Range(1,5) is not covered by Equals(1).
+        assert!(!proven(prove_subcontract_a(&known(vec![r15]), &known(vec![eq1]), &mut i)));
+    }
+
+    #[test]
+    fn ap28_semantic_meet_is_the_tighter_instance() {
+        let mut i = Interner::new();
+        let s = id_shape(&mut i);
+        let eq1 = inst(&s, eq(&mut i, 1));
+        let r15 = inst(&s, range(1, 5));
+        // Known({Eq(1)}) ∩ Known({Range(1,5)}) = Known({Eq(1)}) — coverage normalization,
+        // never Bottom (AP-28).
+        let meet = intersect_a(&known(vec![eq1.clone()]), &known(vec![r15]), &mut i);
+        assert!(!meet.is_bottom());
+        assert_eq!(meet.metadata, InstanceMetadata::Known(vec![eq1]));
+        // Disjoint shapes have an empty meet — a sound Bottom by disjointness.
+        let z = konst_zero(&mut i);
+        let s2 = shape_of(&closure(&mut i, one_param("x"), z, ActKind::Pure));
+        let other = inst(&s2, eq(&mut i, 1));
+        let s_eq1 = inst(&s, eq(&mut i, 1));
+        let disjoint = intersect_a(&known(vec![s_eq1]), &known(vec![other]), &mut i);
+        assert!(disjoint.is_bottom(), "different shapes ⇒ γ-disjoint ⇒ bottom");
+    }
+    fn konst_zero(i: &mut Interner) -> Expr {
+        Expr::Const(i.integer(0))
+    }
+
+    #[test]
+    fn gamma_realizes_shape_and_governs_functions() {
+        let mut i = Interner::new();
+        let idv = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
+        let z = konst_zero(&mut i);
+        let zerov = closure(&mut i, one_param("x"), z, ActKind::Pure);
+        let id_inst = Instance { shape: shape_of(&idv), env: vec![] };
+        // realizes: the identity closure realizes its own (capture-free) instance.
+        assert!(realizes(&idv, &id_inst, &mut i));
+        assert!(!realizes(&zerov, &id_inst, &mut i), "a different shape does not realize");
+        // γ over Known(S): the id closure is in, the zero closure is out.
+        let ac = AnalysisContract::new(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![id_inst]));
+        assert!(gamma_contains(&ac, &idv, &mut i));
+        assert!(!gamma_contains(&ac, &zerov, &mut i));
+        // Unknown admits every function; non-functions are governed by the contract alone.
+        assert!(gamma_contains(&unknown_fn(), &zerov, &mut i));
+        let five = i.integer(5);
+        let num = AnalysisContract::new(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
+        assert!(gamma_contains(&num, &five, &mut i), "metadata is vacuous for a non-function");
+    }
+}

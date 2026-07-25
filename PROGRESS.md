@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **253 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **257 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -94,7 +94,8 @@ Low-stakes / for-info only:
 | Tuple-length family §4 (segment alignment: forced-boundary peeling, interior residual, uninhabited-shape guard) | family v0.3.1 | ✅ (TL-01a/18/21) |
 | Tuple-length family §5 (grapheme boundary-state seams: segmenter-owned `compose`/`seam_delta`, merges-only bound) | family v0.3.1 | ✅ (TL-09); 🟡 finite-state lift to string *contracts* owed |
 | Analyzer, expression layer: Const/Ref/PrimOp/Tuple/Record/Template/Access/Match/Apply — exact closed-expression trap concordance + sound open-term reasoning, narrowing, named contracts | §6 concordance | ✅ for the listed nodes; 🟡 `Lambda` bodies, `Write`/worlds type as Top; open-call returns Top |
-| Application & induction package (`AnalysisContract`, γ, instance metadata, fact graph, return induction) | v0.8.1 | ⬜ (the analyzer-core rebuild; unblocks A-NEG/A-ACC/A-SND/A-VER) |
+| Application & induction §2 — `AnalysisContract` abstract domain (γ, metadata lattice, `intersectA`/`meetInstance`, `proveSubcontractA`) | v0.8.1 | ✅ 8.1a (AP-27/28 + γ membership) |
+| Application & induction §1/§4/§6/§5 — application transfer rule, instance inventory, candidate graph + return induction | v0.8.1 | ⬜ **next**: 8.1b (§1) then 8.1c (§4/§6/§5, unblocks A-NEG/A-ACC/A-SND/A-VER) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
 | Reactive layer / concurrency / UI | G1 fence | 🚫 fenced, out of scope |
 
@@ -109,9 +110,14 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
-1. **Application & induction package** (v0.8.1) — the analyzer core; then the
-   Phase A batteries activate.
-2. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
+1. **Application & induction 8.1b** — the application transfer rule (§1):
+   `ApplicationOutcome` tri-state, the 7 steps (act-kind admission at seat, input
+   obligation over E×A, row selection, completion demand), the seat/world cache
+   split; the `OperationOutcome` interface reshape; the sampled γ soundness battery.
+2. **Application & induction 8.1c** — §4 instance-chain cutoff (constructed
+   inventory), §6 candidate graph + return induction, §5 domain-indexed facts;
+   activates the Phase A batteries.
+3. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
    fuel harness (M-04); the string-length contract form + §5 finite-state lift.
 
 ## 7. Increment ledger (thin — full provenance at the DECISIONS anchor)
@@ -146,4 +152,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-24 | `2d368c7`+`b404083` | Canonical library synced (manifest); reconciliation: PR-06…09, FE-07, MU-18/19; lossless renderer | “Canonical-library sync + suite reconciliation” |
 | 2026-07-24 | `75b8338` | Tuple family §3: refutation discipline + restrictLen/LengthRestricted (TL-16/17/20) | “Tuple family §3” |
 | 2026-07-25 | `5e98194` | Tuple family §4: segment alignment — forced-boundary peeling (TL-01a/18/21) | “Tuple family §4” |
-| 2026-07-25 | (this) | Tuple family §5: string boundary-state seams — segmenter-owned (TL-09) | “Tuple family §5” |
+| 2026-07-25 | `90f9c85` | Tuple family §5: string boundary-state seams — segmenter-owned (TL-09) | “Tuple family §5” |
+| 2026-07-25 | (this) | App/induction 8.1a: AnalysisContract abstract domain — γ, lattice, ⊑ᴬ, intersectA (AP-27/28) | “App/induction 8.1a” |

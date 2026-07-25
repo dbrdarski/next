@@ -6,6 +6,55 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Application/induction 8.1a: the AnalysisContract abstract domain (§2)
+
+First sub-step of the analyzer-core rebuild (Application & Induction v0.8.1). The
+package is large (10 sections, AP-01…30); it lands in three commits — **8.1a** the
+abstract domain (this), **8.1b** the application transfer rule (§1), **8.1c** the
+instance inventory + candidate graph (§4/§6/§5, which activates Phase A). New module
+`src/analyzer/domain.rs`, 4 tests. Full tree 257 lib + 111 conformance, clippy clean.
+
+- **The domain.** `AnalysisContract { contract, metadata }` with `InstanceMetadata =
+  Known(Vec<Instance>) | Unknown` and `Instance { shape: Lambda, env: Vec<AC> }` —
+  the μ-canonical shape (structural `Lambda` identity, per the value layer) plus the
+  annotated captured environment. `erase = .contract` is the untouched language
+  denotation; **γ** is the analyzer concretization: a non-function member of
+  `⟦contract⟧` is always in γ (metadata vacuous off function positions); a function
+  member is in γ iff the metadata admits it — every function under `Unknown`, or one
+  **realizing** an instance under `Known(S)` (shape match + each capture ∈ γ of its
+  annotated slot). `realizes`/`gamma_contains` implement this (added `ValueRef::as_fn`
+  / `is_function`).
+- **Normalization** to one canonical bottom (§2): `(Bottom, _) → bottom`, and
+  `(C, Known(∅)) → bottom` **only when C is function-only** (`is_function_only`, a
+  value-free test) — a `Known(∅)` on a *non*-function contract is not empty (metadata
+  is vacuous there), which the tests pin.
+- **`prove_subcontract_a` (⊑ᴬ).** Three-valued, sound, deliberately incomplete:
+  `Proven` iff ordinary-contract inclusion **and** metadata coverage; a `Refuted`
+  witness is kept **only when it is γ-representable** (`gamma_contains(a, w)`) — a
+  bare contract counterexample outside γ(AC₁) downgrades to `Unproven`. Coverage
+  (`covers`) is the §2 round-5 triage: proven-empty sources ignored; every other
+  source (uncertain inhabitance never silently skipped) needs a same-shape target
+  whose env covers it recursively — so `instance(shape, Equals(1)) ⊑ instance(shape,
+  Range(1,5))` despite distinct keys (AP-27). `Known(S) ⊑ Unknown` proven;
+  `Unknown ⊑ Known(T)` unproven; `Known(∅) ⊑ X` proven.
+- **`intersect_a` / `meet_instance` (AP-28).** Sound by containment only
+  (`γ(A) ∩ γ(B) ⊆ γ(intersect_a(A,B))`). `Unknown ∩ M = M`; `Known(S) ∩ Known(T)` is
+  the coverage-normalized same-shape meet — `s ⊑ t ⇒` keep `s`, else `meet_instance`
+  (env-wise `intersect_a`, empty only when a capture meet is **proven** bottom). So
+  `Known({Eq(1)}) ∩ Known({Range(1,5)}) = Known({Eq(1)})`, never Bottom; disjoint
+  **shapes** meet to Bottom (a genuine disjointness). No lower-bound/idempotence
+  reasoning is applied to a fallback result.
+- **Chose / scoped:** ⊑ᴬ uses the *non-recursive* C.2 `subcontract` for erased
+  inclusion — recursive-annotated contracts (C§9 lifted to annotated form) and the
+  full sampled **γ soundness battery** (joint operand realizations through the oracle,
+  §9) land with the application rule in 8.1b, where real applications produce/consume
+  closures. `ConjAC` interned-conjunction (the optional intersection-closure) stays
+  unbuilt (v1-optional per the spec). Capture γ-recursion handles `Binding::Value`;
+  a slot/under-init capture is conservatively unrealized (sound under-approx).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-25 — Tuple family §5: string boundary-state seams
 
 `src/contract/grapheme.rs` — the segmenter-owned seam — plus 6 tests (TL-09's five
