@@ -13,13 +13,17 @@
 //! is what turns `f = (n) => n == 0 ? 1 : n * f(n-1)`'s coarse `Union(Equals(0), Top)`
 //! into a proof that `f` returns `Number` under the hypothesis `f: Number`.
 //!
-//! This lands the **joint vector pass** over one component, over real closures. The
-//! multi-SCC driver (call-graph SCC decomposition + reverse-topological ordering,
-//! carrying each proven component's contract as a hypothesis for its dependents) and
-//! AP-30's `ProvenPresent` half are the wiring that follows.
+//! This module lands two layers. **The joint vector pass** ([`joint_vector_pass`])
+//! settles one component. **The multi-SCC driver** ([`prove_facts`]) decomposes the
+//! candidates' call graph into strongly-connected components, processes them in
+//! **reverse-topological order** (dependencies first), and carries each proven
+//! component's return facts as hypotheses for its dependents — so a dependent proves
+//! what it could not alone. AP-30's `ProvenPresent` half, the realized-witness
+//! refutation, and the `analyze_apply` rewiring are the wiring that follows.
 
 use std::cell::RefCell;
 
+use crate::analyzer::bodywalk::callee_targets;
 use crate::analyzer::outcome::summarize_instance;
 use crate::ast::Lambda;
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
@@ -62,10 +66,16 @@ pub struct Candidate {
 /// its claimed contract. Returns `true` iff **all** members verify — a vector failure
 /// leaves the whole component unproven.
 pub fn joint_vector_pass(members: &[Candidate], cenv: &ContractEnv, interner: &mut Interner) -> bool {
-    let hyps: Vec<(Lambda, Contract)> = members
-        .iter()
-        .filter_map(|c| c.callee.as_fn().map(|f| (f.shape().clone(), c.contract.clone())))
-        .collect();
+    run_pass(&[], members, cenv, interner)
+}
+
+/// A vector pass over `members` with `base` hypotheses already in force — the return
+/// facts of dependency components the driver has already settled (§6). Installs `base`
+/// plus every member's own claim, then verifies each member's body produces a
+/// subcontract of its claimed contract. `true` iff **all** members verify.
+fn run_pass(base: &[(Lambda, Contract)], members: &[Candidate], cenv: &ContractEnv, interner: &mut Interner) -> bool {
+    let mut hyps = base.to_vec();
+    hyps.extend(member_hypotheses(members));
 
     members.iter().all(|c| {
         let hyps = hyps.clone();
@@ -75,4 +85,141 @@ pub fn joint_vector_pass(members: &[Candidate], cenv: &ContractEnv, interner: &m
             None => false,
         }
     })
+}
+
+/// Each member's claim as a shape-keyed hypothesis (the form [`hypothesis_for`] reads).
+fn member_hypotheses(members: &[Candidate]) -> Vec<(Lambda, Contract)> {
+    members
+        .iter()
+        .filter_map(|c| c.callee.as_fn().map(|f| (f.shape().clone(), c.contract.clone())))
+        .collect()
+}
+
+/// The outcome of the multi-SCC driver: the candidates partitioned into those whose
+/// component **closed** (proven, per-compilation) and those a vector failure left
+/// **unproven**. A component's members share their fate (§6), so the partition is by
+/// component even though it is flattened here.
+#[derive(Clone)]
+pub struct FactResult {
+    pub proven: Vec<Candidate>,
+    pub unproven: Vec<Candidate>,
+}
+
+/// The **multi-SCC driver** (§6 / C§13.2a). Decomposes the candidates' call graph into
+/// strongly-connected components, processes them in **reverse-topological order**
+/// (dependencies first), and carries each proven component's return facts as
+/// hypotheses for its dependents. A self- or mutually-recursive nest is one component
+/// settled by a joint vector pass; a non-recursive candidate is a singleton component
+/// whose body sees the already-proven facts of everything it calls.
+///
+/// This is what lets a dependent prove what it cannot alone: `quad = (n) => double(n)
+/// + double(n)` returns `Number` **only** once `double : Number` is a fact — the
+/// reverse-topological order guarantees `double` is settled first, so its fact is in
+/// force when `quad`'s body is summarized.
+///
+/// Edges are the **direct** calls among candidate closures ([`callee_targets`]); an
+/// indirect dependency through a non-candidate helper is not an edge, so that helper's
+/// call coarsens to `Top` — sound (the dependent lands unproven), never a false proof.
+/// The result is order-independent: SCC membership and the condensation order depend
+/// on the call graph alone, not the candidate-list order.
+pub fn prove_facts(candidates: Vec<Candidate>, cenv: &ContractEnv, interner: &mut Interner) -> FactResult {
+    let adj = call_edges(&candidates);
+    let components = scc_reverse_topo(&adj);
+
+    let mut settled: Vec<(Lambda, Contract)> = Vec::new();
+    let mut proven = Vec::new();
+    let mut unproven = Vec::new();
+    for comp in components {
+        let members: Vec<Candidate> = comp.iter().map(|&i| candidates[i].clone()).collect();
+        if run_pass(&settled, &members, cenv, interner) {
+            settled.extend(member_hypotheses(&members));
+            proven.extend(members);
+        } else {
+            unproven.extend(members);
+        }
+    }
+    FactResult { proven, unproven }
+}
+
+/// The direct-call adjacency among candidates: `i → j` iff candidate `j`'s closure is
+/// a direct callee of candidate `i`'s body. `i → j` means fact `i` depends on fact `j`
+/// (C§13.2a's edge orientation), so the driver settles `j` first.
+fn call_edges(candidates: &[Candidate]) -> Vec<Vec<usize>> {
+    candidates
+        .iter()
+        .map(|c| {
+            let targets = callee_targets(&c.callee);
+            (0..candidates.len())
+                .filter(|&j| targets.contains(&candidates[j].callee))
+                .collect()
+        })
+        .collect()
+}
+
+/// Tarjan's SCC over the adjacency list, returning components in **reverse
+/// topological order** — a component is emitted before every component that depends on
+/// it (dependencies first), exactly the driver's processing order. The emission order
+/// is a property of the graph, not of the traversal, so the driver is
+/// order-independent.
+fn scc_reverse_topo(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    struct Tarjan<'a> {
+        adj: &'a [Vec<usize>],
+        index: Vec<Option<usize>>,
+        low: Vec<usize>,
+        on_stack: Vec<bool>,
+        stack: Vec<usize>,
+        counter: usize,
+        comps: Vec<Vec<usize>>,
+    }
+    impl Tarjan<'_> {
+        fn connect(&mut self, v: usize) {
+            self.index[v] = Some(self.counter);
+            self.low[v] = self.counter;
+            self.counter += 1;
+            self.stack.push(v);
+            self.on_stack[v] = true;
+
+            for w in self.adj[v].clone() {
+                match self.index[w] {
+                    None => {
+                        self.connect(w);
+                        self.low[v] = self.low[v].min(self.low[w]);
+                    }
+                    Some(iw) if self.on_stack[w] => self.low[v] = self.low[v].min(iw),
+                    Some(_) => {}
+                }
+            }
+
+            // A component root: pop the stack down to `v`.
+            if self.low[v] == self.index[v].unwrap() {
+                let mut comp = Vec::new();
+                loop {
+                    let w = self.stack.pop().unwrap();
+                    self.on_stack[w] = false;
+                    comp.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                self.comps.push(comp);
+            }
+        }
+    }
+
+    let n = adj.len();
+    let mut t = Tarjan {
+        adj,
+        index: vec![None; n],
+        low: vec![0; n],
+        on_stack: vec![false; n],
+        stack: Vec::new(),
+        counter: 0,
+        comps: Vec::new(),
+    };
+    for v in 0..n {
+        if t.index[v].is_none() {
+            t.connect(v);
+        }
+    }
+    t.comps
 }

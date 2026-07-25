@@ -1496,3 +1496,94 @@ mod induction {
         assert!(!joint_vector_pass(&bad, &cenv(), &mut i), "one wrong claim ⇒ component unproven");
     }
 }
+
+// ── Multi-SCC driver §6/§13.2a — reverse-topological hypothesis carrying (tail) ─
+
+mod driver {
+    use crate::analyzer::bodywalk::callee_targets;
+    use crate::analyzer::induction::{Candidate, joint_vector_pass, prove_facts};
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+    use crate::value::ValueRef;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+    fn boolean() -> Contract {
+        Contract::Kind(Kind::Boolean)
+    }
+    fn cand(callee: ValueRef, contract: Contract) -> Candidate {
+        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], contract }
+    }
+
+    /// `quad` calls `double`; `double` is a leaf. Returns `(double, quad)`.
+    fn double_quad() -> (ValueRef, ValueRef) {
+        let quad = run_source("double = (n) => n * 2\nquad = (n) => double(n) + double(n)\nquad").unwrap().0;
+        let double = callee_targets(&quad)[0].clone();
+        (double, quad)
+    }
+
+    #[test]
+    fn a_dependent_proves_only_after_its_dependency() {
+        let (double, quad) = double_quad();
+        let mut i = Interner::new();
+
+        // Alone, `quad : Number` is NOT provable — with no fact for `double`, the call
+        // `double(n)` coarsens to `Top`, so `double(n) + double(n)` is not ⊑ Number.
+        assert!(
+            !joint_vector_pass(&[cand(quad.clone(), num())], &cenv(), &mut i),
+            "quad is unprovable without double's fact"
+        );
+
+        // The driver settles `double` first (reverse-topological order) and carries
+        // `double : Number` as a hypothesis into `quad`'s pass — so both close.
+        let r = prove_facts(vec![cand(double, num()), cand(quad, num())], &cenv(), &mut i);
+        assert_eq!(r.proven.len(), 2, "double AND quad proven once ordering carries the fact");
+        assert!(r.unproven.is_empty());
+    }
+
+    #[test]
+    fn the_driver_is_independent_of_candidate_list_order() {
+        let (double, quad) = double_quad();
+        let mut i = Interner::new();
+        let fwd = prove_facts(vec![cand(double.clone(), num()), cand(quad.clone(), num())], &cenv(), &mut i);
+        let rev = prove_facts(vec![cand(quad, num()), cand(double, num())], &cenv(), &mut i);
+        assert_eq!(fwd.proven.len(), 2);
+        assert_eq!(rev.proven.len(), 2, "reversing the candidate list changes nothing — SCC order is graph-intrinsic");
+    }
+
+    #[test]
+    fn a_vector_failure_leaves_only_its_component_unproven() {
+        // `double : Number` is independent and provable; claiming `quad : String` fails.
+        // The failure must not poison `double` — and `double`'s fact is still used to
+        // reduce `quad`'s body (which is why `quad` fails against String, not Top).
+        let (double, quad) = double_quad();
+        let mut i = Interner::new();
+        let r = prove_facts(vec![cand(double.clone(), num()), cand(quad, Contract::Kind(Kind::String))], &cenv(), &mut i);
+        assert_eq!(r.proven.len(), 1, "double still proven");
+        assert!(r.proven.iter().any(|c| c.callee == double));
+        assert_eq!(r.unproven.len(), 1, "only quad : String is unproven");
+    }
+
+    #[test]
+    fn a_mutual_nest_is_one_component_in_the_driver() {
+        // even/odd form one SCC (each calls the other); the driver proves them jointly
+        // as a single component — no reverse-topo split, one vector pass.
+        let even = run_source(
+            "even = (n) => n == 0 ? true : odd(n - 1)\n\
+             odd = (n) => n == 0 ? false : even(n - 1)\n\
+             even",
+        )
+        .unwrap()
+        .0;
+        let odd = callee_targets(&even)[0].clone();
+        let mut i = Interner::new();
+        let r = prove_facts(vec![cand(even, boolean()), cand(odd, boolean())], &cenv(), &mut i);
+        assert_eq!(r.proven.len(), 2, "even and odd proven together as one component");
+        assert!(r.unproven.is_empty());
+    }
+}

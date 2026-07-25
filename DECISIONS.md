@@ -6,6 +6,56 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 5: the multi-SCC driver — reverse-topological hypothesis carrying (§6/§13.2a)
+
+The step that turns step 4's single-component pass into a whole-program fact solver.
+`prove_facts` in `src/analyzer/induction.rs`; 4 tests on real closures. Full tree 289
+lib + 111 conformance, clippy clean.
+
+- **The driver [mandated — §6/§13.2a].** `prove_facts(candidates, cenv, interner) →
+  FactResult { proven, unproven }` decomposes the candidates' **call graph** into
+  strongly-connected components, processes them in **reverse-topological order**
+  (dependencies first), and carries each proven component's return facts as hypotheses
+  for its dependents. A self/mutual nest is one component settled by a joint vector
+  pass; a non-recursive candidate is a singleton component whose body sees the
+  already-proven facts of everything it calls. This is the §13.2a global-fact-graph
+  SCC collapse at the granularity the tail has so far — components over the direct call
+  graph, one vector pass each.
+- **`run_pass(base, members, …)` [refactor].** The vector pass now takes a **base
+  hypothesis set** — the facts of dependency components already settled — installed
+  alongside the component's own claims. `joint_vector_pass = run_pass(&[], …)`, so
+  step 4's single-component entry is unchanged; the driver threads `settled` (the
+  accumulating proven facts) as the base for each successive component.
+- **Reverse-topological order via Tarjan [chose the algorithm].** `scc_reverse_topo`
+  is Tarjan's SCC; it emits components in reverse-topological order (a component before
+  every component that depends on it) as a **property of the graph, not the traversal**
+  — so the driver is order-independent (tested: reversing the candidate list changes
+  nothing). Edge `i → j` means "fact `i` depends on fact `j`" (C§13.2a's orientation),
+  so `j` is settled first.
+- **Edges are direct calls among candidates [chose the scope].** `call_edges` links
+  `i → j` iff candidate `j`'s closure is a **direct** callee (`callee_targets`) of
+  candidate `i`'s body. An indirect dependency through a **non-candidate** helper is
+  not an edge, so that helper's call coarsens to `Top` — sound (the dependent lands
+  *unproven*), never a false proof. The driver **orders and proves the candidates it is
+  given**; deriving the candidate set and its claimed contracts from seat demands /
+  grounding (C§10) is a separate concern, unchanged here.
+- **Verified on real closures** — `a_dependent_proves_only_after_its_dependency`
+  (`quad = (n) => double(n) + double(n)` is unprovable **alone** — `double(n)`
+  coarsens to `Top` — but the driver settles `double : Number` first and carries it, so
+  both close); `the_driver_is_independent_of_candidate_list_order` (reversed list, same
+  proven set); `a_vector_failure_leaves_only_its_component_unproven` (claiming `quad :
+  String` fails while `double : Number` stays proven — and `double`'s fact is what
+  reduces `quad`'s body to fail against String, not Top); `a_mutual_nest_is_one_
+  component_in_the_driver` (even/odd as one component, one pass).
+- **Scoped to the follow-up.** The realized-witness `(e, x, v)` **refutation** (the
+  third voice — permanent in-namespace, distinct from vector-failure *unproven*),
+  AP-30's `ProvenPresent` half in the outcome contribution, and the **`analyze_apply`
+  rewiring** onto the driver (so top-level program analysis uses these facts — the
+  Phase A unlock) are the remaining tail work.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-25 — Induction tail, step 4: return induction — the joint vector pass (§6)
 
 The fixpoint step that sharpens step 3's coarse recursive `Top`. New module
