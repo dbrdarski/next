@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **239 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **247 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -53,7 +53,7 @@ row below is the manifest-canonical version.
 | Semantics companion | v0.1 + **review round (07-21) + §7 RULED** | ✅ | 13 classes; total interpolation; open-value obs = Option A (`unbound-evaluation`); actKind in the closure key (FE-07) |
 | μ-canonicalization | v0.5 | ✅ | §6 universal interning: registered drift, PENDING-§5 (OwedItems) |
 | Recursive contracts | v0.2 patch **0.2.2** | ✅ | Concat guardedness + sourceProgress |
-| Tuple-length family | v0.3 patch **0.3.1** | 🟡 | §1–§3 built; §4–§5 next |
+| Tuple-length family | v0.3 patch **0.3.1** | 🟡 | §1–§4 built; §5 next |
 | Application & induction | v0.8 patch **0.8.1** | ⬜ | not yet implemented (the analyzer-core rebuild) |
 | Test suite | v0.1 + **07-24 additions** | ✅ | PR-06…09, FE-07, MU-18/19 implemented; A-WRK grids recovered |
 | Phase-A worked examples (recovered) | 2026-07-21 | 📄 | RECOVER discharged; verification needs the analyzer |
@@ -85,13 +85,14 @@ Low-stakes / for-info only:
 | Normalization + property harness (H-01…05) | Part I step 4 | ✅ |
 | μ-canonicalization: Algorithm A (code), Algorithm B (value bisimulation), narrow `==`-slice (poly) | μ v0.5 | 🟡 `==` results fully conform (all FE rows green); *mechanism* differs — bisimulation-at-compare instead of intern-at-construction; re-architecture = the §5 wiring increment (OwedItems “drift”) |
 | Contracts C.1: algebra + denotational membership | C§4/C§16 | ✅ (incl. `Concat`, exact `Record`+`HasField`) |
-| Contracts C.2: three-valued subcontract | C§8 | ✅ (`Concat` rows land Unproven — §4 alignment pending) |
+| Contracts C.2: three-valued subcontract | C§8 | ✅ (`Concat ⊑ Concat` unequal-count gap closed by §4 alignment) |
 | Contracts C.3: operation transfer rules | C§7 | 🟡 oracle-derived + brute-tested; interface is the pre-1.0.7 shape — `OperationOutcome` rebuild lands with app-induction |
 | Recursive contracts C§9 (admissibility, emptiness/productivity, progress-guarded subcontract, product-graph intersection, witness refutation) | RC v0.2.2 | ✅ (RC-01…19 covered) |
 | Named contracts (C§12.2 static eval) + contract patterns | C§12.2/E9 | ✅ non-recursive; 🟡 recursive/mutual *source* contracts don't yet build a `RecGroup` (sound: unresolved → Top) |
 | Tuple-length family §1 (`Concat` NF) + §2 (`len` with Exact/Approx stamps, weighted-SCC solver) | family v0.3.1 | ✅ (TL-13/14/15/19/22) |
 | Tuple-length family §3 (refutation discipline, `restrictLen`/`LengthRestricted`) | family v0.3.1 | ✅ (TL-16/17/20) |
-| Tuple-length family §4 (segment alignment) · §5 (grapheme seams) | family v0.3.1 | ⬜ **next planned** |
+| Tuple-length family §4 (segment alignment: forced-boundary peeling, interior residual, uninhabited-shape guard) | family v0.3.1 | ✅ (TL-01a/18/21) |
+| Tuple-length family §5 (grapheme seams) | family v0.3.1 | ⬜ **next planned** |
 | Analyzer, expression layer: Const/Ref/PrimOp/Tuple/Record/Template/Access/Match/Apply — exact closed-expression trap concordance + sound open-term reasoning, narrowing, named contracts | §6 concordance | ✅ for the listed nodes; 🟡 `Lambda` bodies, `Write`/worlds type as Top; open-call returns Top |
 | Application & induction package (`AnalysisContract`, γ, instance metadata, fact graph, return induction) | v0.8.1 | ⬜ (the analyzer-core rebuild; unblocks A-NEG/A-ACC/A-SND/A-VER) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
@@ -101,18 +102,17 @@ Low-stakes / for-info only:
 
 Full detail in `OwedItems.md`. Currently registered: the C§16 **OperationOutcome**
 interface rebuild (with app-induction) · **`Record(Exact|Open)`** precision ·
-**universal interning** mechanism (PENDING-§5) · **`Concat` C.2 rows** (§4
-alignment) · C§17's still-owed doc items (per-pair tables, remaining
-`analyzeOperation` tables, error templates, …).
+**universal interning** mechanism (PENDING-§5) · `restrict_len`'s recursive
+certified-unfolding rule and the §4 `ElementRefutation` *structured* witness (the
+complete-inhabitant witness is stronger) · C§17's still-owed doc items (per-pair
+tables, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
-1. **Tuple family §4** — segment alignment (forced-boundary peeling,
-   `ElementRefutation`, TL-01a/18/21); closes the `Concat ⊑ Concat` gap.
-3. **Tuple family §5** — grapheme boundary-state seams (TL-09).
-4. **Application & induction package** (v0.8.1) — the analyzer core; then the
+1. **Tuple family §5** — grapheme boundary-state seams (TL-09).
+2. **Application & induction package** (v0.8.1) — the analyzer core; then the
    Phase A batteries activate.
-5. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
+3. Opportunistic: recursive named *source* contracts → `RecGroup`; module system;
    fuel harness (M-04).
 
 ## 7. Increment ledger (thin — full provenance at the DECISIONS anchor)
@@ -145,4 +145,5 @@ alignment) · C§17's still-owed doc items (per-pair tables, remaining
 | 2026-07-22 | `dac88d1` | **Ruling implemented:** strict tested seats (T-10) | “RULING [user]: strict tested seats” |
 | 2026-07-22 | `5e41ecb` | PROGRESS.md added (state snapshot for the design loop) | commit message |
 | 2026-07-24 | `2d368c7`+`b404083` | Canonical library synced (manifest); reconciliation: PR-06…09, FE-07, MU-18/19; lossless renderer | “Canonical-library sync + suite reconciliation” |
-| 2026-07-24 | (this) | Tuple family §3: refutation discipline + restrictLen/LengthRestricted (TL-16/17/20) | “Tuple family §3” |
+| 2026-07-24 | `75b8338` | Tuple family §3: refutation discipline + restrictLen/LengthRestricted (TL-16/17/20) | “Tuple family §3” |
+| 2026-07-25 | (this) | Tuple family §4: segment alignment — forced-boundary peeling (TL-01a/18/21) | “Tuple family §4” |

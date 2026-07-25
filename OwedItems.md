@@ -35,12 +35,15 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
    membership coincides, but open-record *patterns* narrow to `∩ HasField` and lose
    per-field contracts. Sound, precision-lossy.
 
-4. **Tuple family §4–§5 not yet built** — §1 `Concat` + §2 `len` + §3 refutation
-   discipline / `restrictLen`/`LengthRestricted` are in. Still owed by me:
-   **§4 segment alignment** (forced-boundary peeling, `ElementRefutation`, which
-   closes the `Concat ⊑ Concat` / kind-vs-Concat C.2 rows, currently `Unproven`);
-   §5 grapheme seam summaries; and `restrict_len`'s recursive certified-unfolding
-   rule. All specified in v0.3.1; ordinary build-order work.
+4. **Tuple family §5 not yet built + two §4 tails** — §1 `Concat` + §2 `len` + §3
+   refutation/`restrictLen` + **§4 segment alignment** (forced-boundary peeling,
+   which closed the `Concat ⊑ Concat` unequal-count C.2 gap) are in. Still owed by
+   me: **§5 grapheme seam summaries**; `restrict_len`'s recursive certified-unfolding
+   rule (demand-depth-bounded `D`, the `interner` is carried for it); and the §4
+   **`ElementRefutation` *structured* witness** (alignment map + projected branch) —
+   refutation currently returns the complete concrete inhabitant, a strictly stronger
+   witness, so this is a presentation detail, not a soundness gap. All specified in
+   v0.3.1; ordinary build-order work.
 
 ## Still owed in the docs (Compendium C§17, patch 1.0.8)
 

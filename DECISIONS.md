@@ -6,6 +6,60 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Tuple family §4: segment alignment
+
+`prove_segments` — the forced-boundary peeling procedure — plus 8 tests (TL-01a,
+TL-18 ×4, TL-21, the ≥2⊑≥1 interior case, and a nullable-boundary soundness guard).
+Full tree 247 lib + 111 conformance, clippy clean. Closes the `Concat ⊑ Concat`
+unequal-segment-count gap that §1 left `Unproven`.
+
+- **Routing** — a concatenation, or an exact `Tuple` read as one fixed segment, is
+  aligned against another by `prove_segments`. New `prove_body` arms: `(Concat,
+  Concat)`, `(Concat, Tuple)`, `(Tuple, Concat)`. The old aligned-only rule
+  (`sa.len() == sb.len()`) is subsumed as the procedure's variable core.
+- **Forced boundaries first (spec §4.1)** — a fixed segment is peeled off a
+  boundary **only when the segment facing it is also fixed**; a zero-or-more segment
+  on the far side could otherwise slide the edge, so the split would not be unique.
+  Peeling a fixed pair consumes `min(m, n)` positions element-wise and carries the
+  longer side's remainder forward as a residual `Tuple`. Both the front and the back
+  boundary are peeled (forced, never merely outermost). RC 0.2.2 `source_progress`
+  carries **consumed source extent** through the peel so the coinductive guard still
+  advances (Repeat covariance closes exactly as in RC-17).
+- **Interior — one variable binds the residual (spec §4.2)** — after the forced
+  boundaries, an equal-count residual takes the aligned segment-wise rule; an
+  *unequal*-count residual with a **single** variable segment on one side is
+  reconstituted and handed back to the guarded `prove`, whose μ-head/`Union`
+  machinery unfolds the collapsed `Ref`/`Repeat` against the opposite concatenation.
+  This is what proves `≥2 Number ⊑ ≥1 Number`. A residual that stays variable on
+  *both* sides with no unique split lands **`Unproven`** (spec §4.3) — e.g.
+  `Concat(Repeat(N), Repeat(N)) ⊑ Repeat(N)` is a real subcontract left unproven,
+  never fabricated.
+- **Nullability is sound-must** — `segment_nullable` returns `true` only when a
+  segment *certainly* admits a length-0 realization (`Tuple([])`, `Kind(Tuple)`,
+  a `Union`/`Ref` reaching such, or a `Concat` of such, fuel-bounded). This gates
+  the source-consumed residual case, so `≥0 Number ⊄ ≥1 Number` correctly **refutes**
+  (empty-list witness) rather than proving.
+- **Refutation + the uninhabited-shape guard (spec §4 round 2 / TL-21)** — negatives
+  come from the existing inhabitant enumeration, which only ever yields *complete*
+  concrete witnesses. So a positional element mismatch alone never refutes: the same
+  `Tuple(Number, U) ⊑ Tuple(String, Top)` row is **Refuted** when `U` is inhabited
+  (a witness `[num, ⋆]` exists) and **Proven** when `U = ⊥` (the source is empty, the
+  inclusion vacuous). The identical position-0 mismatch, opposite verdicts — the
+  guard is the inhabitation of the *other* positions.
+- **Termination** — every `prove_segments` branch drops a whole segment or splits
+  one (strictly decreasing segment-count + arity), and the reconstitute-and-defer
+  step re-enters only through the progress-guarded `prove`; the created residual
+  `Tuple`s are sub-slices of finitely many source tuples, so the reachable pair
+  space stays finite.
+- **Scope / owed:** §5 grapheme boundary-state seams (TL-09) is next.
+  `restrict_len`'s recursive certified-unfolding rule remains owed. The
+  `ElementRefutation` *structured witness* (alignment map + projected branch) is not
+  materialized — refutation returns the complete inhabitant, which is a strictly
+  stronger witness; the structured form is a presentation detail for later.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-24 — Tuple family §3: refutation discipline + restrictLen/LengthRestricted
 
 `Contract::LengthRestricted` + `restrict_len` + `intersection_empty_by_length` + 6

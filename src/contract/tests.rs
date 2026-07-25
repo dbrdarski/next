@@ -1546,4 +1546,155 @@ mod tl {
         // Length 2 excluded by GE(3) ⇒ Bottom.
         assert_eq!(restrict_len(&g, &pair, &ge(3), &mut i), Contract::Bottom);
     }
+
+    // ── §4: segment alignment ────────────────────────────────────────────────
+
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+    fn str_() -> Contract {
+        Contract::Kind(Kind::String)
+    }
+    /// The `Union(Tuple(), Concat(Tuple(E), Ref name))` body of a `Repeat(E)`.
+    fn repeat_body(element: Contract, name: &str) -> Contract {
+        union(
+            Contract::Tuple(vec![]),
+            Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)]),
+        )
+    }
+    /// `Concat(Tuple(E), Ref name)` — one-or-more `E` (a non-empty `Repeat`).
+    fn one_or_more(element: Contract, name: &str) -> Contract {
+        Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)])
+    }
+
+    #[test]
+    fn tl18_alignment_proof_map_peels_forced_prefix() {
+        // ≥1 Number ⊑ ≥1 Top. The leading fixed segments are a forced boundary:
+        // peel Tuple(Number) ⊑ Tuple(Top), leaving Repeat(Number) ⊑ Repeat(Top),
+        // which closes by consumed-extent covariance (RC-17).
+        let mut i = Interner::new();
+        let g = group(&[("RN", repeat_body(num(), "RN")), ("RT", repeat_body(Contract::Top, "RT"))]);
+        let src = one_or_more(num(), "RN");
+        let tgt = one_or_more(Contract::Top, "RT");
+        let v = recursive::subcontract(&g, &src, &tgt, &mut i);
+        assert!(matches!(v, Verdict::Proven), "≥1 Number ⊑ ≥1 Top, got {v:?}");
+    }
+
+    #[test]
+    fn tl18_alignment_length_refutation() {
+        // ≥1 Number ⊄ exactly-2 (Tuple(Number, Number)): the single-element list
+        // `[1]` inhabits the source and fails the target on *length* — a realizable
+        // witness (§3.ii), not a manufactured length verdict.
+        let mut i = Interner::new();
+        let g = group(&[("RN", repeat_body(num(), "RN"))]);
+        let src = one_or_more(num(), "RN");
+        let pair = Contract::Tuple(vec![num(), num()]);
+        match recursive::subcontract(&g, &src, &pair, &mut i) {
+            Verdict::Refuted(w) => {
+                assert!(recursive::contains(&g, &src, &w), "witness ∈ source");
+                assert!(!recursive::contains(&g, &pair, &w), "witness ∉ exactly-2");
+            }
+            other => panic!("expected length Refuted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tl18_alignment_element_refutation_needs_complete_witness() {
+        // ≥1 Number ⊄ ≥1 String. Position 0 mismatches (Number ⊄ String), but the
+        // verdict is a *complete* number-list witness (`[1]`), never a bare
+        // positional exclusion (§4 round 2 / §5.3).
+        let mut i = Interner::new();
+        let g = group(&[("RN", repeat_body(num(), "RN")), ("RS", repeat_body(str_(), "RS"))]);
+        let src = one_or_more(num(), "RN");
+        let tgt = one_or_more(str_(), "RS");
+        match recursive::subcontract(&g, &src, &tgt, &mut i) {
+            Verdict::Refuted(w) => {
+                assert!(recursive::contains(&g, &src, &w), "witness is a complete number-list");
+                assert!(!recursive::contains(&g, &tgt, &w), "witness ∉ string-list");
+            }
+            other => panic!("expected element Refuted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tl18_variable_vs_variable_is_unproven_never_refuted() {
+        // Concat(Repeat(N), Repeat(N)) ⊑ Repeat(N): a genuine subcontract, but the
+        // boundary between the two source runs is not forced — round-1 alignment has
+        // no unique split. It must land Unproven (a real inhabitant witness cannot
+        // exist), never a fabricated refutation.
+        let mut i = Interner::new();
+        let g = group(&[("RN", repeat_body(num(), "RN"))]);
+        let two = Contract::Concat(vec![rec_ref("RN"), rec_ref("RN")]);
+        let v = recursive::subcontract(&g, &two, &rec_ref("RN"), &mut i);
+        assert!(matches!(v, Verdict::Unproven), "no forced split ⇒ unproven, got {v:?}");
+    }
+
+    #[test]
+    fn tl_two_or_more_subset_of_one_or_more() {
+        // ≥2 Number ⊑ ≥1 Number. Peel one forced Number pair, then a *single*
+        // variable segment binds the residual (§4 interior): the collapsed target
+        // `Repeat(N)` unfolds against the source residual under the guard.
+        let mut i = Interner::new();
+        let g = group(&[("RN", repeat_body(num(), "RN"))]);
+        let two_plus = Contract::concat([Contract::Tuple(vec![num(), num()]), rec_ref("RN")]);
+        let one_plus = one_or_more(num(), "RN");
+        let v = recursive::subcontract(&g, &two_plus, &one_plus, &mut i);
+        assert!(matches!(v, Verdict::Proven), "≥2 Number ⊑ ≥1 Number, got {v:?}");
+    }
+
+    #[test]
+    fn tl_zero_or_more_not_subset_of_one_or_more() {
+        // Soundness guard on the nullable boundary: ≥0 Number ⊄ ≥1 Number. The
+        // empty list inhabits the source and fails the target, so the fallback must
+        // NOT prove it — the empty tuple is the refutation witness.
+        let mut i = Interner::new();
+        let g = group(&[("RN", repeat_body(num(), "RN"))]);
+        let zero_plus = Contract::Concat(vec![rec_ref("RN")]);
+        let one_plus = one_or_more(num(), "RN");
+        match recursive::subcontract(&g, &zero_plus, &one_plus, &mut i) {
+            Verdict::Refuted(w) => {
+                assert!(recursive::contains(&g, &zero_plus, &w), "witness ∈ ≥0");
+                assert!(!recursive::contains(&g, &one_plus, &w), "witness ∉ ≥1");
+                assert_eq!(w, i.tuple(vec![]), "the empty list is the refutation");
+            }
+            other => panic!("≥0 ⊄ ≥1 must refute, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tl01a_spread_arity_accept_lengths_only() {
+        // "Spread-call arity accept": ≥2 Number against ≥2 of anything. Elements are
+        // trivially compatible (Top on the right), so acceptance is carried by the
+        // forced-boundary arity match alone — the lengths-only case (TL-01a).
+        let mut i = Interner::new();
+        let g = group(&[("RN", repeat_body(num(), "RN")), ("RT", repeat_body(Contract::Top, "RT"))]);
+        let src = Contract::concat([Contract::Tuple(vec![num(), num()]), rec_ref("RN")]);
+        let tgt = Contract::concat([Contract::Tuple(vec![Contract::Top, Contract::Top]), rec_ref("RT")]);
+        let v = recursive::subcontract(&g, &src, &tgt, &mut i);
+        assert!(matches!(v, Verdict::Proven), "arity ≥2 accept, got {v:?}");
+    }
+
+    #[test]
+    fn tl21_uninhabited_position_guards_the_element_refutation() {
+        // Tuple(Number, U) ⊑ Tuple(String, Top). Position 0 mismatches identically
+        // in both rows, but the verdict turns on whether position 1 is inhabited:
+        //   • U = Top  → a complete witness [num, ⋆] exists → Refuted.
+        //   • U = ⊥    → the source is empty → the inclusion is vacuously true →
+        //     Proven, NOT a positional refutation (the mismatch alone is
+        //     insufficient — no complete source witness realizes that branch).
+        let mut i = Interner::new();
+        let g = empty_group();
+        let inhabited = Contract::Tuple(vec![num(), Contract::Top]);
+        let target = Contract::Tuple(vec![str_(), Contract::Top]);
+        match recursive::subcontract(&g, &inhabited, &target, &mut i) {
+            Verdict::Refuted(w) => {
+                assert!(recursive::contains(&g, &inhabited, &w));
+                assert!(!recursive::contains(&g, &target, &w));
+            }
+            other => panic!("inhabited position ⇒ Refuted, got {other:?}"),
+        }
+        let empty_pos = Contract::Tuple(vec![num(), Contract::Bottom]);
+        let v = recursive::subcontract(&g, &empty_pos, &target, &mut i);
+        assert!(matches!(v, Verdict::Proven), "empty source ⊑ anything (guard), got {v:?}");
+    }
 }

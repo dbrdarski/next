@@ -968,21 +968,24 @@ fn prove_body(
             prove(group, env, a1, b, source_progress, assumed, interner)
                 || prove(group, env, a2, b, source_progress, assumed, interner)
         }
-        // Aligned concatenation: compare segment-wise, and carry the source's
-        // **consumed extent** as progress (RC §5, 0.2.2 — flat sequence recursion
-        // licenses reuse by what the traversal consumed, not by nesting). This is
-        // the aligned case only; the family's general alignment procedure (§4,
-        // forced-boundary peeling over unequal segment counts) is a later increment,
-        // and lands `unproven` here rather than guessing a split.
-        (Contract::Concat(sa), Contract::Concat(sb)) if sa.len() == sb.len() => {
-            let mut consumed = 0;
-            for (x, y) in sa.iter().zip(sb) {
-                if !prove(group, env, x, y, source_progress + consumed, assumed, interner) {
-                    return false;
-                }
-                consumed += super::min_extent(x);
-            }
-            true
+        // Segment alignment — the tuple family §4 procedure. A concatenation (or an
+        // exact tuple, read as one fixed segment) is aligned against another by
+        // **forced-boundary peeling**: a fixed segment is peeled off a boundary only
+        // when the opposite boundary is *also* fixed, since a zero-or-more segment on
+        // the far side could otherwise shift that edge. The residual variable core
+        // defers to the aligned segment-wise rule (RC §5, 0.2.2 — progress carries
+        // consumed source extent, not nesting); a variable-vs-variable residual with
+        // no unique split lands `unproven`, leaving the negative to the refuter.
+        (Contract::Concat(sa), Contract::Concat(sb)) => {
+            prove_segments(group, env, sa, sb, source_progress, assumed, interner)
+        }
+        (Contract::Concat(sa), Contract::Tuple(_)) => {
+            let sb = [b.clone()];
+            prove_segments(group, env, sa, &sb, source_progress, assumed, interner)
+        }
+        (Contract::Tuple(_), Contract::Concat(sb)) => {
+            let sa = [a.clone()];
+            prove_segments(group, env, &sa, sb, source_progress, assumed, interner)
         }
         // Structural descent — increments source progress (the induction measure).
         (Contract::Tuple(ea), Contract::Tuple(eb)) => {
@@ -1002,4 +1005,140 @@ fn prove_body(
         // Leaf pair — neither side recursive here; the C.2 check is complete.
         _ => matches!(super::subcontract(a, b, interner), Verdict::Proven),
     }
+}
+
+/// The exact positional arity of a segment, when it has one (only a literal
+/// [`Contract::Tuple`] pins a length; a `Ref`/`Repeat`/`Kind::Tuple` is variable).
+fn fixed_arity(c: &Contract) -> Option<usize> {
+    match c {
+        Contract::Tuple(elems) => Some(elems.len()),
+        _ => None,
+    }
+}
+
+/// Certain evidence that a segment can contribute **zero** positions (its
+/// denotation contains a length-0 realization). Sound-must: `false` when unsure,
+/// so a residual proof that relies on nullability is only ever conservative.
+fn segment_nullable(group: &RecGroup, s: &Contract) -> bool {
+    fn go(group: &RecGroup, s: &Contract, fuel: usize) -> bool {
+        if fuel == 0 {
+            return false;
+        }
+        match s {
+            Contract::Tuple(e) => e.is_empty(),
+            Contract::Kind(Kind::Tuple) => true,
+            Contract::Union(a, b) => go(group, a, fuel - 1) || go(group, b, fuel - 1),
+            Contract::Concat(segs) => segs.iter().all(|x| go(group, x, fuel - 1)),
+            Contract::Ref(n) if group.is_member(n) => go(group, group.get(n), fuel - 1),
+            _ => false,
+        }
+    }
+    go(group, s, 8)
+}
+
+/// Align source segments `sa` against target segments `sb` (tuple family §4).
+///
+/// Forced boundaries first: a fixed leading (or trailing) segment is peeled only
+/// when the segment facing it is *also* fixed — otherwise a zero-or-more segment
+/// could slide the boundary and the split is not unique. Peeling a fixed pair
+/// consumes `min(m, n)` positions element-wise and carries the longer side's
+/// remainder forward. When both boundaries are variable, only the equal-count
+/// alignment is forced (each source segment against its positional target); any
+/// other variable-vs-variable residual is `unproven` (the refuter finds the
+/// negatives). Termination: every branch drops a whole segment or splits one, so
+/// the total (segment count + arity) strictly decreases.
+#[allow(clippy::too_many_arguments, clippy::mutable_key_type)]
+fn prove_segments(
+    group: &RecGroup,
+    env: &EmptyEnv,
+    sa: &[Contract],
+    sb: &[Contract],
+    progress: usize,
+    assumed: &mut HashMap<(Contract, Contract), usize>,
+    interner: &mut Interner,
+) -> bool {
+    if sa.is_empty() && sb.is_empty() {
+        return true;
+    }
+    // Source fully consumed: the residual target must certainly admit empty, so
+    // that the consumed prefix is itself a target realization.
+    if sa.is_empty() {
+        return sb.iter().all(|s| segment_nullable(group, s));
+    }
+    // Target consumed but the source can still emit positions: sound only when
+    // every residual source segment contributes nothing (the empty tuple).
+    if sb.is_empty() {
+        return sa.iter().all(|s| matches!(s, Contract::Tuple(e) if e.is_empty()));
+    }
+
+    // Forced front boundary — both leading segments have a fixed arity.
+    if let (Some(m), Some(n)) = (fixed_arity(&sa[0]), fixed_arity(&sb[0])) {
+        let (Contract::Tuple(ea), Contract::Tuple(eb)) = (&sa[0], &sb[0]) else { unreachable!() };
+        let k = m.min(n);
+        for i in 0..k {
+            if !prove(group, env, &ea[i], &eb[i], progress + i, assumed, interner) {
+                return false;
+            }
+        }
+        let mut na: Vec<Contract> = Vec::new();
+        if m > k {
+            na.push(Contract::Tuple(ea[k..].to_vec()));
+        }
+        na.extend_from_slice(&sa[1..]);
+        let mut nb: Vec<Contract> = Vec::new();
+        if n > k {
+            nb.push(Contract::Tuple(eb[k..].to_vec()));
+        }
+        nb.extend_from_slice(&sb[1..]);
+        return prove_segments(group, env, &na, &nb, progress + k, assumed, interner);
+    }
+
+    // Forced back boundary — both trailing segments have a fixed arity.
+    if let (Some(m), Some(n)) = (fixed_arity(sa.last().unwrap()), fixed_arity(sb.last().unwrap())) {
+        let (Contract::Tuple(ea), Contract::Tuple(eb)) =
+            (sa.last().unwrap(), sb.last().unwrap())
+        else {
+            unreachable!()
+        };
+        let k = m.min(n);
+        for i in 0..k {
+            if !prove(group, env, &ea[m - k + i], &eb[n - k + i], progress, assumed, interner) {
+                return false;
+            }
+        }
+        let mut na: Vec<Contract> = sa[..sa.len() - 1].to_vec();
+        if m > k {
+            na.push(Contract::Tuple(ea[..m - k].to_vec()));
+        }
+        let mut nb: Vec<Contract> = sb[..sb.len() - 1].to_vec();
+        if n > k {
+            nb.push(Contract::Tuple(eb[..n - k].to_vec()));
+        }
+        return prove_segments(group, env, &na, &nb, progress, assumed, interner);
+    }
+
+    // Both boundaries variable — only the equal-count aligned split is forced.
+    if sa.len() == sb.len() {
+        let mut consumed = 0;
+        for (x, y) in sa.iter().zip(sb) {
+            if !prove(group, env, x, y, progress + consumed, assumed, interner) {
+                return false;
+            }
+            consumed += super::min_extent(x);
+        }
+        return true;
+    }
+
+    // Unequal counts, no forced boundary: a *single* variable segment on one side
+    // binds the whole residual window (§4 interior rule). Reconstitute the pair and
+    // hand it back to `prove`, which routes the collapsed side through the μ-head /
+    // `Union` machinery under the progress guard (a `Ref`/`Repeat` residual then
+    // unfolds against the opposite Concat). A residual that is variable on *both*
+    // sides with no unique split stays `unproven` — the refuter supplies negatives.
+    if sa.len() == 1 || sb.len() == 1 {
+        let ra = if sa.len() == 1 { sa[0].clone() } else { Contract::Concat(sa.to_vec()) };
+        let rb = if sb.len() == 1 { sb[0].clone() } else { Contract::Concat(sb.to_vec()) };
+        return prove(group, env, &ra, &rb, progress, assumed, interner);
+    }
+    false
 }
