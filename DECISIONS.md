@@ -6,6 +6,37 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 3: outcome contribution (per-instance body summary)
+
+Third tail step — §1 steps 4–5, the callee body summary. New module
+`src/analyzer/outcome.rs`; 4 tests. Full tree 282 lib + 111 conformance, clippy clean.
+
+- **`summarize_instance(callee, arg_contracts, cenv, interner)`** reads a single
+  instance's `ApplicationOutcome` off its body: bind the captures (to their exact
+  `Equals(value)`) and the argument-narrowed parameters (`bind_pattern`, now
+  `pub(crate)`), then `analyze` the body. The existing Match analysis (E9/E10) already
+  does **row selection** — arm-by-arm narrowing, the unioned produced contract, the
+  fall-through flag — so the map is direct: `produced = body contract`, `completion =
+  may_complete ? UnprovenPossible : ProvenAbsent`.
+- **Recursion is coarse and terminating [chose].** A recursive/mutual call resolves
+  its callee to a captured `Equals(closure)`; with abstract (non-singleton) argument
+  contracts the call does **not** constant-fold, so `analyze_apply` returns `Top` for
+  the recursive result instead of re-entering the body — the summary terminates
+  (verified on `f = (n) => n == 0 ? 0 : f(n-1)`, producing `Union(Equals(0), Top)` ⊇
+  Top). Sound but coarse; the **§6 return induction** sharpens the recursive result
+  from `Top` to a proven contract under the induction hypothesis (that is the next
+  step, and where the fixpoint lives).
+- **`may_not_complete = false`** — divergence feeds no safety verdict (§1.5); its
+  precise value on a gray SCC is the §6 concern.
+- **AP-30, partial [note].** This lands the `ProvenAbsent`/`UnprovenPossible` halves —
+  a possible fall-through row contributes `UnprovenPossible` (→ expecting-seat
+  `Unproven`), tested on `(n) => n :: { 0 => 1 }`. The `ProvenPresent` half (a
+  fall-through **proven reachable** with a witness → refute) needs proven
+  non-exhaustiveness over `E × A`, which is the §6 row-reachability work — still owed.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-25 — Induction tail, step 2: the input obligation (accepted-domain derivation)
 
 Second tail step — the real §1 step 3, replacing bridge-2's test-only `accepts`

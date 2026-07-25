@@ -1365,3 +1365,71 @@ mod obligation {
         assert!(matches!(input_obligation(&f, &[], &cenv(), &mut i), SeatVerdict::Unproven));
     }
 }
+
+// ── Outcome contribution §1 steps 4-5 — per-instance body summary (tail) ───────
+
+mod outcome {
+    use super::{ActKind, arm, closure, konst, matchx, name, one_param};
+    use crate::analyzer::application::CompletionWithoutValue as C;
+    use crate::analyzer::outcome::summarize_instance;
+    use crate::ast::Pat;
+    use crate::contract::{Contract, ContractEnv, Kind, Verdict, subcontract};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn num() -> Contract {
+        Contract::Kind(Kind::Number)
+    }
+
+    #[test]
+    fn identity_body_produces_the_narrowed_parameter() {
+        let mut i = Interner::new();
+        let f = closure(&mut i, one_param("n"), name("n"), ActKind::Pure);
+        let o = summarize_instance(&f, &[num()], &cenv(), &mut i).unwrap();
+        assert_eq!(o.produced.erase(), num(), "(n) => n applied to Number produces Number");
+        assert!(matches!(o.completion, C::ProvenAbsent), "always produces — no fall-through");
+    }
+
+    #[test]
+    fn constant_body_produces_the_constant() {
+        let mut i = Interner::new();
+        let five = i.integer(5);
+        let f = closure(&mut i, one_param("n"), konst(five.clone()), ActKind::Pure);
+        let o = summarize_instance(&f, &[num()], &cenv(), &mut i).unwrap();
+        assert_eq!(o.produced.erase(), Contract::Equals(five));
+        assert!(matches!(o.completion, C::ProvenAbsent));
+    }
+
+    #[test]
+    fn a_partial_match_body_may_fall_through() {
+        // (n) => n :: { 0 => 1 } — over a Number the single arm is non-exhaustive, so
+        // the body may complete without a value: UnprovenPossible.
+        let mut i = Interner::new();
+        let (zero, one) = (i.integer(0), i.integer(1));
+        let body = matchx(Some(name("n")), vec![arm(Some(Pat::Const(zero)), None, konst(one.clone()))]);
+        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
+        let o = summarize_instance(&f, &[num()], &cenv(), &mut i).unwrap();
+        assert_eq!(o.produced.erase(), Contract::Equals(one), "the matching arm produces 1");
+        assert!(matches!(o.completion, C::UnprovenPossible), "may fall through");
+    }
+
+    #[test]
+    fn recursion_is_coarse_and_terminating() {
+        // A self-recursive body summarized over an abstract (non-singleton) argument:
+        // the recursive call does not constant-fold, so it returns Top and the summary
+        // terminates rather than re-entering the body. Sound but coarse (produced Top);
+        // the §6 induction sharpens it.
+        let f = run_source("f = (n) => n == 0 ? 0 : f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        let o = summarize_instance(&f, &[num()], &cenv(), &mut i).expect("summarizes");
+        assert!(!o.produced.is_bottom(), "a real result contract");
+        // The recursive branch coarsened to Top, so the produced contract admits
+        // everything (Top ⊑ produced) — sound, and the summary terminated.
+        let erased = o.produced.erase();
+        assert!(matches!(subcontract(&Contract::Top, &erased, &mut i), Verdict::Proven), "coarse: {erased:?}");
+        assert!(matches!(o.completion, C::ProvenAbsent), "the total ternary never falls through");
+    }
+}

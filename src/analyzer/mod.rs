@@ -40,6 +40,7 @@ pub mod bodywalk;
 pub mod domain;
 pub mod inventory;
 pub mod obligation;
+pub mod outcome;
 
 #[cfg(test)]
 mod tests;
@@ -837,7 +838,7 @@ fn contract_ref(r: &Ref, cenv: &ContractEnv) -> Option<Contract> {
 
 /// Bind a pattern's names to their narrowed contracts in `env` (best-effort; a
 /// name whose position is not tracked binds to `Top`).
-fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut TypeEnv) {
+pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut TypeEnv) {
     use crate::ast::{Pat, PatElem, PatField};
     match pat {
         Pat::Bind(name) => {
