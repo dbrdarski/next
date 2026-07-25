@@ -78,6 +78,14 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      helper call** proposes `Top`/`Bottom` → no fact (→ coarse `Top` at the call site).
      The fix is a **reverse-topological claim proposal** (propose a helper's claim
      before its callers'), owed with the wiring.
+   - **No persistent inference cache** — `analyze_apply` (`call_return`) runs a fresh
+     inference per call site; repeated calls to the same function re-run the driver. The
+     **C§13.4 evaluation cache** (keyed on the seat/world-independent core) is the
+     optimization; correctness holds without it (the re-entrancy guard bounds each run).
+   - **Completion not threaded** — `analyze_apply`'s `may_complete` is still the
+     mutator-only check; the inferred callee's completion tri-state (AP-30, the outcome
+     contribution) is not yet threaded into it, so a call to a partial-Match callee is
+     not yet flagged at an expecting seat. Owed with the AP-30 half.
 
 5. **`Known(∅)` normalization — doc-integration mismatch [analyzer review, 07-25]** —
    the application spec (`next-application-induction-specification-v0-8.md:19`)

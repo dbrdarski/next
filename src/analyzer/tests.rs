@@ -1620,7 +1620,7 @@ mod inference {
         // analyze_apply wiring).
         let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
         let mut i = Interner::new();
-        let fact = infer_return_fact(&f, &cenv(), &mut i).expect("a return fact is inferred");
+        let fact = infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
         assert!(matches!(subcontract(&num(), &fact, &mut i), Verdict::Proven), "Number ⊑ inferred {fact:?}");
         let hi = i.string("hi");
         assert!(!fact.contains(&hi), "the fact admits no String — tighter than Top: {fact:?}");
@@ -1639,7 +1639,7 @@ mod inference {
         .unwrap()
         .0;
         let mut i = Interner::new();
-        let fact = infer_return_fact(&even, &cenv(), &mut i).expect("even's return is inferred");
+        let fact = infer_return_fact(&even, None, &cenv(), &mut i).expect("even's return is inferred");
         assert!(equiv(&fact, &Contract::Kind(Kind::Boolean), &mut i), "even returns Boolean, got {fact:?}");
     }
 
@@ -1649,7 +1649,7 @@ mod inference {
         // claim is Number — a sound over-approximation (Equals(0) ⊑ Number).
         let f = run_source("f = (n) => n == 0 ? 0 : f(n - 1)\nf").unwrap().0;
         let mut i = Interner::new();
-        let fact = infer_return_fact(&f, &cenv(), &mut i).expect("a return fact is inferred");
+        let fact = infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
         let zero = Contract::Equals(i.integer(0));
         assert!(matches!(subcontract(&zero, &fact, &mut i), Verdict::Proven), "0 ⊑ inferred return {fact:?}");
         assert!(equiv(&fact, &num(), &mut i), "and it generalizes to Number");
@@ -1661,6 +1661,74 @@ mod inference {
         // fact is asserted (→ coarse Top at a call site, never an overclaim).
         let f = run_source("loop = (n) => loop(n)\nloop").unwrap().0;
         let mut i = Interner::new();
-        assert!(infer_return_fact(&f, &cenv(), &mut i).is_none(), "no fact for a baseless recursion");
+        assert!(infer_return_fact(&f, None, &cenv(), &mut i).is_none(), "no fact for a baseless recursion");
+    }
+}
+
+// ── analyze_apply rewiring — a recursive call site infers its return (tail) ─────
+
+mod apply_wiring {
+    use super::{analyze, apply, arm, empty, konst, matchx, name, nc};
+    use crate::contract::{Contract, Kind, Verdict, subcontract};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+
+    fn equiv(a: &Contract, b: &Contract, i: &mut Interner) -> bool {
+        matches!(subcontract(a, b, i), Verdict::Proven) && matches!(subcontract(b, a, i), Verdict::Proven)
+    }
+
+    #[test]
+    fn a_recursive_call_infers_its_return_over_the_argument() {
+        // `f(x)` with `x : Number` — `analyze_apply` now infers f's return over the
+        // call-site argument, giving pure Number (not Top, not the untyped-domain
+        // Number ∪ Indeterminate).
+        let mut i = Interner::new();
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let mut env = empty();
+        env.insert("f".into(), Contract::Equals(f));
+        env.insert("x".into(), Contract::Kind(Kind::Number));
+
+        let call = apply(name("f"), vec![name("x")]);
+        let a = analyze(&call, &env, &nc(), &mut i);
+        assert!(a.accepted(), "the call is accepted: {:?}", a.findings);
+        assert!(equiv(&a.contract, &Contract::Kind(Kind::Number), &mut i), "f(x) : Number, got {:?}", a.contract);
+    }
+
+    #[test]
+    fn an_inferred_boolean_return_satisfies_a_tested_seat() {
+        // `even(x) ? 1 : 2` — even(x) is inferred Boolean, so the guard's tested seat is
+        // satisfied with **no** finding (a coarse Top would raise a tested-seat warning).
+        let mut i = Interner::new();
+        let even = run_source(
+            "even = (n) => n == 0 ? true : odd(n - 1)\n\
+             odd = (n) => n == 0 ? false : even(n - 1)\n\
+             even",
+        )
+        .unwrap()
+        .0;
+        let mut env = empty();
+        env.insert("even".into(), Contract::Equals(even));
+        env.insert("x".into(), Contract::Kind(Kind::Number));
+
+        let guard = apply(name("even"), vec![name("x")]);
+        let m = matchx(None, vec![arm(None, Some(guard), konst(i.integer(1))), arm(None, None, konst(i.integer(2)))]);
+        let a = analyze(&m, &env, &nc(), &mut i);
+        assert!(a.findings.is_empty(), "even(x) : Boolean satisfies the guard with no finding: {:?}", a.findings);
+    }
+
+    #[test]
+    fn an_unconstrained_argument_stays_sound() {
+        // `f(x)` with `x : Top` — no call-site constraint, so the inferred return keeps
+        // the arithmetic Indeterminate-passthrough (or coarsens), but is always sound:
+        // Number is admitted and the call is not falsely rejected.
+        let mut i = Interner::new();
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let mut env = empty();
+        env.insert("f".into(), Contract::Equals(f));
+        env.insert("x".into(), Contract::Top);
+
+        let call = apply(name("f"), vec![name("x")]);
+        let a = analyze(&call, &env, &nc(), &mut i);
+        assert!(matches!(subcontract(&Contract::Kind(Kind::Number), &a.contract, &mut i), Verdict::Proven), "Number ⊑ {:?}", a.contract);
     }
 }

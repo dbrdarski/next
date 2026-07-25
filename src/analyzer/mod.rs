@@ -568,16 +568,31 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         Contract::Equals(cv) => analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner),
         _ => false, // unknown callee: shape not derivable yet (owed)
     };
-    // A recursive/mutual call under an active return-induction hypothesis (§6) uses the
-    // assumed return contract; otherwise the callee's result is coarse `Top`.
+    // The callee's return contract (§6 / C§13.2): an active induction hypothesis if
+    // inside a driver pass; else the return fact inferred over the call-site arguments;
+    // else coarse `Top`.
     let contract = match &cc {
-        Contract::Equals(cv) => cv
-            .as_fn()
-            .and_then(|f| induction::hypothesis_for(f.shape()))
-            .unwrap_or(Contract::Top),
+        Contract::Equals(cv) => call_return(cv, &arg_contracts, has_spread, cenv, interner),
         _ => Contract::Top,
     };
     Analysis { contract, findings, may_complete }
+}
+
+/// The inferred return contract for a call to the known closure `cv` over
+/// `arg_contracts` (§6 / C§13.2). An active return-induction hypothesis (inside a
+/// driver pass) wins directly; otherwise — outside a spread call and outside an
+/// in-progress inference — run [`induction::infer_return_fact`] over the **call-site
+/// argument contracts**, so `factorial(k)` with `k : Number` returns `Number` rather
+/// than the untyped-domain `Number ∪ Indeterminate` (let alone `Top`). Falls back to
+/// `Top` when nothing informative is inferred (sound).
+fn call_return(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool, cenv: &ContractEnv, interner: &mut Interner) -> Contract {
+    if let Some(c) = cv.as_fn().and_then(|f| induction::hypothesis_for(f.shape())) {
+        return c;
+    }
+    if cv.as_fn().is_none() || has_spread || induction::currently_inferring() {
+        return Contract::Top;
+    }
+    induction::infer_return_fact(cv, Some(arg_contracts), cenv, interner).unwrap_or(Contract::Top)
 }
 
 /// Check a known callee's act-kind (world admission) and argument obligation.

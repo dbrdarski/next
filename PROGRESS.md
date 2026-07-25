@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-25 · induction tail step 6 — autonomous return-fact inference.
+**Snapshot:** 2026-07-25 · induction tail step 7 — recursive call sites infer their return (analyze_apply rewiring).
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **293 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **296 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -93,7 +93,7 @@ Low-stakes / for-info only:
 | Tuple-length family §3 (refutation discipline, `restrictLen`/`LengthRestricted`) | family v0.3.1 | ✅ (TL-16/17/20) |
 | Tuple-length family §4 (segment alignment: forced-boundary peeling, interior residual, uninhabited-shape guard) | family v0.3.1 | ✅ (TL-01a/18/21) |
 | Tuple-length family §5 (grapheme boundary-state seams: segmenter-owned `compose`/`seam_delta`, merges-only bound) | family v0.3.1 | ✅ (TL-09); 🟡 finite-state lift to string *contracts* owed |
-| Analyzer, expression layer: Const/Ref/PrimOp/Tuple/Record/Template/Access/Match/Apply — exact closed-expression trap concordance + sound open-term reasoning, narrowing, named contracts | §6 concordance | ✅ for the listed nodes; 🟡 `Lambda` bodies, `Write`/worlds type as Top; open-call returns Top |
+| Analyzer, expression layer: Const/Ref/PrimOp/Tuple/Record/Template/Access/Match/Apply — exact closed-expression trap concordance + sound open-term reasoning, narrowing, named contracts | §6 concordance | ✅ for the listed nodes; a call to a known closure now **infers** its return (§6, call-site args); 🟡 `Lambda` bodies, `Write`/worlds type as Top; an unknown-callee call returns Top |
 | Application & induction §2 — `AnalysisContract` **structural/correlated** domain (Leaf/Tuple/Record/Alt, γ, `intersectA`/`meetInstance`, `proveSubcontractA`) | v0.8.1 | ✅ 8.1a + bridge (AP-27/28, correlation survival) |
 | Application & induction §1 — the outcome algebra + **joint operand driver** (`ApplicationOutcome` tri-state, `analyze_application` per-alternative, structural `ApplicationWitness`/`SeatVerdict`) | v0.8.1 | ✅ 8.1b + bridge-2 (AP-15/17/18/21/23/24/29 + structural witness); **AP-30** ⬜ tail-dependent (row-contribution) |
 | Application & induction §4a — the constructed instance-chain inventory (traversal-free closure + shape-repeat cutoff) | v0.8.1 | ✅ 8.1c (AP-16 mutual/self/diamond, order-independent set) |
@@ -103,7 +103,8 @@ Low-stakes / for-info only:
 | Application & induction §6 — return induction, the joint vector pass (hypothesis injection in `analyze_apply`; sharpens recursive `Top`) | v0.8.1 | ✅ tail step 4 (factorial → Number; false-claim reject; mutual even/odd + vector failure) |
 | Application & induction §6/§13.2a — multi-SCC driver (call-graph SCC decomposition + reverse-topo; carry each proven component's facts to its dependents) | v0.8.1 | ✅ tail step 5 (dependent-after-dependency; order-independent; mutual-as-one-component; vector-failure isolation) |
 | Application & induction §6 — return-fact **inference** (autonomous claim proposal: `Contract::generalize` over a Bottom-pinned group summary, then the driver) | v0.8.1 | ✅ tail step 6 (factorial→Number over its domain; even/odd→Boolean; identity→sound over-approx; baseless→no fact) |
-| Application & induction §6/§5 — realized-witness `(e,x,v)` refutation, **AP-30 `ProvenPresent`**, domain-indexed facts, `analyze_apply` rewiring (call-site args, persistent fact cache, re-entrancy guard) | v0.8.1 | ⬜ **next**: the analyze_apply wiring onto `infer_return_fact` (unlocks A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
+| Application & induction §6/C§13.2 — **`analyze_apply` rewiring** (`call_return`: recursive call sites infer their return over the call-site args; re-entrancy guard in `summarize_instance`) | v0.8.1 | ✅ tail step 7 (`f(x:Number)`→Number; `even(x)` satisfies a tested seat; `f(x:Top)` stays sound) |
+| Application & induction §6/§5 — realized-witness `(e,x,v)` refutation, **AP-30 `ProvenPresent`** (completion tri-state → `may_complete`), domain-indexed facts, the C§13.4 evaluation cache | v0.8.1 | ⬜ **next**: refutation + completion threading + cache (with A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
 | Reactive layer / concurrency / UI | G1 fence | 🚫 fenced, out of scope |
 
@@ -118,15 +119,15 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
-1. **Application & induction — the induction tail** (steps 1–6 done: body walk, input
-   obligation, outcome contribution, the joint vector pass, the multi-SCC driver, **and
-   autonomous return-fact inference**): next is the **`analyze_apply` rewiring** onto
-   `infer_return_fact` — passing **call-site argument contracts** (so `factorial(k)`
-   with `k : Number` sharpens to pure `Number`), a **persistent fact cache**, and a
-   **re-entrancy guard** — so top-level program analysis uses these facts. Alongside:
+1. **Application & induction — the induction tail** (steps 1–7 done: body walk, input
+   obligation, outcome contribution, the joint vector pass, the multi-SCC driver,
+   autonomous return-fact inference, **and the `analyze_apply` rewiring**): next is
    (a) the realized-witness `(e, x, v)` **refutation** (the third voice, permanent
-   in-namespace); (b) **AP-30's `ProvenPresent` half**; (c) §5 domain-indexed facts;
-   (d) the sampled γ soundness battery. That wiring activates **A-ACC/A-SND** (A-NEG's
+   in-namespace); (b) **AP-30's `ProvenPresent` half** — thread the outcome
+   contribution's completion tri-state into `analyze_apply`'s `may_complete` (currently
+   the mutator-only check); (c) the **C§13.4 evaluation cache** (one call site drives
+   one bounded inference today — no persistent cache); (d) §5 domain-indexed facts and
+   the sampled γ soundness battery. That set activates **A-ACC/A-SND** (A-NEG's
    `factorial → REJECT` needs the separate **C§10 grounding / derived-input-contract**
    arc — not this tail). (Deferred non-blocking: per-alternative `witness_status`;
    rest-parameter length-precise domain via §4; the reverse-topological *claim
@@ -179,4 +180,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-25 | `d968904` | Induction tail step 3: outcome contribution — per-instance body summary (recursion coarse-Top, terminating) | “Induction tail step 3: outcome contribution” |
 | 2026-07-25 | `b973ce6` | Induction tail step 4: return induction — joint vector pass + hypothesis injection (factorial → Number; mutual even/odd) | “Induction tail step 4: return induction” |
 | 2026-07-25 | `c467764` | Induction tail step 5: multi-SCC driver — call-graph SCC decomposition + reverse-topo, carry proven facts to dependents (double/quad; order-independent; mutual; failure isolation) | “Induction tail, step 5: the multi-SCC driver” |
-| 2026-07-25 | (this) | Induction tail step 6: return-fact inference — autonomous claim proposal (`Contract::generalize` over a Bottom-pinned group summary + the driver); factorial/even-odd/identity/baseless | “Induction tail, step 6: return-fact inference” |
+| 2026-07-25 | `4660634` | Induction tail step 6: return-fact inference — autonomous claim proposal (`Contract::generalize` over a Bottom-pinned group summary + the driver); factorial/even-odd/identity/baseless | “Induction tail, step 6: return-fact inference” |
+| 2026-07-25 | (this) | Induction tail step 7: analyze_apply rewiring — `call_return` infers a known callee's return over call-site args; re-entrancy guard in `summarize_instance` (f(x:Number)→Number; even(x) tested seat; f(x:Top) sound) | “Induction tail, step 7: the analyze_apply rewiring” |

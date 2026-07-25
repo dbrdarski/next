@@ -6,6 +6,55 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Induction tail, step 7: the analyze_apply rewiring — recursive call sites infer their return (§6/C§13.2)
+
+The payoff: top-level program analysis now uses the induction. A call to a known
+recursive closure returns its **inferred** return contract, sharpened by the call-site
+arguments, instead of coarse `Top`. `call_return` in `analyze_apply`; the re-entrancy
+guard threaded through `summarize_instance`; 3 tests. Full tree 296 lib + 111
+conformance, clippy clean.
+
+- **`call_return(cv, arg_contracts, has_spread, cenv, interner)` [mandated — C§13.2].**
+  At a call to a known closure: an active return-induction hypothesis (inside a driver
+  pass) wins directly; else — outside a spread and outside an in-progress inference —
+  `infer_return_fact` runs over the **call-site argument contracts**; else `Top`. So
+  `factorial(k)` with `k : Number` now types `Number` (the call-site arg drops the
+  untyped-domain Indeterminate-passthrough), and `even(x)` types `Boolean` — enough to
+  satisfy a tested seat with no warning.
+- **`infer_return_fact` gains `root_args: Option<&[Contract]>` [mandated].** The root
+  callee takes the call-site domain when supplied (`Some([Number])`); reachable helpers
+  keep their accepted domains; `None` is the autonomous form (unchanged). The fact is
+  the (instance, I, C) form with I fixed by the call — the spec's call-parameterized
+  return fact.
+- **The re-entrancy guard, placed in `summarize_instance` [chose — the load-bearing
+  decision].** Wiring inference into `analyze_apply` means the fact machinery's own body
+  analysis (`summarize_instance` → `analyze` → `analyze_apply`) would spontaneously
+  infer, letting a dependent prove itself by inferring its dependency mid-pass (and
+  making a bare summary non-coarse). Fix: `summarize_instance` runs its body analysis
+  under `without_inference`, so **all fact-proving stays coarse** (calls resolve through
+  the pass's hypotheses or `Top`), and inference fires **only at genuine top-level
+  `analyze` call sites**. The driver stays in control of fact-proving; the reverse-topo
+  `base` remains the only channel for dependency facts. This kept
+  `recursion_is_coarse_and_terminating` and `a_dependent_proves_only_after_its_dependency`
+  green **unchanged** — the guard is exactly what those two properties require.
+- **Behavior change [sound].** A call to a known closure with *abstract* arguments
+  previously typed `Top`; it now infers. Strictly more precise, always sound (the driver
+  verifies `F(C) ⊑ C`); folding of singleton-argument calls is untouched (still exact
+  via the oracle).
+- **No persistent cache [owed — C§13.4].** One call site drives one bounded inference;
+  repeated call sites re-run the driver. The C§13.4 evaluation cache (keyed on the
+  seat/world-independent core) is the optimization, registered in OwedItems.
+- **Verified** — `a_recursive_call_infers_its_return_over_the_argument`
+  (`f(x)`, `x:Number` → Number, accepted); `an_inferred_boolean_return_satisfies_a_
+  tested_seat` (`even(x) ? 1 : 2` → no finding, where `Top` would warn);
+  `an_unconstrained_argument_stays_sound` (`f(x)`, `x:Top` → Number ⊑ result, never a
+  false rejection).
+- **`// [ask-author]`:** none. Threading the completion tri-state into `may_complete`
+  (AP-30) and the realized-witness refutation remain the tail's open items; A-NEG's
+  input-domain rejection still needs the separate C§10 grounding arc.
+
+---
+
 ## 2026-07-25 — Induction tail, step 6: return-fact inference — autonomous claim proposal (§6)
 
 Closes the loop so the driver's claims need not be supplied: the analyzer now *infers*

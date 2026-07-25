@@ -25,7 +25,7 @@
 //! realized-witness refutation, and the `analyze_apply` rewiring onto `infer_return_fact`
 //! are the wiring that follows.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
 use crate::analyzer::obligation::accepted_domain;
@@ -40,6 +40,31 @@ thread_local! {
     /// contract, consulted by `analyze_apply` during a vector pass. A `Vec` (linear
     /// lookup) — components are small.
     static HYPOTHESES: RefCell<Vec<(Lambda, Contract)>> = const { RefCell::new(Vec::new()) };
+
+    /// Set while an [`infer_return_fact`] run is in progress — the **re-entrancy
+    /// guard**. A driver pass analyzes bodies, whose calls reach `analyze_apply` again;
+    /// this flag stops that inner `analyze_apply` from launching a *nested* inference
+    /// (its calls resolve through the pass's hypotheses or coarse `Top` instead), so one
+    /// call site drives exactly one bounded inference.
+    static INFERRING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a return-fact inference is currently running (the re-entrancy guard).
+/// `analyze_apply` consults this before launching one.
+pub(crate) fn currently_inferring() -> bool {
+    INFERRING.with(Cell::get)
+}
+
+/// Run `body` with the inference guard set (save/restore, so it composes). Used by
+/// [`summarize_instance`] so **all body analysis during fact-proving stays coarse** —
+/// its calls resolve through the pass's hypotheses or coarse `Top`, never a nested
+/// inference. Inference thereby fires only at genuine top-level `analyze` call sites,
+/// not inside the machinery that inference itself drives.
+pub(crate) fn without_inference<R>(body: impl FnOnce() -> R) -> R {
+    let saved = INFERRING.with(|f| f.replace(true));
+    let out = body();
+    INFERRING.with(|f| f.set(saved));
+    out
 }
 
 /// The assumed return contract for a callee shape, if one is under an active
@@ -161,14 +186,35 @@ pub fn prove_facts(candidates: Vec<Candidate>, cenv: &ContractEnv, interner: &mu
 /// over real hypotheses, so a too-tight or too-loose proposal simply fails or lands
 /// coarse — never a false proof.
 ///
-/// **Scope of this cut.** The claim is proposed over each function's *accepted input
-/// domain* (its parameter pattern — `Top` for a bare `(n)`), so the fact is call-site
-/// independent (the input obligation, §1.3, is the separate per-call check). A function
-/// whose only base contribution is a **non-recursive helper call** proposes `Top`/`Bottom`
-/// (the helper is Bottom-pinned too) and so yields no fact — a precision gap, sound;
-/// the reverse-topological *proposal* that would close it is owed alongside the
-/// `analyze_apply` rewiring.
-pub fn infer_return_fact(callee: &ValueRef, cenv: &ContractEnv, interner: &mut Interner) -> Option<Contract> {
+/// **`root_args`** are the root callee's argument contracts — the **call-site**
+/// domain: `Some([Number])` for `factorial(k)` with `k : Number` sharpens the fact to
+/// pure `Number` (no Indeterminate-passthrough); `None` proposes over the root's
+/// accepted domain too (the autonomous, call-site-independent form). The reachable
+/// helpers/mutual members always use their accepted domains.
+///
+/// **Scope of this cut.** A function whose only base contribution is a **non-recursive
+/// helper call** proposes `Top`/`Bottom` (the helper is Bottom-pinned too) and so
+/// yields no fact — a precision gap, sound; the reverse-topological *proposal* that
+/// would close it is owed. There is no persistent cache yet: one call site drives one
+/// bounded inference (the C§13.4 evaluation cache is owed).
+pub fn infer_return_fact(
+    callee: &ValueRef,
+    root_args: Option<&[Contract]>,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Contract> {
+    if currently_inferring() {
+        return None; // re-entrancy guard — a driver pass never nests inference
+    }
+    without_inference(|| infer_inner(callee, root_args, cenv, interner))
+}
+
+fn infer_inner(
+    callee: &ValueRef,
+    root_args: Option<&[Contract]>,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Contract> {
     let group = reachable_closures(callee.clone());
     let bottoms: Vec<(Lambda, Contract)> = group
         .iter()
@@ -178,7 +224,12 @@ pub fn infer_return_fact(callee: &ValueRef, cenv: &ContractEnv, interner: &mut I
     let candidates: Vec<Candidate> = group
         .iter()
         .filter_map(|f| {
-            let args = domain_args(f, cenv)?;
+            // The root callee takes the call-site domain (when supplied); every other
+            // reachable function takes its own accepted domain.
+            let args = match root_args {
+                Some(a) if f == callee => a.to_vec(),
+                _ => domain_args(f, cenv)?,
+            };
             let produced =
                 with_hypotheses(bottoms.clone(), || summarize_instance(f, &args, cenv, interner))?.produced.erase();
             let claim = produced.generalize();

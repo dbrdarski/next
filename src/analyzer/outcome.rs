@@ -52,7 +52,10 @@ pub fn summarize_instance(
     let arg_tuple = Contract::Tuple(arg_contracts.to_vec());
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut tenv);
 
-    let a = analyze(&closure.lambda.body, &tenv, cenv, interner);
+    // Coarse by construction: recursive/non-hypothesis calls in the body resolve
+    // through the active hypotheses or `Top`, never a nested inference (the guard) — so
+    // the driver stays in control of fact-proving (§6).
+    let a = crate::analyzer::induction::without_inference(|| analyze(&closure.lambda.body, &tenv, cenv, interner));
     let completion = if a.may_complete {
         CompletionWithoutValue::UnprovenPossible
     } else {
