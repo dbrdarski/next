@@ -37,6 +37,7 @@ use crate::value::ValueRef;
 
 pub mod application;
 pub mod domain;
+pub mod inventory;
 
 #[cfg(test)]
 mod tests;

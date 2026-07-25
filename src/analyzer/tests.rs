@@ -871,3 +871,88 @@ mod application {
         assert!(matches!(seat_demand(&o, true), Verdict::Proven));
     }
 }
+
+// ── Instance-chain inventory §4a (v0.8.1, 8.1c) ───────────────────────────────
+
+mod inventory {
+    use super::{ActKind, closure, konst, name, one_param};
+    use crate::analyzer::domain::Instance;
+    use crate::analyzer::inventory::build_inventory;
+    use crate::ast::Expr;
+    use crate::interner::Interner;
+
+    /// A capture-free instance with the shape of `x => <body>`.
+    fn mk(i: &mut Interner, body: Expr) -> Instance {
+        let shape = closure(i, one_param("x"), body, ActKind::Pure).as_fn().unwrap().shape().clone();
+        Instance { shape, env: vec![] }
+    }
+
+    #[test]
+    fn ap16_mutual_recursion_hits_the_shape_cutoff() {
+        // Two shapes A, B calling each other. Seeded at A: A admits B (fresh shape),
+        // then B's call back to A is a shape-repeat on the path [A, B] — cut. Finite
+        // inventory {A, B}; no runaway despite the cycle.
+        let mut i = Interner::new();
+        let a = mk(&mut i, name("x"));
+        let z = konst(i.integer(0));
+        let b = mk(&mut i, z);
+        let (sa, sb) = (a.shape.clone(), b.shape.clone());
+        let (a2, b2) = (a.clone(), b.clone());
+        let trans = move |inst: &Instance| {
+            if inst.shape == sa {
+                vec![b2.clone()]
+            } else if inst.shape == sb {
+                vec![a2.clone()]
+            } else {
+                vec![]
+            }
+        };
+        let inv = build_inventory(vec![a.clone()], trans);
+        assert_eq!(inv.len(), 2, "exactly A and B admitted");
+        assert!(inv.contains(&a) && inv.contains(&b));
+    }
+
+    #[test]
+    fn self_recursion_admits_only_the_root() {
+        // A calls itself: the target shape is already active on [A] — cut on the
+        // first transition. Inventory {A}.
+        let mut i = Interner::new();
+        let a = mk(&mut i, name("x"));
+        let sa = a.shape.clone();
+        let a2 = a.clone();
+        let trans = move |inst: &Instance| if inst.shape == sa { vec![a2.clone()] } else { vec![] };
+        let inv = build_inventory(vec![a.clone()], trans);
+        assert_eq!(inv.len(), 1);
+        assert!(inv.contains(&a));
+    }
+
+    #[test]
+    fn nonrecursive_diamond_dedups_the_join() {
+        // A → {B, C}; B → D; C → D. No shape repeats, so all four admit; D is reached
+        // twice but appears once (projection dedup).
+        let mut i = Interner::new();
+        let a = mk(&mut i, name("x"));
+        let b0 = konst(i.integer(0));
+        let b = mk(&mut i, b0);
+        let c0 = konst(i.integer(1));
+        let c = mk(&mut i, c0);
+        let d0 = konst(i.integer(2));
+        let d = mk(&mut i, d0);
+        let (sa, sb, sc) = (a.shape.clone(), b.shape.clone(), c.shape.clone());
+        let (b2, c2, d2) = (b.clone(), c.clone(), d.clone());
+        let trans = move |inst: &Instance| {
+            if inst.shape == sa {
+                vec![b2.clone(), c2.clone()]
+            } else if inst.shape == sb || inst.shape == sc {
+                vec![d2.clone()]
+            } else {
+                vec![]
+            }
+        };
+        let inv = build_inventory(vec![a.clone()], trans);
+        assert_eq!(inv.len(), 4, "A, B, C, D each once");
+        for x in [&a, &b, &c, &d] {
+            assert!(inv.contains(x));
+        }
+    }
+}

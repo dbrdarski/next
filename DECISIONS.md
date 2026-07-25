@@ -6,6 +6,37 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-25 — Application/induction 8.1c: the instance-chain inventory (§4a)
+
+Third sub-step of the analyzer-core rebuild. New module `src/analyzer/inventory.rs`,
+3 tests. Full tree 265 lib + 111 conformance, clippy clean.
+
+- **`build_inventory`** — the admitted-instance inventory of §4a: the projection onto
+  instances of the finite state closure over `InventoryState = (instance, active
+  shape sequence)`. Seed with the root instances; from each state, enumerate call
+  transitions; a target whose shape is **not** on the active path is admitted and
+  extends the sequence; a target whose shape **is** on the path is the **cutoff** — no
+  admission through it, the induction (§6) handles the cycle at analysis time.
+- **Traversal-free / order-independent** — the closure depends on `roots` +
+  `transitions` alone, not the traversal order. A visited-set over `(instance, active
+  shapes)` bounds it; no admitted path repeats a shape, so path depth ≤ the program's
+  shape count, and the reachable instance universe is advance-bounded.
+- **Parameterized by `transitions`** — the symbolic call-target enumeration. **Chose:**
+  land the closure algorithm now, tested against synthetic transition graphs (AP-16
+  the two-shape mutual program → cutoff on the shape-repeat; self-recursion → only the
+  root admitted; a non-recursive diamond → the join deduped). Deriving `transitions`
+  from a real closure body needs μ-structure-aware callee resolution (self/group refs
+  are the μ package's internal edges), which lands with the wiring below.
+- **Owed (the §6 induction + wiring, the remaining 8.1c tail):** the μ-structure body
+  walk that yields real `transitions`; the candidate graph (§6) with SCC-ordered
+  return induction and realized-witness `(e, x, v)` refutation; §5 domain-indexed
+  facts; rewiring `analyze_apply` onto the outcome algebra; the sampled γ soundness
+  battery. Those together activate the Phase A batteries. `analyze_apply` stays the
+  sound coarse path until then.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-25 — Application/induction 8.1b: the application transfer rule §1 (outcome algebra)
 
 Second sub-step of the analyzer-core rebuild. New module `src/analyzer/application.rs`,
