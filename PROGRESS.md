@@ -11,7 +11,7 @@
 
 **Snapshot:** 2026-07-26 · **recovery Phase 1 complete** — spec-first audit
 (`NEXT-spec-audit-accepted-domains-phase1.md`); the missing mechanism is the demand core
-+ template/instance/region-table split. Build & delete gated on five author rulings (§3).
++ template/instance/region-table split. Build & delete gated on four author rulings (§3).
 
 ---
 
@@ -64,7 +64,7 @@ row below is the manifest-canonical version.
 
 ## 3. Needs design-side action
 
-**BLOCKING — five rulings gate the recovery.** The author agreed the analyzer's body
+**BLOCKING — four rulings gate the recovery.** The author agreed the analyzer's body
 safety was built in the wrong layer (`NEXT-architecture-review-accepted-domains-vs-call-site-body-safety.md`).
 Recovery Phase 1 (spec-first audit) is **done**:
 `NEXT-spec-audit-accepted-domains-phase1.md`. It finds the missing mechanism is the
@@ -74,16 +74,21 @@ Recovery Phase 1 (spec-first audit) is **done**:
 the subsumed call-site machinery) are gated on §4 of that audit:
 
 1. **Region-table computation steps** — already in C§17's owed list. The concept is
-   normative; the body→rows *procedure* is unwritten. Most load-bearing.
+   normative; the body→rows *procedure* is unwritten. Most load-bearing. App spec §3
+   (*Template instantiation*) is the same gap from the other side — it names the
+   ingredients without stating the procedure; C§12.3 likewise invokes *"the
+   regionalization law"* without stating it.
 2. **Eager or lazy?** Is `InferredAcceptedDomain` materialized once per instance as a
    contract, or the subscription set — C§13.1 calls preimage an *"optimization"*, but
    E11's `DeclaredInput ⊑ InferredAcceptedDomain` needs a comparable contract.
 3. **Empty accepted domain** at a definition — error, goes-nowhere-style lint, or silent
    (rejecting only at call sites)? Unspecified anywhere.
-4. **App spec v0.2 is absent from the repo** — v0.8 §3 delegates template-instantiation
-   detail ("As v0.2 — symbolic slots; constant extraction; regionalization; …") to it.
-5. **Grounding arc (C§10)** — the *second* source of a recursive function's domain
+4. **Grounding arc (C§10)** — the *second* source of a recursive function's domain
    (factorial's `GE(0) ∧ Mod(1,0)`, per the Phase-A grids), needed for A-NEG.
+
+*(A draft fifth ask — "app spec v0.2 is missing" — was **withdrawn**: the manifest lists
+only v0.8, and "As v0.2" is a changelog idiom meaning "unchanged since v0.2", restated in
+place where it matters. Nothing is missing from the repo.)*
 
 Otherwise:
 **Nothing else is blocking.** Earlier asks were resolved: T-10 ruled

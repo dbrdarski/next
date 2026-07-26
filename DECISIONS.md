@@ -37,12 +37,20 @@ a spec-first audit before any further code. Delivered:
   `Intersection(GreaterOrEqual(0), Mod(1, 0))`"* comes from drift/base/orbit reasoning,
   not from any operation's safety demand. The grounding arc is unbuilt; A-NEG depends on
   it.
-- **Five items owed from the author** (audit §4), gating Phase 2/3: region-table
+- **Four items owed from the author** (audit §4), gating Phase 2/3: region-table
   computation steps (already in C§17's owed list — the load-bearing one); whether
   `InferredAcceptedDomain` is eagerly materialized or a subscription set (C§13.1 calls
   preimage an *"optimization"*, E11 needs a comparable contract); empty-domain semantics
-  at a definition (unspecified anywhere); **app spec v0.2 is absent from the repo** while
-  v0.8 §3 delegates template-instantiation detail to it; and the C§10 grounding arc.
+  at a definition (unspecified anywhere); and the C§10 grounding arc.
+- **One draft ask withdrawn — my error, corrected same day [user-caught].** The draft
+  listed a fifth item, *"app spec v0.2 is absent from the repo"*. Wrong: `MANIFEST.sha256.txt`
+  lists only v0.8, so no canonical file is missing, and **"As v0.2" is a changelog idiom**
+  (*"unchanged since v0.2"*) used six times in v0.8 — where content matters it is restated
+  in place (§5 *"As v0.2: admission `I ⊆ GroundedRows(instance)`; straddles partition…"*;
+  §10 *"As v0.2, plus: `GeneralizationDomains` is extraction-rule-bounded…"*), and the
+  header records the v0.2 round as *"all integrated here"*. §3 **is** thin — its content is
+  a list of named ingredients rather than a procedure — but that is item 1 (region-table
+  computation steps), not a missing document. Folded into item 1.
 - **What survives the recovery** (per the architecture review §10, confirmed by the
   audit): instance+domain fact identity, the `segment_nullable` structural fix, fuel out
   of normative analysis, no oracle execution of user functions, correlated-alternative

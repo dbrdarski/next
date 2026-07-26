@@ -237,17 +237,31 @@ These block a faithful implementation and need the author:
 1. **Region-table computation steps — explicitly owed.** C§17's owed list literally
    contains *"region-table computation steps"*. The *concept* is normative (C§12.3,
    C§13.2, C§13.4); the *procedure* for turning a body into rows is not written. This is
-   the single most load-bearing gap.
+   the single most load-bearing gap. Application spec §3 (*Template instantiation*) is
+   the same gap seen from the other side: it **names** the ingredients — symbolic slots,
+   constant extraction, regionalization, opaque relational guards, `E × A` row
+   denotations, annotated env keys — without stating the procedure that produces rows.
+   C§12.3 likewise invokes *"the regionalization law"* by name without stating it.
 2. **Q4's eager-vs-lazy ruling** (§2 above).
 3. **Q8's empty-domain semantics** (§2 above).
-4. **A referenced text is absent from the repo.** Application spec v0.8 §3 says
-   *"Template instantiation — **As v0.2** (symbolic slots; constant extraction;
-   regionalization; opaque relational guards; E × A row denotations; annotated env
-   keys)"*. Only v0.8 is in the repo, and it delegates this section's detail to v0.2. If
-   the template-instantiation rules live there, I do not have them.
-5. **The grounding arc (C§10)** — needed for Q6's second source and for A-NEG. Also
+4. **The grounding arc (C§10)** — needed for Q6's second source and for A-NEG. Also
    listed owed in C§17 (*"§10.4's four soundness obligations"*, *"the case-6 composed
    example"*, *"mutual-recursion spec + executable examples"*).
+
+> **Withdrawn ask (recorded, 2026-07-26).** A draft of this audit listed a fifth item —
+> *"app spec v0.2 is absent from the repo; v0.8 §3 delegates template-instantiation
+> detail to it"*. **That was wrong.** `MANIFEST.sha256.txt` — the canonical library —
+> lists only `next-application-induction-specification-v0-8.md`, so no file is missing.
+> **"As v0.2" is a changelog idiom** meaning *"unchanged since v0.2"*, used six times in
+> v0.8, and where content matters it is restated in place (§5: *"As v0.2: admission
+> `I ⊆ GroundedRows(instance)`; straddles partition; verification by the partition
+> rule…"*; §10: *"As v0.2, plus: `GeneralizationDomains` is extraction-rule-bounded…"*).
+> The header confirms the v0.2 round's changes were *"all integrated here"*. §3 is
+> genuinely thin — its content is a **list of named concepts** (symbolic slots, constant
+> extraction, regionalization, opaque relational guards, `E × A` row denotations,
+> annotated env keys) rather than a procedure — but that thinness **is** item 1
+> (region-table computation steps, owed in C§17), not a missing document. Folded into
+> item 1; the ask count is four.
 
 ---
 
