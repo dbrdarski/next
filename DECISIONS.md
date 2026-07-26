@@ -6,6 +6,52 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Archive8: the InstanceBodySummary unification — (instance, input-domain) body analysis
+
+Archive(8) confirmed the Archive7 fixes but found `SAFETY_STACK` keyed by `Lambda`
+**shape** reintroduces the identity mistake already fixed for return facts, plus two
+more gaps. Fixed by making the unit of interprocedural body analysis the **(instance,
+input-domain)** node — the unification the reviews have pointed at for rounds. Full tree
+318 lib + 111 conformance, clippy clean.
+
+- **`instance_body_summary(callee, args) → InstanceBodySummary { produced, completion,
+  findings }`** [mandated — Archive8 §10]. One analysis of an `(instance, input-domain)`
+  node, **shared** by safety, completion, and the non-recursive return, replacing the
+  three separate body walks + `SAFETY_STACK`. Nested applications recurse through
+  `analyze → analyze_apply → instance_body_summary`, following the actual edges.
+- **Identity is the concrete instance + domain, never shape** [Archive8 §3–§5]. The
+  cycle stack is `Vec<(ValueRef, Vec<Contract>)>`. Fixes: **A** — `make(bad)` vs
+  `make(b)` (same shape, different captures) are distinct nodes, not cut off; **B** —
+  `f(0)` recursing to `f("x")` is analyzed over `[String]` (where `x+1` traps), not cut
+  by a shape/instance match. Termination without a magic bound: an exact
+  `(instance, domain)` cycle returns the assumption (a cycle adds no new *direct* trap);
+  the **same instance** re-entered over a *finer* domain **generalizes to Kinds** and
+  re-enters (`f(5)→f(4)→…→f(Number)`), so the abstract node stabilizes — a diverging
+  `loop()` is analyzed once, never run.
+- **Multi-alternative callees** [Archive8 §6]. `analyze_apply` enumerates every live
+  `Equals(cv)` alternative of the callee contract (a singleton or a `Union` —
+  `b ? bad : good`) and summarizes each over the actual args; results join. So a union
+  callee's trapping alternative can no longer bypass safety.
+- **Non-recursive return is the body's exact contract** [Archive8 §8/§11.4]. A callee's
+  return is `instance_body_summary(...).produced` (exact) when non-recursive
+  (`always() → Equals(true)`, not the generalized `Boolean`), so a return-dependent dead
+  branch (`always() ? 1 : 1+"x"`) is pruned; recursive returns still use the induction
+  (`call_return`) to sharpen the coarse cycle assumption (`is_recursive` gates the two).
+- **Verified — the §11 gate:** same-shape/different-captures (A) → reject;
+  same-instance/different-domain (B) → reject; multi-callee (C) → reject;
+  return-dependent safe (D) → accept; the Archive6/7 body-safety + dead-arm tests
+  unchanged. One driver test **improved**: a non-recursive dependency (`quad` over
+  `double`) now resolves `double(n) → Number` directly (no reverse-topo needed for
+  non-recursive deps; the mutual even/odd test still exercises the driver).
+- **`// [ask-author]`:** none. Owed toward the *full* merge: the **recursive** return is
+  still the separate induction rather than computed inside the summary's cycle
+  resolution (so a recursive callee's `summary.produced` is coarse, sharpened at the call
+  site) — folding the induction into the SCC-closed summary, plus `may_not_complete` and
+  a memo/cache, are the remaining unification steps. `group_domains`/same-arity
+  propagation now lives only in `infer_inner`, still interim.
+
+---
+
 ## 2026-07-26 — Archive7 correction: body safety over actual call edges + dead-arm elimination
 
 Archive(7) confirmed the oracle-execution removal but found the Archive6 `body_safety`

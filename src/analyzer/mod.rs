@@ -565,51 +565,83 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         return Analysis::produced(Contract::Bottom, findings);
     }
 
-    // With a known callee value, check its act-kind and parameter obligation, and
-    // surface **interprocedural body-safety** traps — the callee body's (and its
-    // transitive callees') proven traps, replacing the closed-call oracle fold so static
-    // analysis never executes a user function (Archive6 §8/§9).
-    if let Contract::Equals(cv) = &cc {
-        analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
-        if !has_spread {
-            findings.extend(induction::body_safety(cv, &arg_contracts, cenv, interner));
+    // Enumerate the **live callee alternatives** (Archive8 §6): a single `Equals(cv)` or
+    // a `Union` of them (`b ? bad : good`). Each is analyzed over the actual argument
+    // domain through its `(instance, input-domain)` body summary, then the results join —
+    // so a union callee cannot bypass safety, and each alternative's body is checked over
+    // the domain its own call edge carries.
+    let callees = callee_alternatives(&cc);
+    let (contract, completion) = if callees.is_empty() {
+        (Contract::Top, Completion::Produces) // unknown callee — return not derivable yet (owed)
+    } else {
+        let mut produced: Vec<Contract> = Vec::new();
+        let mut completions: Vec<Completion> = Vec::new();
+        for cv in &callees {
+            analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
+            if has_spread {
+                produced.push(Contract::Top);
+                completions.push(Completion::Produces);
+                continue;
+            }
+            let summary = induction::instance_body_summary(cv, &arg_contracts, cenv, interner);
+            findings.extend(summary.errors());
+            completions.push(callee_completion(cv, &summary));
+            // A recursive/mutual return needs the induction (`call_return` sharpens the
+            // coarse cycle assumption); a non-recursive return is its body's **exact**
+            // contract, so `always() → Equals(true)` (not the generalized `Boolean`) and
+            // the dependent guard's dead branch is pruned (Archive8 §8/§11.4).
+            produced.push(if induction::is_recursive(cv) {
+                call_return(cv, &arg_contracts, has_spread, cenv, interner)
+            } else {
+                summary.produced
+            });
         }
-    }
-    // Completion (E10): the callee's body may complete without a value (a partial Match,
-    // or a mutator whose return is discarded), which an expecting seat then demands
-    // against. Unknown callee: not derivable yet (owed) — assume it produces.
-    let completion = match &cc {
-        Contract::Equals(cv) => callee_completion(cv, &arg_contracts, has_spread, cenv, interner),
-        _ => Completion::Produces,
-    };
-    // The callee's return contract (§6 / C§13.2): an active induction hypothesis if
-    // inside a driver pass; else the return fact inferred over the call-site arguments;
-    // else coarse `Top`.
-    let contract = match &cc {
-        Contract::Equals(cv) => call_return(cv, &arg_contracts, has_spread, cenv, interner),
-        _ => Contract::Top,
+        (union_of(produced), join_completions(&completions))
     };
     Analysis { contract, findings, completion }
 }
 
-/// The callee's body completion (E10) at a call site: a **mutator** discards its return
-/// (always completes without a value — proven by law); a pure/effect callee inherits
-/// its body's completion, summarized coarsely over the call-site arguments. A spread
-/// call or a non-closure callee is treated as producing (not derivable yet — owed).
-fn callee_completion(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool, cenv: &ContractEnv, interner: &mut Interner) -> Completion {
-    let Some(closure) = cv.as_closure() else { return Completion::Produces };
-    if matches!(closure.lambda.act_kind, ActKind::Mutator) {
+/// The callee's completion (E10) at a call site, from its body summary: a **mutator**
+/// discards its return (always completes without a value — proven by law); a pure/effect
+/// callee inherits its body summary's completion.
+fn callee_completion(cv: &ValueRef, summary: &induction::InstanceBodySummary) -> Completion {
+    if cv.as_closure().is_some_and(|c| matches!(c.lambda.act_kind, ActKind::Mutator)) {
         return Completion::FallsThrough; // the return is discarded — always without a value
     }
-    // Coarse (assume it produces) during fact-proving or on a spread call: `analyze_
-    // instance_body` re-enters `analyze` (hence `callee_completion`), so a recursive
-    // callee would recurse without the guard — the same bound `call_return` uses.
-    if has_spread || induction::currently_inferring() {
-        return Completion::Produces;
+    summary.completion
+}
+
+/// The live callee alternatives of a callee contract: a singleton `Equals(cv)` (a known
+/// function), or a `Union` of them (`b ? bad : good`). Non-function / non-singleton
+/// leaves contribute nothing (their safety/return are not derivable — the caller then
+/// coarsens, sound).
+fn callee_alternatives(cc: &Contract) -> Vec<ValueRef> {
+    let mut out = Vec::new();
+    fn go(c: &Contract, out: &mut Vec<ValueRef>) {
+        match c {
+            Contract::Equals(v) if v.is_function() => out.push(v.clone()),
+            Contract::Union(a, b) => {
+                go(a, out);
+                go(b, out);
+            }
+            _ => {}
+        }
     }
-    crate::analyzer::outcome::analyze_instance_body(cv, arg_contracts, cenv, interner)
-        .map(|a| a.completion)
-        .unwrap_or(Completion::Produces)
+    go(cc, &mut out);
+    out
+}
+
+/// Join the completions of a union of callees (E10 / §1.7): a **proven** fall-through in
+/// any alternative dominates (the represented execution may complete without a value);
+/// else a **possible** one; else every alternative produces.
+fn join_completions(cs: &[Completion]) -> Completion {
+    if cs.iter().any(|c| matches!(c, Completion::FallsThrough)) {
+        Completion::FallsThrough
+    } else if cs.iter().any(|c| matches!(c, Completion::MayFallThrough)) {
+        Completion::MayFallThrough
+    } else {
+        Completion::Produces
+    }
 }
 
 /// The inferred return contract for a call to the known closure `cv` over

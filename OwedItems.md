@@ -106,21 +106,24 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      **DONE [Archive6, 2026-07-26]** — `analyze_apply`'s closed-call `eval_expr` fold
      removed; the analyzer no longer executes a user function (diverging `loop()` is
      analyzed, not run).
-   - ~~**`body_safety` used syntactic reachable-closures + propagated domains (unsound)**~~
-     **FIXED [Archive7, 2026-07-26]** — Archive7 found the Archive6 walk unsound (missed
-     parameter/local callees; wrong domain). Rewritten to follow **actual abstract call
-     edges** (`SAFETY_STACK` cutoff — a param callee is resolved from the value, each
-     callee checked over its edge domain); + `analyze_match` **dead-arm elimination** for
-     the paired false rejection. §11 adversarial gate green. Remaining refinements
-     (precision/architecture, not soundness):
-     - **Warning-severity interprocedural propagation** — `body_safety` surfaces only
-       Error (proven) findings; a callee's *unproven*-safety warnings stay local. Sound;
-       a diagnostic gap.
-     - **`InstanceBodySummary` unification** — thread findings through `ApplicationOutcome`
-       (`summarize_instance` still drops them) so return facts, completion, and safety
-       share one (instance, input-domain) node over the SCC machinery, instead of
-       `body_safety` re-analyzing bodies separately (folds the repeated per-call-site
-       analysis into the C§13.4 cache). The forward path Archive7 §10 recommends.
+   - ~~**`body_safety` used syntactic reachable-closures / a shape-keyed cutoff (unsound)**~~
+     **FIXED [Archive7 → Archive8, 2026-07-26]** — Archive7 moved to actual call edges;
+     Archive8 found the `SAFETY_STACK` shape key still unsound (same-shape/different
+     captures; same-instance/different domain) + multi-callee bypass + return-fact
+     erasure. Now the **InstanceBodySummary unification**: `instance_body_summary` keyed
+     by `(instance, input-domain)`, safety + completion + non-recursive return in one
+     node; instance identity (not shape) with domain-generalization cutoff; multi-callee
+     enumeration; exact non-recursive returns. §11 (A/B/C/D) green. Remaining refinements
+     (not soundness):
+     - **Recursive return not yet in the summary** — a recursive callee's
+       `summary.produced` is the coarse cycle assumption (`Top`), sharpened at the call
+       site by the separate induction (`call_return`). Folding the induction into the
+       SCC-closed summary is the final merge step.
+     - **`may_not_complete` + memo/cache** — `InstanceBodySummary` carries `{produced,
+       completion, findings}`, not yet `may_not_complete`; and there is no memo, so a node
+       may be re-analyzed per call site (into the C§13.4 cache).
+     - **Warning-severity interprocedural propagation** — only Error (proven) findings
+       surface; a callee's unproven-safety warnings stay local. Sound; diagnostic gap.
      - **Neutral `semantics::*` re-homing** — `eval_prim` and `eval_expr`-on-`Const`-access
        are finite and shared with the oracle; move the laws into a neutral kernel so the
        analyzer isn't "asking the oracle" (naming/architecture, not soundness).

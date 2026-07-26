@@ -1570,21 +1570,19 @@ mod driver {
     }
 
     #[test]
-    fn a_dependent_proves_only_after_its_dependency() {
+    fn a_dependent_and_its_nonrecursive_dependency_both_prove() {
         let (double, quad) = double_quad();
         let mut i = Interner::new();
 
-        // Alone, `quad : Number` is NOT provable — with no fact for `double`, the call
-        // `double(n)` coarsens to `Top`, so `double(n) + double(n)` is not ⊑ Number.
-        assert!(
-            !joint_vector_pass(&[cand(quad.clone(), num())], &cenv(), &mut i),
-            "quad is unprovable without double's fact"
-        );
+        // `double` is non-recursive, so its body summary resolves `double(n) → Number`
+        // directly (Archive8 unification); `quad`'s body `double(n) + double(n)` is thus
+        // Number, and quad proves — no reverse-topo hypothesis-carrying needed for a
+        // non-recursive dependency (that path is exercised by the mutual even/odd test).
+        assert!(joint_vector_pass(&[cand(quad.clone(), num())], &cenv(), &mut i), "quad : Number via direct double");
 
-        // The driver settles `double` first (reverse-topological order) and carries
-        // `double : Number` as a hypothesis into `quad`'s pass — so both close.
+        // The multi-SCC driver still proves the whole set.
         let r = prove_facts(vec![cand(double, num()), cand(quad, num())], &cenv(), &mut i);
-        assert_eq!(r.proven.len(), 2, "double AND quad proven once ordering carries the fact");
+        assert_eq!(r.proven.len(), 2, "double AND quad proven");
         assert!(r.unproven.is_empty());
     }
 
@@ -2050,5 +2048,59 @@ mod body_safety {
             &[],
         );
         assert!(a.accepted(), "helper(0)'s bad branch is dead — no false trap: {:?}", a.findings);
+    }
+
+    // ── Archive8 §11 — (instance, input-domain) identity + multi-callee + return facts ─
+
+    #[test]
+    fn same_shape_different_captures_are_not_cut_off() {
+        // §11.1: b = make(bad), c = make(b) share the inner Lambda shape but capture
+        // different values. c() → b() → bad() traps. Keying the cutoff by *instance*
+        // (not shape) must analyze b's capture-dependent body.
+        let mut i = Interner::new();
+        let c = run_source_in(
+            "bad = () => 1 + \"x\"\nmake = (f) => () => f()\nb = make(bad)\nc = make(b)\nc",
+            &mut i,
+        )
+        .unwrap()
+        .0;
+        let mut env = empty();
+        env.insert("c".into(), Contract::Equals(c));
+        let a = analyze(&apply(name("c"), vec![]), &env, &nc(), &mut i);
+        assert!(!a.accepted(), "c() → b() → bad() traps: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_recursive_call_over_a_new_domain_is_analyzed() {
+        // §11.2: f(0) recurses to f("x"); over String, `x + 1` traps. Keying by
+        // (instance, domain) — not shape/instance alone — must analyze the String edge.
+        let mut i = Interner::new();
+        let f = run_source_in("f = (x) => x == 0 ? f(\"x\") : x + 1\nf", &mut i).unwrap().0;
+        let mut env = empty();
+        env.insert("f".into(), Contract::Equals(f));
+        let zero = i.integer(0);
+        let a = analyze(&apply(name("f"), vec![konst(zero)]), &env, &nc(), &mut i);
+        assert!(!a.accepted(), "f(0) → f(\"x\") → \"x\" + 1 traps: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_multiple_callee_alternative_trap_is_rejected() {
+        // §11.3: (b ? bad : good)() — the callee is Union(Equals(bad), Equals(good)); the
+        // bad alternative must be inspected, not bypassed as a non-singleton callee.
+        let a = analyze_call(
+            "bad = () => 1 + \"x\"\ngood = () => 1\nroot = (b) => (b ? bad : good)()\nroot",
+            "root",
+            &[("c", Contract::Kind(Kind::Boolean))],
+        );
+        assert!(!a.accepted(), "the bad alternative traps: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_return_dependent_safe_path_is_accepted() {
+        // §11.4: always() returns true, so `always() ? 1 : 1 + "x"`'s bad branch is dead.
+        // The callee's *exact* non-recursive return (Equals(true), not generalized
+        // Boolean) must be preserved for the dead-arm to fire.
+        let a = analyze_call("always = () => true\nroot = () => always() ? 1 : 1 + \"x\"\nroot", "root", &[]);
+        assert!(a.accepted(), "always() = true kills the bad branch: {:?}", a.findings);
     }
 }
