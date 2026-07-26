@@ -376,14 +376,14 @@ pub fn instance_body_summary(
     }
     ACTIVE_BODIES.with(|s| s.borrow_mut().push(key));
     let out = match analyze_instance_body(callee, &args, cenv, interner) {
+        // **A widened domain may not refute the narrower call** (Archive9 §6–§8,
+        // Archive10 §6–§9): evidence found only after widening need not have a witness
+        // represented in the demanded domain (`f(1)` widened to `Number` reaches a branch
+        // `Equals(1)` never takes). **Both** existential channels obey this — a proven
+        // trap *and* a proven fall-through — so each drops to the third voice.
         Some(a) => InstanceBodySummary {
             produced: a.contract,
-            completion: a.completion,
-            // **A widened domain may not refute the narrower call** (Archive9 §6–§8):
-            // the trap it finds need not have a witness represented in the demanded
-            // domain (`f(1)` widened to `Number` reaches a branch `Equals(1)` never
-            // takes). Such findings are downgraded to the third voice — never dropped
-            // silently, never a refutation.
+            completion: if widened { downgrade_completion(a.completion) } else { a.completion },
             findings: if widened { downgrade(a.findings) } else { a.findings },
         },
         None => InstanceBodySummary::top(),
@@ -395,21 +395,41 @@ pub fn instance_body_summary(
 }
 
 /// Whether every position of `args` is drawn from the **finite admitted basis** for this
-/// callee: a `Kind`/`Top`/`Bottom`/`Indeterminate` leaf, or an `Equals(v)` whose value
-/// belongs to the program's literal vocabulary ([`literal_values`]). Computed forms
-/// (`Range`, `Mod`, `Geo`, `Concat`, …) and computed singletons are **not** admitted —
-/// they could form an unbounded chain, so a recursive edge carrying one is widened.
+/// callee: an **atom** — a `Kind`/`Top`/`Bottom`/`Indeterminate` leaf, or an `Equals(v)`
+/// whose value belongs to the program's literal vocabulary ([`literal_values`]).
+/// Everything else (computed forms like `Range`/`Mod`/`Concat`, computed singletons,
+/// **and unions**) is not admitted: a recursive edge carrying one is widened instead.
+///
+/// **Unions are deliberately excluded** [Archive10 §11–§12]. Admitting them recursively
+/// (`Union(admitted, admitted)`) does *not* keep the key space finite, because contract
+/// keys are compared **structurally** and `union_of` neither flattens nor deduplicates:
+/// `Equals(0)`, `Union(E0,E0)`, `Union(Union(E0,E0),E0)`, … are infinitely many distinct
+/// keys over a single literal, so `f = (x, b) => f(b ? x : 0, b)` never repeated a key
+/// and never widened (verified: it overflowed the stack). With atoms only, the admitted
+/// set per position is bounded by `|literals| + |Kinds| + 3`, so the exact state universe
+/// really is finite in advance. Restoring union precision needs a **canonical** union
+/// normal form (flatten/dedup/order) before it can be a key — Archive10's Option B.
 fn domain_admitted(callee: &ValueRef, args: &[Contract]) -> bool {
     let literals = literal_values(callee);
-    fn ok(c: &Contract, literals: &[ValueRef]) -> bool {
-        match c {
-            Contract::Kind(_) | Contract::Top | Contract::Bottom | Contract::Indeterminate(_) => true,
-            Contract::Equals(v) => literals.contains(v),
-            Contract::Union(a, b) => ok(a, literals) && ok(b, literals),
-            _ => false,
-        }
+    args.iter().all(|c| match c {
+        Contract::Kind(_) | Contract::Top | Contract::Bottom | Contract::Indeterminate(_) => true,
+        Contract::Equals(v) => literals.contains(v),
+        _ => false,
+    })
+}
+
+/// A widened body's **completion** obeys the same evidence direction as its findings
+/// (Archive10 §7–§9): a fall-through proved only over the broader domain may live
+/// entirely in `D_broad ∖ D_narrow`, so it cannot refute the demanded state at an
+/// expecting seat. `FallsThrough` (existential, refuting) drops to `MayFallThrough`
+/// (the third voice); `Produces` and `MayFallThrough` are unaffected — a universal
+/// "every path produces" over a *larger* domain still holds on any subset.
+fn downgrade_completion(c: crate::analyzer::Completion) -> crate::analyzer::Completion {
+    use crate::analyzer::Completion;
+    match c {
+        Completion::FallsThrough => Completion::MayFallThrough,
+        other => other,
     }
-    args.iter().all(|c| ok(c, &literals))
 }
 
 /// Downgrade proven findings to the third voice — a widened-domain trap is *unproven*

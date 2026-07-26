@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-26 · Archive9 — finite admitted-domain basis (advance-bounded termination), total callee-alternative enumeration, widened-domain refutation bar.
+**Snapshot:** 2026-07-26 · Archive10 small corrections (termination, completion variance, inhabitance) · **design question raised**: `NEXT-implementation-finding-accepted-domains.md`.
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **322 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **323 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -62,6 +62,9 @@ row below is the manifest-canonical version.
 
 ## 3. Needs design-side action
 
+**ONE OPEN ASK (new, 2026-07-26):** `NEXT-implementation-finding-accepted-domains.md` — is E11's **InferredAcceptedDomain** (body-derived accepted domains) the intended mechanism for body safety? The implementation instead propagates callee-body traps per call site, which is where the recurring Archive(6)–(10) blockers come from. Larger Archive(10) recommendations are held pending the ruling.
+
+Otherwise:
 **Nothing is blocking.** All recent asks were resolved this cycle: T-10 ruled
 (guard-based, implemented + now in the canonical §4); open-value observation ruled
 Option A (implemented incidentally); A-WRK RECOVER discharged (grids recovered).
@@ -200,4 +203,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-26 | `37dbf6e` | Archive6 §8/§9: interprocedural `body_safety` (direct + transitive traps, errors-only) + remove the closed-call `eval_expr` fold; 7-test gate incl. diverging `loop()` terminates | “Archive6 §8/§9: interprocedural body safety” |
 | 2026-07-26 | `bd99ca0` | Archive7 correction: `body_safety` over actual call edges (`SAFETY_STACK` cutoff — param callees, edge domains) + `analyze_match` dead-arm elimination; §11 adversarial gate | “Archive7 correction: body safety over actual call edges” |
 | 2026-07-26 | `c3bb5ca` | Archive8: InstanceBodySummary unification — `instance_body_summary` keyed by `(instance, input-domain)`, multi-callee enumeration, exact non-recursive returns; §11 gate (A/B/C/D) | “Archive8: the InstanceBodySummary unification” |
-| 2026-07-26 | (this) | Archive9: finite admitted-domain basis (`domain_admitted` + `kind_abstraction`) → advance-bounded termination; widened findings downgraded; total `CalleeAlt` enumeration; §17 gate | “Archive9: the finite admitted-domain basis” |
+| 2026-07-26 | `e81c1f7` | Archive9: finite admitted-domain basis (`domain_admitted` + `kind_abstraction`) → advance-bounded termination; widened findings downgraded; total `CalleeAlt` enumeration; §17 gate | “Archive9: the finite admitted-domain basis” |
+| 2026-07-26 | (this) | Archive10 small corrections: atoms-only admitted domains (termination, verified overflow), widened-completion downgrade, `NotAFunction` inhabitance; **design question raised** (accepted domains) | “Archive10 small corrections + a design question raised” |

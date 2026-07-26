@@ -559,7 +559,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
     // union callee can neither bypass safety nor be sharpened from its known branch
     // alone. Each known alternative is analyzed over the actual argument domain through
     // its `(instance, input-domain)` body summary.
-    let callees = callee_alternatives(&cc);
+    let callees = callee_alternatives(&cc, interner);
     let (contract, completion) = if callees.is_empty() {
         (Contract::Top, Completion::Produces) // no live alternative (proven empty)
     } else {
@@ -567,13 +567,16 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         let mut completions: Vec<Completion> = Vec::new();
         for alt in &callees {
             match alt {
-                // Provably not callable — a represented execution traps.
-                CalleeAlt::NotAFunction => {
-                    findings.push(Finding {
-                        class: TrapClass::OperationSafety,
-                        severity: Severity::Error,
-                        message: "callee is not a function".into(),
-                    });
+                // Not callable. A **represented** inhabitant refutes; an alternative whose
+                // inhabitance is unproven stays the third voice (Archive10 §14–§16).
+                // Either way it produces no value, so it contributes `Bottom`.
+                CalleeAlt::NotAFunction { inhabited } => {
+                    let (severity, message) = if *inhabited {
+                        (Severity::Error, "callee is not a function")
+                    } else {
+                        (Severity::Warning, "callee may not be a function (no represented inhabitant to confirm)")
+                    };
+                    findings.push(Finding { class: TrapClass::OperationSafety, severity, message: message.into() });
                     produced.push(Contract::Bottom);
                     completions.push(Completion::Produces);
                 }
@@ -635,8 +638,11 @@ enum CalleeAlt {
     /// Possibly a function, origin coarsened away (`Kind(Function)`, `Top`, an open
     /// `Ref`) — contributes a conservative outcome, never a sharpening.
     UnknownFunction,
-    /// Provably **not** a function — calling it traps operation-safety.
-    NotAFunction,
+    /// Provably **not** a function — an inhabitant of it would trap operation-safety.
+    /// `inhabited` records whether such an inhabitant is *represented*: disjointness
+    /// proves what happens **if** a value exists, never that one **does** (Archive10
+    /// §14–§16). Only a represented inhabitant may refute.
+    NotAFunction { inhabited: bool },
 }
 
 /// The live callee alternatives of a callee contract, **totally** classified: a
@@ -645,21 +651,26 @@ enum CalleeAlt {
 /// represented execution). Every other live leaf contributes, so a union mixing a known
 /// function with a non-function (`b ? good : 1`) or with an unknown function cannot lose
 /// the non-`Known` alternative (Archive9 §10/§11).
-fn callee_alternatives(cc: &Contract) -> Vec<CalleeAlt> {
-    fn go(c: &Contract, out: &mut Vec<CalleeAlt>) {
+fn callee_alternatives(cc: &Contract, interner: &mut Interner) -> Vec<CalleeAlt> {
+    fn go(c: &Contract, out: &mut Vec<CalleeAlt>, interner: &mut Interner) {
         match c {
             Contract::Union(a, b) => {
-                go(a, out);
-                go(b, out);
+                go(a, out, interner);
+                go(b, out, interner);
             }
             Contract::Bottom => {} // proven empty — no represented execution
             Contract::Equals(v) if v.is_function() => out.push(CalleeAlt::Known(v.clone())),
-            _ if disjoint(c, &Contract::Kind(Kind::Function)) => out.push(CalleeAlt::NotAFunction),
+            // Not callable. Refuting demands a *represented* inhabitant: an empty leaf
+            // that is not syntactically `Bottom` (`Intersection(Number, String)`, which
+            // narrowing can build) denotes no execution at all, so it must not refute.
+            _ if disjoint(c, &Contract::Kind(Kind::Function)) => {
+                out.push(CalleeAlt::NotAFunction { inhabited: c.has_proven_inhabitant(interner) });
+            }
             _ => out.push(CalleeAlt::UnknownFunction),
         }
     }
     let mut out = Vec::new();
-    go(cc, &mut out);
+    go(cc, &mut out, interner);
     out
 }
 

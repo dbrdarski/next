@@ -6,6 +6,67 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Archive10 small corrections + a design question raised (body safety is in the wrong layer)
+
+Two parts: three **small** corrections from Archive(10), and — prompted by a reader's
+question — a **finding raised to the author** that the mechanism those corrections
+maintain is not the one the documents specify. Full tree 323 lib + 111 conformance,
+clippy clean.
+
+**The corrections** (each tightens or *shrinks* the mechanism; none grows it):
+
+- **Termination [§11–§13] — my finiteness argument was invalid, verified.** I claimed
+  the exact-domain state space was finite because the *literal vocabulary* is finite. But
+  contract keys compare **structurally** and `union_of` never flattens/dedups, so
+  `Equals(0)`, `Union(E0,E0)`, `Union(Union(E0,E0),E0)`, … are infinitely many distinct
+  keys over one literal. I built the reviewer's counterexample
+  (`f = (x, b) => f(b ? x : 0, b)`) before acting on the claim: **stack overflow**. Fixed
+  by Archive10's Option A — `domain_admitted` accepts **atoms only** (Kind / Top / Bottom
+  / Indeterminate / `Equals(program literal)`), so a union widens on the first recursive
+  edge and the space per position is bounded by `|literals| + |Kinds| + 3`. Now
+  terminates in 0.00s; kept as a permanent regression. (Union *precision* would need a
+  canonical union normal form before a union can be a key — Option B, not done.)
+- **Completion variance [§6–§9].** I had downgraded widened-domain *findings* but not
+  *completion* — the same variance argument applies to both existential channels, so a
+  fall-through provable only in `D_broad ∖ D_narrow` could still refute at an expecting
+  seat. `downgrade_completion`: `FallsThrough → MayFallThrough` when widened; `Produces`
+  and `MayFallThrough` unaffected (a universal over a superset still holds on a subset).
+- **Inhabitance [§14–§16].** `NotAFunction { inhabited }` — *disjointness proves what
+  happens **if** a value exists, never that one **does***. A proven inhabitant refutes
+  (Error); an empty-but-not-`Bottom` leaf (`Intersection(Number, String)`, which
+  narrowing can build) now warns instead of manufacturing a refutation.
+
+**The finding — `NEXT-implementation-finding-accepted-domains.md` [ask-author].**
+A reader asked why `bad = () => 1 + "x"` needs call-site machinery at all: it traps
+unconditionally, so it should simply not compile. Measured: `analyze(() => 1 + "x")` →
+`accepted, findings=[], contract=Top` — `Expr::Lambda` hits the catch-all and the body is
+**never analyzed at its definition**. That is why five rounds have been about propagating
+traps outward from call sites.
+
+But E11 (*"DeclaredInput ⊑ **InferredAcceptedDomain** … every demand **the body
+derives**"*), C§12.1 (*"the body's domain"*) and E3 (*"**body-derived domain**"*) specify a
+different mechanism: analyze each body **once** to derive the inputs it is safe for, then
+check calls against that. Under it `() => 1 + "x"` has an *empty* accepted domain and dies
+at its definition, while `(x) => x + 1` keeps a perfectly good definition and only
+`f("hello")` is rejected — the case that genuinely needs call-site reasoning.
+`obligation.rs::accepted_domain` derives from the **parameter pattern only**; the
+`InferredAcceptedDomain` E11 names does not exist here.
+
+**Why it matters:** Archive(10)'s two structural blockers are artifacts of the layer, not
+of NEXT — widened-domain evidence exists only because a body is re-analyzed under a
+domain other than the one demanded, and advance-bounded domain universes exist only
+because call-site domains form a chain. Analyzing a body once removes both. (The
+recursive fixpoint does *not* vanish, but it becomes one lattice element per function —
+the SCC/hypothesis machinery already built and already terminating — rather than a body
+walk per call-site domain.)
+
+**Therefore:** the larger Archive(10) recommendations (canonical union basis,
+preconstructed candidate-domain inventory, full witness plumbing) are **deliberately not
+done**, pending the author's ruling. Continuing to scaffold the mechanism without one
+would be filling silently (CLAUDE.md rule 3).
+
+---
+
 ## 2026-07-26 — Archive9: the finite admitted-domain basis + total alternative enumeration
 
 Archive(9) approved the `InstanceBodySummary` unification but found three blockers: a

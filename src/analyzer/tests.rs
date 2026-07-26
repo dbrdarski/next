@@ -2201,3 +2201,20 @@ mod recursive_domains {
         let _ = a.accepted();
     }
 }
+
+#[test]
+fn a_growing_union_recursive_domain_terminates() {
+    // Archive10 §11–§12: `f = (x, b) => f(b ? x : 0, b)` grows the first argument's
+    // contract structurally — Equals(0) → Union(E0,E0) → Union(Union(E0,E0),E0) → … —
+    // all built from one admitted literal. Admitting unions exactly made every one a
+    // distinct `(instance, domain)` key, so widening never fired and the walk overflowed
+    // the stack. Atoms-only admission widens at the first union, so this terminates.
+    let mut i = Interner::new();
+    let f = crate::oracle::run_source_in("f = (x, b) => f(b ? x : 0, b)\nf", &mut i).unwrap().0;
+    let mut env = empty();
+    env.insert("f".into(), Contract::Equals(f));
+    env.insert("k".into(), Contract::Equals(i.integer(0)));
+    env.insert("c".into(), Contract::Kind(Kind::Boolean));
+    let a = analyze(&apply(name("f"), vec![name("k"), name("c")]), &env, &nc(), &mut i);
+    let _ = a.accepted(); // the assertion is that analysis terminated at all
+}
