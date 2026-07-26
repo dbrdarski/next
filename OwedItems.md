@@ -104,18 +104,23 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      exec / canon / equality / proof / verdicts.
    - ~~**Analyzer executes user functions via `eval_expr` for closed-call folding**~~
      **DONE [Archive6, 2026-07-26]** — `analyze_apply`'s closed-call `eval_expr` fold
-     removed; `induction::body_safety` surfaces the callee body's (and transitive
-     callees') **Error** findings interprocedurally; the analyzer no longer executes a
-     user function (diverging `loop()` is analyzed, not run). Remaining refinements
+     removed; the analyzer no longer executes a user function (diverging `loop()` is
+     analyzed, not run).
+   - ~~**`body_safety` used syntactic reachable-closures + propagated domains (unsound)**~~
+     **FIXED [Archive7, 2026-07-26]** — Archive7 found the Archive6 walk unsound (missed
+     parameter/local callees; wrong domain). Rewritten to follow **actual abstract call
+     edges** (`SAFETY_STACK` cutoff — a param callee is resolved from the value, each
+     callee checked over its edge domain); + `analyze_match` **dead-arm elimination** for
+     the paired false rejection. §11 adversarial gate green. Remaining refinements
      (precision/architecture, not soundness):
      - **Warning-severity interprocedural propagation** — `body_safety` surfaces only
-       Error (proven) findings; a callee's *unproven*-safety warnings stay local (coarser
-       diagnostics). Sound; a diagnostic gap.
+       Error (proven) findings; a callee's *unproven*-safety warnings stay local. Sound;
+       a diagnostic gap.
      - **`InstanceBodySummary` unification** — thread findings through `ApplicationOutcome`
-       (`summarize_instance` still drops them) so the SCC driver reasons over
-       `{produced, completion, may_not_complete, findings}` as one summary, instead of
-       `body_safety` re-walking the group separately (also removes the repeated body
-       analysis per call site — folds into the C§13.4 cache).
+       (`summarize_instance` still drops them) so return facts, completion, and safety
+       share one (instance, input-domain) node over the SCC machinery, instead of
+       `body_safety` re-analyzing bodies separately (folds the repeated per-call-site
+       analysis into the C§13.4 cache). The forward path Archive7 §10 recommends.
      - **Neutral `semantics::*` re-homing** — `eval_prim` and `eval_expr`-on-`Const`-access
        are finite and shared with the oracle; move the laws into a neutral kernel so the
        analyzer isn't "asking the oracle" (naming/architecture, not soundness).

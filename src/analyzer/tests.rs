@@ -1937,7 +1937,7 @@ mod fact_identity {
 // ── Interprocedural body safety — replaces the closed-call oracle fold (Archive6) ──
 
 mod body_safety {
-    use super::{Analysis, analyze, apply, empty, name, nc};
+    use super::{Analysis, analyze, apply, empty, konst, name, nc};
     use crate::contract::{Contract, Kind};
     use crate::interner::Interner;
     use crate::oracle::run_source_in;
@@ -2014,5 +2014,41 @@ mod body_safety {
         // evidence the oracle-execution coupling is gone. No trap (divergence ≠ trap).
         let a = analyze_call("loop = () => loop()\nloop", "loop", &[]);
         assert!(a.accepted(), "divergence is not a trap: {:?}", a.findings);
+    }
+
+    // ── Archive7 §11 — the actual-call-edge adversarial cases ─────────────────────
+
+    #[test]
+    fn a_parameter_callee_trap_is_rejected() {
+        // §11.1: `bad` is passed as a PARAMETER (not a capture), so a syntactic
+        // reachable-closure walk misses it. The actual-edge walk resolves `f = bad` from
+        // the argument value and surfaces bad's body trap.
+        let mut i = Interner::new();
+        let bad = run_source_in("bad = () => 1 + \"x\"\nbad", &mut i).unwrap().0;
+        let invoke = run_source_in("invoke = (f) => f()\ninvoke", &mut i).unwrap().0;
+        let mut env = empty();
+        env.insert("invoke".into(), Contract::Equals(invoke));
+        let a = analyze(&apply(name("invoke"), vec![konst(bad)]), &env, &nc(), &mut i);
+        assert!(!a.accepted(), "invoke(bad) must be rejected — bad() traps: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_callee_is_checked_over_its_actual_edge_domain() {
+        // §11.2/§11.4: root(Number) calls helper("x"). helper must be analyzed over the
+        // actual [String] edge — where `"x" + 1` traps — NOT over root's Number domain.
+        let a = analyze_call("helper = (x) => x + 1\nroot = (n) => helper(\"x\")\nroot", "root", &[("n", num())]);
+        assert!(!a.accepted(), "helper(\"x\") traps over its actual String domain: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_narrowed_dead_branch_is_not_a_false_trap() {
+        // §11.3: helper(0) — the trapping branch is dead for x == 0, so analyzing helper
+        // over [Equals(0)] must not surface the dead `1 + "x"` branch.
+        let a = analyze_call(
+            "helper = (x) => x == 0 ? 1 : 1 + \"x\"\nroot = () => helper(0)\nroot",
+            "root",
+            &[],
+        );
+        assert!(a.accepted(), "helper(0)'s bad branch is dead — no false trap: {:?}", a.findings);
     }
 }

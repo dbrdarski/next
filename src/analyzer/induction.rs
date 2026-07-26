@@ -31,6 +31,7 @@ use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
 use crate::analyzer::obligation::accepted_domain;
 use crate::analyzer::outcome::{analyze_instance_body, summarize_instance};
 use crate::analyzer::{Finding, Severity};
+use crate::ast::Lambda;
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::interner::Interner;
 use crate::value::ValueRef;
@@ -46,6 +47,12 @@ thread_local! {
     /// (its calls resolve through the pass's hypotheses or coarse `Top` instead), so one
     /// call site drives exactly one bounded inference.
     static INFERRING: Cell<bool> = const { Cell::new(false) };
+
+    /// The shapes whose bodies are currently under [`body_safety`] analysis — the
+    /// **actual-call-edge** cutoff. A recursive/mutual edge that re-enters a shape on the
+    /// stack contributes no new body (its findings are collected once), bounding the walk
+    /// by the program's shape count.
+    static SAFETY_STACK: RefCell<Vec<Lambda>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Whether a return-fact inference is currently running (the re-entrancy guard).
@@ -316,39 +323,53 @@ fn group_domains(
         .collect()
 }
 
-/// **Interprocedural body safety** (Archive6 §8/§9). The proven-trap findings of
-/// `callee`'s body **and its transitive callees** — replacing the closed-call oracle
-/// fold, so the analyzer never executes a user function to discover a trap. Every
-/// reachable function is analyzed over its domain ([`group_domains`]) and its body's
-/// **Error**-severity findings are surfaced; the whole reachable set is walked
-/// explicitly, so a trap in a transitive callee (`bad = () => helper()`) is caught even
-/// though nested calls coarsen under the guard. Structurally terminating: each reachable
-/// body is analyzed **once** (never executed), so a diverging `loop = () => loop()` is
-/// analyzed, not run.
+/// **Interprocedural body safety** (Archive6 §8/§9; Archive7 correction). The
+/// proven-trap findings of `callee`'s body **and its transitive callees**, so the
+/// analyzer never executes a user function to discover a trap. Analyzes `callee`'s body
+/// over the **actual argument domain** `args`; nested applications surface their own
+/// body safety through the ordinary body analysis (`analyze` → `analyze_apply` → this
+/// function again), so the walk follows the **actual abstract call edges** — a parameter
+/// or local callee is followed (resolved from the abstract value at the call site), and
+/// each callee is checked over the domain **its own edge carries**, not a syntactic
+/// reachable-closure set nor a propagated root domain (which Archive7 showed unsound:
+/// `invoke(bad)` with `bad` passed as a parameter, and `root(Number)` calling
+/// `helper("x")`).
+///
+/// Structurally terminating: recursion is cut by `SAFETY_STACK` (a shape already under
+/// analysis contributes no new body), so a diverging `loop = () => loop()` is analyzed
+/// **once**, never run. Return inference and completion stay coarse during the walk
+/// (`without_inference`); body safety is suppressed only under *pure* inference (below).
 ///
 /// **Errors only.** A `Warning` (unproven safety) over a coarsened domain is spurious
 /// (`factorial`'s `Number * Top` cannot be *proven* safe but does not trap), so
 /// propagating it would manufacture false findings; an `Error` is `OpSafety::Refuted` —
-/// a proven trap — sound to surface at the call site. Coarser callee warnings staying
-/// local is a precision/diagnostic gap, never unsoundness.
-pub fn body_safety(
-    callee: &ValueRef,
-    root_args: Option<&[Contract]>,
-    cenv: &ContractEnv,
-    interner: &mut Interner,
-) -> Vec<Finding> {
-    if currently_inferring() {
-        return vec![]; // inside fact-proving: the enclosing walk already covers the group
+/// a proven trap — sound to surface. Coarser callee warnings staying local is a
+/// precision/diagnostic gap, never unsoundness.
+pub fn body_safety(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
+    let Some(shape) = callee.as_fn().map(|f| f.shape().clone()) else {
+        return vec![];
+    };
+    // Suppress under *pure* inference (a return-fact summarize, no active safety walk):
+    // that analysis discards findings, so running safety there is wasted. A nested call
+    // *within* a safety walk (`SAFETY_STACK` non-empty) still runs — that is how
+    // transitive traps propagate.
+    let in_safety_walk = SAFETY_STACK.with(|s| !s.borrow().is_empty());
+    if currently_inferring() && !in_safety_walk {
+        return vec![];
     }
-    without_inference(|| {
-        let mut findings = Vec::new();
-        for (g, args) in group_domains(callee, root_args, cenv) {
-            if let Some(a) = analyze_instance_body(&g, &args, cenv, interner) {
-                findings.extend(a.findings.into_iter().filter(|f| f.severity == Severity::Error));
-            }
-        }
-        findings
-    })
+    // Recursion cutoff on the actual-edge walk.
+    if SAFETY_STACK.with(|s| s.borrow().contains(&shape)) {
+        return vec![];
+    }
+    SAFETY_STACK.with(|s| s.borrow_mut().push(shape));
+    let findings = without_inference(|| match analyze_instance_body(callee, args, cenv, interner) {
+        Some(a) => a.findings.into_iter().filter(|f| f.severity == Severity::Error).collect(),
+        None => vec![],
+    });
+    SAFETY_STACK.with(|s| {
+        s.borrow_mut().pop();
+    });
+    findings
 }
 
 /// The direct-call adjacency among candidates: `i → j` iff candidate `j`'s closure is

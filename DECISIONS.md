@@ -6,6 +6,51 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Archive7 correction: body safety over actual call edges + dead-arm elimination
+
+Archive(7) confirmed the oracle-execution removal but found the Archive6 `body_safety`
+**unsound**: it walked syntactic `reachable_closures` over propagated `group_domains`,
+which (1) misses parameter/local callees and (2) checks a callee under the wrong domain
+— both **false acceptances**. Rewritten to follow **actual abstract call edges**; plus
+dead-arm elimination for the paired false-rejection. Full tree 314 lib + 111
+conformance, clippy clean.
+
+- **Withdrawn rationale [§12].** The Archive6 entry's "safety is monotone reachability,
+  so `reachable_closures` is the right tool" is **withdrawn**. Correct statement: *safety
+  propagation is monotone only over semantically live instance/domain call edges;
+  syntactic closure reachability alone is insufficient — it omits dynamically-resolved
+  (parameter/local) callees and loses the input-domain a caller-level refutation needs.*
+- **Edge-following `body_safety` [mandated — Archive7 §9].** Now analyzes `callee`'s body
+  over the **actual argument domain** `args`; nested applications surface their own body
+  safety through the ordinary body analysis (`analyze → analyze_apply → body_safety`), so
+  the walk follows the **actual edges** — a **parameter callee is resolved from the
+  abstract value** at the call site (`invoke(bad)` → `f = bad` → bad's trap), and each
+  callee is checked over **its own edge domain** (`root(Number)` calling `helper("x")` →
+  helper over `[String]`, where `"x" + 1` traps), never a reachable-closure set nor a
+  propagated root domain. Recursion is cut by `SAFETY_STACK` (a shape under analysis
+  contributes no new body), so a diverging `loop()` is analyzed once, never run.
+  Suppressed under *pure* inference (a return-fact summarize, whose findings are
+  discarded) but active within a safety walk — how transitive traps propagate.
+- **Dead-arm elimination [Archive7 §11.3].** `analyze_match` now skips a **provably
+  dead** arm: its narrowed region proven empty (a prior total arm consumed the remainder,
+  or the pattern is disjoint), or its guard **proven false**. A guard **proven true**
+  fires on its whole region like an unguarded arm (consumes → empties the remainder → the
+  next arm is dead), and no longer muddies the fall-through classification. So `helper(0)`
+  with body `x == 0 ? 1 : 1 + "x"` accepts — the `1 + "x"` branch is dead for `x = 0` and
+  is not a false trap. Sound (an unreachable branch never executes) and precise.
+- **Verified — the §11 adversarial gate:** parameter-callee trap → reject (§11.1);
+  actual-edge-domain trap → reject (§11.2/§11.4); narrowed dead branch → accept (§11.3);
+  the original 7 body-safety tests unchanged; no `analyze_match` regression across the
+  suite.
+- **`// [ask-author]`:** none. Owed toward the final §5/§6 form: fold body findings into
+  an `InstanceBodySummary { produced, completion, may_not_complete, findings }` carried
+  through `ApplicationOutcome` so return facts, completion, and safety share one
+  (instance, input-domain) node over the SCC machinery (removes the separate walk and the
+  repeated per-call-site analysis — into the C§13.4 cache). Same-arity `group_domains`
+  stays only in `infer_inner`, still flagged interim.
+
+---
+
 ## 2026-07-26 — Archive6 §8/§9: interprocedural body safety — remove the full-function oracle fold
 
 The last oracle coupling in the analyzer, removed per the author's Archive(6) directive:

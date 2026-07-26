@@ -572,7 +572,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
     if let Contract::Equals(cv) = &cc {
         analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
         if !has_spread {
-            findings.extend(induction::body_safety(cv, Some(&arg_contracts), cenv, interner));
+            findings.extend(induction::body_safety(cv, &arg_contracts, cenv, interner));
         }
     }
     // Completion (E10): the callee's body may complete without a value (a partial Match,
@@ -794,21 +794,38 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
                 let pc = arm.pattern.as_ref().map(|p| pattern_contract(p, cenv)).unwrap_or(Contract::Top);
                 let narrowed = intersect(&remainder, &pc);
 
+                // **Dead arm** (Archive7 §11.3): its scrutinee region is already empty —
+                // a prior total arm consumed the remainder, or the pattern is disjoint
+                // from what remains — so it can never be selected. Skip it entirely: an
+                // unreachable branch contributes no findings, no result, no consumption.
+                if matches!(subcontract(&narrowed, &Contract::Bottom, interner), Verdict::Proven) {
+                    continue;
+                }
+
                 // Arm-local environment: the outer bindings plus the pattern's.
                 let mut arm_env = body_env.clone();
                 if let Some(p) = &arm.pattern {
                     bind_pattern(p, &narrowed, &mut arm_env);
                 }
 
-                // Guard: a strict Boolean tested seat.
-                let mut guarded = false;
+                // Guard: a strict Boolean tested seat. A guard **proven false** makes the
+                // arm dead (skip its result); a guard **proven true** fires on the whole
+                // region like an unguarded arm (so it consumes, emptying the remainder,
+                // and does not muddy the fall-through classification); only a genuinely
+                // *opaque* guard consumes nothing (uncertainty selects, E9).
+                let mut opaque_guard = false;
                 if let Some(g) = &arm.guard {
-                    guarded = true;
-                    any_guarded = true;
                     let ga = analyze(g, &arm_env, cenv, interner);
                     demand(&ga, &mut findings);
                     findings.extend(ga.findings);
                     check_tested_seat(&ga.contract, &mut findings, interner);
+                    let t = Contract::Equals(interner.boolean(true));
+                    let f = Contract::Equals(interner.boolean(false));
+                    if matches!(subcontract(&ga.contract, &f, interner), Verdict::Proven) {
+                        continue; // guard can never hold — dead arm
+                    }
+                    opaque_guard = !matches!(subcontract(&ga.contract, &t, interner), Verdict::Proven);
+                    any_guarded |= opaque_guard;
                 }
 
                 // Arm result — an expecting seat.
@@ -817,11 +834,10 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
                 findings.extend(ra.findings);
                 results.push(ra.contract);
 
-                // A guarded arm's success is opaque, so it consumes nothing of the
-                // remainder (uncertainty selects, E9); an unguarded arm consumes its
-                // whole pattern region — which empties the remainder when the pattern
-                // covers all of it (e.g. `_` / a bare binding).
-                if !guarded {
+                // A non-opaque arm (unguarded or proven-true guard) consumes its whole
+                // pattern region — emptying the remainder when the pattern covers all of
+                // it (e.g. `_` / a bare binding).
+                if !opaque_guard {
                     remainder = if matches!(subcontract(&remainder, &pc, interner), Verdict::Proven) {
                         Contract::Bottom
                     } else {
