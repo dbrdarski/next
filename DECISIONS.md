@@ -6,6 +6,57 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Recovery Phase 1: the spec-first audit (no code)
+
+The author agreed the analyzer's body safety was built in the wrong layer and asked for
+a spec-first audit before any further code. Delivered:
+`NEXT-spec-audit-accepted-domains-phase1.md`. **No code changed.**
+
+- **The finding is bigger and more precisely specified than "accepted domains".** The
+  documents describe a **three-layer substrate**: *symbolic summary template* per lambda
+  **shape** → *instantiated region table* per **instance** → call-site **input
+  obligation + row selection**. C§13.2's opening line states it outright — *"One symbolic
+  control summary per lambda shape; instantiated regional analyses parameterized by
+  captured-environment contracts"* — and its call-site procedure says a call **obtains**
+  the instantiated region table, never *analyzes the body*. C§13.4 caches both layers;
+  C§18 says the split *"enters with the demand core"*.
+- **It is a skipped build-order step, not a design gap.** Part I: *"contracts +
+  three-valued checker → **demand core + additive recursion** → the re-entry ladder"*,
+  and CLAUDE.md marks the order "do not reorder". Verified: no demand core exists in
+  `src/` (no backward/subscription/preimage machinery), no summary template, no region
+  table. C§13.2's *consumers* (instances, return facts, induction) were built on the hole;
+  the Archive(6)–(10) mechanisms were reconstructing the substrate forward at call sites.
+- **The region table is why one structure suffices.** Worked in the audit §3: for
+  `x => x == 0 ? 1 : x + "x"` the rows are `(Equals(0) | — | Equals(1))` and
+  `(Difference(Top, Equals(0)) | x:String | Kind(String))`, giving
+  `AcceptedDomain = Equals(0) ∪ String` **and** the per-row return **and** the safety
+  verdict from one artifact, computed once. `() => 1 + "x"` gets `AcceptedDomain = ∅` at
+  the *template* level — no captures, no call site.
+- **Recursion has two independent domain sources.** Operation demands (C§5/C§7/C§13.1)
+  *and* **grounding** (C§10) — the Phase-A grids' *"Derived input contract:
+  `Intersection(GreaterOrEqual(0), Mod(1, 0))`"* comes from drift/base/orbit reasoning,
+  not from any operation's safety demand. The grounding arc is unbuilt; A-NEG depends on
+  it.
+- **Five items owed from the author** (audit §4), gating Phase 2/3: region-table
+  computation steps (already in C§17's owed list — the load-bearing one); whether
+  `InferredAcceptedDomain` is eagerly materialized or a subscription set (C§13.1 calls
+  preimage an *"optimization"*, E11 needs a comparable contract); empty-domain semantics
+  at a definition (unspecified anywhere); **app spec v0.2 is absent from the repo** while
+  v0.8 §3 delegates template-instantiation detail to it; and the C§10 grounding arc.
+- **What survives the recovery** (per the architecture review §10, confirmed by the
+  audit): instance+domain fact identity, the `segment_nullable` structural fix, fuel out
+  of normative analysis, no oracle execution of user functions, correlated-alternative
+  work, and dead-arm/path narrowing — which becomes *more* central, since region rows
+  **are** path conditions.
+- **A test-quality correction recorded:** the existing body-safety tests assert
+  call-site behaviour over *unconditionally* invalid bodies (`() => 1 + "x"`), which under
+  this architecture are **definition-site** facts. They pass either way — which is exactly
+  why they never caught the design error. They are to be re-framed as domain assertions.
+- **`// [ask-author]`:** the five §4 items. Nothing is being built on them until ruled
+  (CLAUDE.md rule 3).
+
+---
+
 ## 2026-07-26 — Archive10 small corrections + a design question raised (body safety is in the wrong layer)
 
 Two parts: three **small** corrections from Archive(10), and — prompted by a reader's

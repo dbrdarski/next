@@ -9,7 +9,9 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-26 · Archive10 small corrections (termination, completion variance, inhabitance) · **design question raised**: `NEXT-implementation-finding-accepted-domains.md`.
+**Snapshot:** 2026-07-26 · **recovery Phase 1 complete** — spec-first audit
+(`NEXT-spec-audit-accepted-domains-phase1.md`); the missing mechanism is the demand core
++ template/instance/region-table split. Build & delete gated on five author rulings (§3).
 
 ---
 
@@ -62,10 +64,29 @@ row below is the manifest-canonical version.
 
 ## 3. Needs design-side action
 
-**ONE OPEN ASK (new, 2026-07-26):** `NEXT-implementation-finding-accepted-domains.md` — is E11's **InferredAcceptedDomain** (body-derived accepted domains) the intended mechanism for body safety? The implementation instead propagates callee-body traps per call site, which is where the recurring Archive(6)–(10) blockers come from. Larger Archive(10) recommendations are held pending the ruling.
+**BLOCKING — five rulings gate the recovery.** The author agreed the analyzer's body
+safety was built in the wrong layer (`NEXT-architecture-review-accepted-domains-vs-call-site-body-safety.md`).
+Recovery Phase 1 (spec-first audit) is **done**:
+`NEXT-spec-audit-accepted-domains-phase1.md`. It finds the missing mechanism is the
+**demand core + template/instance split** — symbolic summary per shape → instantiated
+**region table** per instance → call-site input obligation (C§13.1/C§12.3/C§13.2/C§13.4)
+— i.e. Part I's `demand core` build step, skipped. Phase 2 (build) and Phase 3 (delete
+the subsumed call-site machinery) are gated on §4 of that audit:
+
+1. **Region-table computation steps** — already in C§17's owed list. The concept is
+   normative; the body→rows *procedure* is unwritten. Most load-bearing.
+2. **Eager or lazy?** Is `InferredAcceptedDomain` materialized once per instance as a
+   contract, or the subscription set — C§13.1 calls preimage an *"optimization"*, but
+   E11's `DeclaredInput ⊑ InferredAcceptedDomain` needs a comparable contract.
+3. **Empty accepted domain** at a definition — error, goes-nowhere-style lint, or silent
+   (rejecting only at call sites)? Unspecified anywhere.
+4. **App spec v0.2 is absent from the repo** — v0.8 §3 delegates template-instantiation
+   detail ("As v0.2 — symbolic slots; constant extraction; regionalization; …") to it.
+5. **Grounding arc (C§10)** — the *second* source of a recursive function's domain
+   (factorial's `GE(0) ∧ Mod(1,0)`, per the Phase-A grids), needed for A-NEG.
 
 Otherwise:
-**Nothing is blocking.** All recent asks were resolved this cycle: T-10 ruled
+**Nothing else is blocking.** Earlier asks were resolved: T-10 ruled
 (guard-based, implemented + now in the canonical §4); open-value observation ruled
 Option A (implemented incidentally); A-WRK RECOVER discharged (grids recovered).
 
