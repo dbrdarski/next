@@ -51,6 +51,137 @@ pub fn reachable_closures(root: ValueRef) -> Vec<ValueRef> {
     build_inventory_by(vec![root], closure_shape, callee_targets)
 }
 
+/// The program's **finite literal vocabulary** reachable from `root`: every constant
+/// appearing in the reachable group's bodies (plus nested lambdas — a literal is a
+/// literal wherever it sits). This is the finite, advance-known basis the analyzer
+/// admits *exact* recursive domains over (§4b `GeneralizationDomains` "derived from the
+/// finite program"): a demanded domain built from these values is analyzed precisely; a
+/// **computed** domain outside it resolves through the Kind basis instead, which is what
+/// bounds the recursive state universe.
+pub fn literal_values(root: &ValueRef) -> Vec<ValueRef> {
+    let mut out: Vec<ValueRef> = Vec::new();
+    for f in reachable_closures(root.clone()) {
+        let Some(fv) = f.as_fn() else { continue };
+        collect_consts(&fv.shape().body, &mut out);
+    }
+    out
+}
+
+/// Collect every `Const` value in `e`, descending into nested lambdas.
+fn collect_consts(e: &Expr, out: &mut Vec<ValueRef>) {
+    let push = |v: &ValueRef, out: &mut Vec<ValueRef>| {
+        if !out.contains(v) {
+            out.push(v.clone());
+        }
+    };
+    match e {
+        Expr::Const(v) => push(v, out),
+        Expr::Ref(_) => {}
+        Expr::Lambda(l) => collect_consts(&l.body, out),
+        Expr::Apply { callee, args } => {
+            collect_consts(callee, out);
+            for a in args {
+                match a {
+                    Arg::Expr(x) | Arg::Spread(x) => collect_consts(x, out),
+                }
+            }
+        }
+        Expr::PrimOp { args, .. } => {
+            for a in args {
+                collect_consts(a, out);
+            }
+        }
+        Expr::Match(m) => {
+            if let Some(s) = &m.scrutinee {
+                collect_consts(s, out);
+            }
+            for item in &m.items {
+                match item {
+                    MatchItem::Bind(Bind { value, .. }) => collect_consts(value, out),
+                    MatchItem::Stmt(x) => collect_consts(x, out),
+                    MatchItem::Arm(arm) => {
+                        if let Some(p) = &arm.pattern {
+                            collect_pattern_consts(p, out);
+                        }
+                        if let Some(g) = &arm.guard {
+                            collect_consts(g, out);
+                        }
+                        collect_consts(&arm.result, out);
+                    }
+                }
+            }
+        }
+        Expr::TupleCons(els) => {
+            for el in els {
+                match el {
+                    Element::Expr(x) | Element::Spread(x) => collect_consts(x, out),
+                }
+            }
+        }
+        Expr::RecordCons(fs) => {
+            for f in fs {
+                match f {
+                    Field::Field { value, .. } | Field::Spread(value) => collect_consts(value, out),
+                    Field::Computed { key, value } => {
+                        collect_consts(key, out);
+                        collect_consts(value, out);
+                    }
+                }
+            }
+        }
+        Expr::Access { target, form, .. } => {
+            collect_consts(target, out);
+            match form {
+                AccessForm::Field(_) => {}
+                AccessForm::Index(x) => collect_consts(x, out),
+                AccessForm::Slice { lo, hi } => {
+                    if let Some(x) = lo {
+                        collect_consts(x, out);
+                    }
+                    if let Some(x) = hi {
+                        collect_consts(x, out);
+                    }
+                }
+            }
+        }
+        Expr::Template(parts) => {
+            for p in parts {
+                if let TemplatePart::Interp(x) = p {
+                    collect_consts(x, out);
+                }
+            }
+        }
+        Expr::Write { value, .. } => collect_consts(value, out),
+    }
+}
+
+/// Literal values bound into patterns (`0 => …`) are part of the vocabulary too.
+fn collect_pattern_consts(p: &crate::ast::Pat, out: &mut Vec<ValueRef>) {
+    use crate::ast::{Pat, PatElem, PatField};
+    match p {
+        Pat::Const(v) => {
+            if !out.contains(v) {
+                out.push(v.clone());
+            }
+        }
+        Pat::Tuple(elems) => {
+            for e in elems {
+                if let PatElem::Pat(q) = e {
+                    collect_pattern_consts(q, out);
+                }
+            }
+        }
+        Pat::Record { fields, .. } => {
+            for f in fields {
+                if let PatField::Field { pat, .. } = f {
+                    collect_pattern_consts(pat, out);
+                }
+            }
+        }
+        Pat::Wild | Pat::Bind(_) | Pat::Contract(_) => {}
+    }
+}
+
 /// The shape (canonical `Lambda`) of a closure value; an empty lambda for a
 /// non-function (never reached — roots and targets are functions).
 fn closure_shape(v: &ValueRef) -> Lambda {

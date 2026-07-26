@@ -14,13 +14,12 @@
 //! `Template` (E11), `Access` (E6), `Match` (E9/E10), and `Apply` (C§7/B5/E10).
 //! Closed **primitive** operations and **accesses** fold through the finite oracle
 //! kernel (`eval_prim` / `eval_expr` on a `Const` target) for an exact verdict; a
-//! **closed function call is never executed** — its body traps are found by
-//! interprocedural body-safety analysis (`induction::body_safety`), so static analysis
-//! never runs a user function (Archive6 §8/§9). Analysis runs in the **pure world**
-//! (matching the `eval_expr` truth source); world threading and `Lambda`-body /
-//! function-shape analysis (C§13.2) are later increments, so an open call's return
-//! types as `Top`. Index/slice bounds await C§17 (see `OwedItems.md`). `Write` and
-//! mutation are unanalyzed (type as `Top`).
+//! **closed function call is never executed** — a callee's traps, completion, and
+//! non-recursive return come from its `(instance, input-domain)` body summary
+//! (`induction::instance_body_summary`), so static analysis never runs a user function
+//! (Archive6 §8/§9). Analysis runs in the **pure world** (matching the `eval_expr` truth
+//! source); world threading is a later increment. Index/slice bounds await C§17 (see
+//! `OwedItems.md`). `Write` and mutation are unanalyzed (type as `Top`).
 //!
 //! Analysis carries a **named-contract environment** ([`ContractEnv`]) alongside the
 //! value-contract [`TypeEnv`]: user contracts (`Percent = Range(0, 100)`, C§12.2)
@@ -555,46 +554,62 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
         }
     }
 
-    // A non-function callee always traps operation-safety.
-    if disjoint(&cc, &Contract::Kind(Kind::Function)) {
-        findings.push(Finding {
-            class: TrapClass::OperationSafety,
-            severity: Severity::Error,
-            message: "callee is not a function".into(),
-        });
-        return Analysis::produced(Contract::Bottom, findings);
-    }
-
-    // Enumerate the **live callee alternatives** (Archive8 §6): a single `Equals(cv)` or
-    // a `Union` of them (`b ? bad : good`). Each is analyzed over the actual argument
-    // domain through its `(instance, input-domain)` body summary, then the results join —
-    // so a union callee cannot bypass safety, and each alternative's body is checked over
-    // the domain its own call edge carries.
+    // Enumerate the **live callee alternatives** (Archive8 §6, totalized Archive9
+    // §9–§11) and combine them **conjunctively**: every alternative contributes, so a
+    // union callee can neither bypass safety nor be sharpened from its known branch
+    // alone. Each known alternative is analyzed over the actual argument domain through
+    // its `(instance, input-domain)` body summary.
     let callees = callee_alternatives(&cc);
     let (contract, completion) = if callees.is_empty() {
-        (Contract::Top, Completion::Produces) // unknown callee — return not derivable yet (owed)
+        (Contract::Top, Completion::Produces) // no live alternative (proven empty)
     } else {
         let mut produced: Vec<Contract> = Vec::new();
         let mut completions: Vec<Completion> = Vec::new();
-        for cv in &callees {
-            analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
-            if has_spread {
-                produced.push(Contract::Top);
-                completions.push(Completion::Produces);
-                continue;
+        for alt in &callees {
+            match alt {
+                // Provably not callable — a represented execution traps.
+                CalleeAlt::NotAFunction => {
+                    findings.push(Finding {
+                        class: TrapClass::OperationSafety,
+                        severity: Severity::Error,
+                        message: "callee is not a function".into(),
+                    });
+                    produced.push(Contract::Bottom);
+                    completions.push(Completion::Produces);
+                }
+                // Possibly a function, origin unknown: it may return anything, may fall
+                // through, and its body cannot be inspected — conservative throughout,
+                // never a sharpening (Archive9 §11).
+                CalleeAlt::UnknownFunction => {
+                    findings.push(Finding {
+                        class: TrapClass::OperationSafety,
+                        severity: Severity::Warning,
+                        message: "cannot prove this callee's body safe (callee not resolved to a known function)".into(),
+                    });
+                    produced.push(Contract::Top);
+                    completions.push(Completion::MayFallThrough);
+                }
+                CalleeAlt::Known(cv) => {
+                    analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
+                    if has_spread {
+                        produced.push(Contract::Top);
+                        completions.push(Completion::Produces);
+                        continue;
+                    }
+                    let summary = induction::instance_body_summary(cv, &arg_contracts, cenv, interner);
+                    findings.extend(summary.errors());
+                    completions.push(callee_completion(cv, &summary));
+                    // A recursive/mutual return needs the induction (`call_return`
+                    // sharpens the coarse cycle assumption); a non-recursive return is its
+                    // body's **exact** contract, so `always() → Equals(true)` and the
+                    // dependent guard's dead branch is pruned (Archive8 §8/§11.4).
+                    produced.push(if induction::is_recursive(cv) {
+                        call_return(cv, &arg_contracts, has_spread, cenv, interner)
+                    } else {
+                        summary.produced
+                    });
+                }
             }
-            let summary = induction::instance_body_summary(cv, &arg_contracts, cenv, interner);
-            findings.extend(summary.errors());
-            completions.push(callee_completion(cv, &summary));
-            // A recursive/mutual return needs the induction (`call_return` sharpens the
-            // coarse cycle assumption); a non-recursive return is its body's **exact**
-            // contract, so `always() → Equals(true)` (not the generalized `Boolean`) and
-            // the dependent guard's dead branch is pruned (Archive8 §8/§11.4).
-            produced.push(if induction::is_recursive(cv) {
-                call_return(cv, &arg_contracts, has_spread, cenv, interner)
-            } else {
-                summary.produced
-            });
         }
         (union_of(produced), join_completions(&completions))
     };
@@ -611,22 +626,39 @@ fn callee_completion(cv: &ValueRef, summary: &induction::InstanceBodySummary) ->
     summary.completion
 }
 
-/// The live callee alternatives of a callee contract: a singleton `Equals(cv)` (a known
-/// function), or a `Union` of them (`b ? bad : good`). Non-function / non-singleton
-/// leaves contribute nothing (their safety/return are not derivable — the caller then
-/// coarsens, sound).
-fn callee_alternatives(cc: &Contract) -> Vec<ValueRef> {
-    let mut out = Vec::new();
-    fn go(c: &Contract, out: &mut Vec<ValueRef>) {
+/// One live alternative of a callee contract (Archive9 §9–§11). The enumeration is
+/// **total**: every live leaf classifies into exactly one of these, so no alternative
+/// can silently disappear from the combined outcome.
+enum CalleeAlt {
+    /// A known concrete function — analyze its body precisely.
+    Known(ValueRef),
+    /// Possibly a function, origin coarsened away (`Kind(Function)`, `Top`, an open
+    /// `Ref`) — contributes a conservative outcome, never a sharpening.
+    UnknownFunction,
+    /// Provably **not** a function — calling it traps operation-safety.
+    NotAFunction,
+}
+
+/// The live callee alternatives of a callee contract, **totally** classified: a
+/// singleton `Equals(fn)`, a leaf proven non-function, or an unknown (possibly-function)
+/// leaf; `Union`s recurse. `Bottom` alternatives are dropped (proven empty — no
+/// represented execution). Every other live leaf contributes, so a union mixing a known
+/// function with a non-function (`b ? good : 1`) or with an unknown function cannot lose
+/// the non-`Known` alternative (Archive9 §10/§11).
+fn callee_alternatives(cc: &Contract) -> Vec<CalleeAlt> {
+    fn go(c: &Contract, out: &mut Vec<CalleeAlt>) {
         match c {
-            Contract::Equals(v) if v.is_function() => out.push(v.clone()),
             Contract::Union(a, b) => {
                 go(a, out);
                 go(b, out);
             }
-            _ => {}
+            Contract::Bottom => {} // proven empty — no represented execution
+            Contract::Equals(v) if v.is_function() => out.push(CalleeAlt::Known(v.clone())),
+            _ if disjoint(c, &Contract::Kind(Kind::Function)) => out.push(CalleeAlt::NotAFunction),
+            _ => out.push(CalleeAlt::UnknownFunction),
         }
     }
+    let mut out = Vec::new();
     go(cc, &mut out);
     out
 }

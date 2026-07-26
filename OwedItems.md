@@ -127,6 +127,24 @@ trap-worthy; these are precision, interface, or not-yet-built gaps.
      - **Neutral `semantics::*` re-homing** — `eval_prim` and `eval_expr`-on-`Const`-access
        are finite and shared with the oracle; move the laws into a neutral kernel so the
        analyzer isn't "asking the oracle" (naming/architecture, not soundness).
+   - ~~**Widened-domain refutation / dropped alternatives / non-terminating domain
+     chains**~~ **FIXED [Archive9, 2026-07-26]** — widened-state findings are downgraded
+     (no false refutation); `CalleeAlt::{Known,UnknownFunction,NotAFunction}` makes
+     alternative enumeration total; `domain_admitted` (program literals + Kinds) + the
+     total `Contract::kind_abstraction` bound the recursive state universe in advance.
+     §17 gate green. Remaining toward the spec's §4a/§4b form (not soundness):
+     - **The candidate graph proper** — the admitted basis is computed *per call*
+       (`literal_values` re-walks the reachable group) and recursion is bounded by a
+       dynamic `ACTIVE_BODIES` stack over it, rather than a **pre-constructed** finite
+       `(instance, admitted-domain)` inventory closed by the SCC machinery. Same finite
+       universe, computed lazily; the pre-construction (plus a memo) is the destination.
+     - **Joint correlated operand driver not on the normal path [Archive9 §12]** —
+       `analyze_apply` still projects callee and argument contracts separately and
+       extracts callee alternatives from the projected callee contract, instead of
+       consuming the `analyze_application` joint-alternative machinery. Correlation
+       between *which callee* and *which arguments* is therefore not preserved at the
+       normal path (the projecting-implementation rule keeps it sound: a cross-pair
+       failure must degrade to unproven).
    - **Same-arity domain propagation is interim [Archive5 §5]** — `infer_inner` propagates
      the root's call-site domain to reachable **same-arity** closures (not the recursive
      SCC specifically), an interim precision heuristic. The domain guard prevents any

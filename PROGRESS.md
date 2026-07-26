@@ -9,7 +9,7 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-26 · Archive8 — the InstanceBodySummary unification: (instance, input-domain) body analysis (instance identity, multi-callee, exact non-recursive returns).
+**Snapshot:** 2026-07-26 · Archive9 — finite admitted-domain basis (advance-bounded termination), total callee-alternative enumeration, widened-domain refutation bar.
 
 ---
 
@@ -17,7 +17,7 @@
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **318 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **322 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
@@ -98,7 +98,8 @@ Low-stakes / for-info only:
 | Analyzer, expression layer: Const/Ref/PrimOp/Tuple/Record/Template/Access/Match/Apply — exact closed-expression trap concordance + sound open-term reasoning, narrowing, named contracts | §6 concordance | ✅ for the listed nodes; a known-closure call **infers** its return (call-site args) and surfaces **interprocedural body-safety** traps (`body_safety`) — the analyzer no longer executes user functions; 🟡 `Write`/worlds type as Top; unknown-callee call returns Top |
 | Analyzer, oracle boundary — no user-function execution in normative analysis (Archive6 §8/§9): closed-call `eval_expr` fold removed; only finite `eval_prim` + `eval_expr`-on-`Const`-access remain | Archive6 | ✅ 7-test gate incl. diverging `loop()` terminates without execution |
 | Body safety over **actual call edges** (Archive7): follows abstract applications (param/local callees resolved from the value; each callee over its edge domain); + `analyze_match` **dead-arm elimination** (proven-empty region / proven-false guard skipped; proven-true guard consumes) | Archive7 | ✅ §11 gate (param callee reject; edge-domain reject; narrowed dead branch accept) |
-| **InstanceBodySummary unification** (Archive8): `instance_body_summary` keyed by `(instance, input-domain)` — safety + completion + non-recursive return share one node; instance identity (not shape); domain-generalization cutoff; multi-callee enumeration; exact non-recursive returns | Archive8 | ✅ §11 gate (same-shape/diff-captures; same-instance/diff-domain; multi-callee; return-dependent); 🟡 recursive return still separate induction; `may_not_complete` + memo/cache owed |
+| **InstanceBodySummary unification** (Archive8): `instance_body_summary` keyed by `(instance, input-domain)` — safety + completion + non-recursive return share one node; instance identity (not shape); exact non-recursive returns | Archive8 | ✅ §11 gate (same-shape/diff-captures; same-instance/diff-domain; multi-callee; return-dependent) |
+| **Finite admitted-domain basis + total alternatives** (Archive9): `domain_admitted` (program literals + Kinds) admits exact recursive domains, computed ones widen via total `kind_abstraction` → advance-bounded state universe; widened findings **downgraded** (no false refutation); `CalleeAlt::{Known,UnknownFunction,NotAFunction}` — no live alternative dropped | Archive9 | ✅ §17 gate (widened-refutation accept; non-function reject; unknown not sharpened; growing-`Range` terminates); 🟡 candidate-graph/SCC proper + memo, joint-operand driver (§12), `may_not_complete` owed |
 | Application & induction §2 — `AnalysisContract` **structural/correlated** domain (Leaf/Tuple/Record/Alt, γ, `intersectA`/`meetInstance`, `proveSubcontractA`) | v0.8.1 | ✅ 8.1a + bridge (AP-27/28, correlation survival) |
 | Application & induction §1 — the outcome algebra + **joint operand driver** (`ApplicationOutcome` tri-state, `analyze_application` per-alternative, structural `ApplicationWitness`/`SeatVerdict`) | v0.8.1 | ✅ 8.1b + bridge-2 (AP-15/17/18/21/23/24/29 + structural witness); **AP-30** ⬜ tail-dependent (row-contribution) |
 | Application & induction §4a — the constructed instance-chain inventory (traversal-free closure + shape-repeat cutoff) | v0.8.1 | ✅ 8.1c (AP-16 mutual/self/diamond, order-independent set) |
@@ -198,4 +199,5 @@ tables, remaining `analyzeOperation` tables, error templates, …).
 | 2026-07-26 | `a9cf0af` | Archive5 §4: direct out-of-domain hypothesis regression (`hypothesis_for` law locked); §8/§9 fold-removal analyzed (needs lambda-body analysis — OwedItems) | “Archive5 §4: direct out-of-domain hypothesis regression” |
 | 2026-07-26 | `37dbf6e` | Archive6 §8/§9: interprocedural `body_safety` (direct + transitive traps, errors-only) + remove the closed-call `eval_expr` fold; 7-test gate incl. diverging `loop()` terminates | “Archive6 §8/§9: interprocedural body safety” |
 | 2026-07-26 | `bd99ca0` | Archive7 correction: `body_safety` over actual call edges (`SAFETY_STACK` cutoff — param callees, edge domains) + `analyze_match` dead-arm elimination; §11 adversarial gate | “Archive7 correction: body safety over actual call edges” |
-| 2026-07-26 | (this) | Archive8: InstanceBodySummary unification — `instance_body_summary` keyed by `(instance, input-domain)`, multi-callee enumeration, exact non-recursive returns; §11 gate (A/B/C/D) | “Archive8: the InstanceBodySummary unification” |
+| 2026-07-26 | `c3bb5ca` | Archive8: InstanceBodySummary unification — `instance_body_summary` keyed by `(instance, input-domain)`, multi-callee enumeration, exact non-recursive returns; §11 gate (A/B/C/D) | “Archive8: the InstanceBodySummary unification” |
+| 2026-07-26 | (this) | Archive9: finite admitted-domain basis (`domain_admitted` + `kind_abstraction`) → advance-bounded termination; widened findings downgraded; total `CalleeAlt` enumeration; §17 gate | “Archive9: the finite admitted-domain basis” |

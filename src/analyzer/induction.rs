@@ -27,7 +27,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
+use crate::analyzer::bodywalk::{callee_targets, literal_values, reachable_closures};
 use crate::analyzer::obligation::accepted_domain;
 use crate::analyzer::outcome::{analyze_instance_body, summarize_instance};
 use crate::analyzer::{Finding, Severity};
@@ -351,30 +351,81 @@ pub fn instance_body_summary(
     if callee.as_fn().is_none() {
         return InstanceBodySummary::top();
     }
-    let key = (callee.clone(), args.to_vec());
+    // A **re-entry** of the same instance (a recursive edge) is admitted at its exact
+    // domain only when that domain is built from the program's finite literal vocabulary
+    // (`domain_admitted`) — so `f(0) → f(1)` is analyzed precisely, while a *computed*
+    // domain (`f(Range(1,3)) → f(Range(2,5)) → …`) escapes the finite basis and is
+    // widened into the Kind basis instead. That is what bounds the recursive state
+    // universe in advance (Archive9 §13–§16). A **different instance of the same shape**
+    // (`make(bad)` vs `make(b)`) is never cut off — the key is the concrete instance.
+    let reentry = ACTIVE_BODIES.with(|s| s.borrow().iter().any(|(c, _)| c == callee));
+    let mut args = args.to_vec();
+    let mut widened = false;
+    if reentry && !domain_admitted(callee, &args) {
+        let abstracted: Vec<Contract> = args.iter().map(Contract::kind_abstraction).collect();
+        if abstracted != args {
+            widened = true;
+            args = abstracted;
+        }
+    }
     // Exact `(instance, domain)` cycle → the recursive assumption (a cycle adds no new
-    // direct trap; `produced` coarsens).
+    // *direct* trap; `produced` coarsens, sharpened by the return induction).
+    let key = (callee.clone(), args.clone());
     if ACTIVE_BODIES.with(|s| s.borrow().contains(&key)) {
         return InstanceBodySummary::top();
     }
-    // The **same instance** is active over a *finer* domain (`f(5)` recursing to `f(4)`)
-    // → generalize this domain to Kinds and re-enter, so the singleton recursion
-    // stabilizes at the abstract node and the walk terminates. A **different instance of
-    // the same shape** (`make(bad)` vs `make(b)`) is *not* cut off — the recursion key is
-    // the concrete instance, not the shape (Archive8 §4).
-    let generalized: Vec<Contract> = args.iter().map(Contract::generalize).collect();
-    if generalized != args && ACTIVE_BODIES.with(|s| s.borrow().iter().any(|(c, _)| c == callee)) {
-        return instance_body_summary(callee, &generalized, cenv, interner);
-    }
     ACTIVE_BODIES.with(|s| s.borrow_mut().push(key));
-    let out = match analyze_instance_body(callee, args, cenv, interner) {
-        Some(a) => InstanceBodySummary { produced: a.contract, completion: a.completion, findings: a.findings },
+    let out = match analyze_instance_body(callee, &args, cenv, interner) {
+        Some(a) => InstanceBodySummary {
+            produced: a.contract,
+            completion: a.completion,
+            // **A widened domain may not refute the narrower call** (Archive9 §6–§8):
+            // the trap it finds need not have a witness represented in the demanded
+            // domain (`f(1)` widened to `Number` reaches a branch `Equals(1)` never
+            // takes). Such findings are downgraded to the third voice — never dropped
+            // silently, never a refutation.
+            findings: if widened { downgrade(a.findings) } else { a.findings },
+        },
         None => InstanceBodySummary::top(),
     };
     ACTIVE_BODIES.with(|s| {
         s.borrow_mut().pop();
     });
     out
+}
+
+/// Whether every position of `args` is drawn from the **finite admitted basis** for this
+/// callee: a `Kind`/`Top`/`Bottom`/`Indeterminate` leaf, or an `Equals(v)` whose value
+/// belongs to the program's literal vocabulary ([`literal_values`]). Computed forms
+/// (`Range`, `Mod`, `Geo`, `Concat`, …) and computed singletons are **not** admitted —
+/// they could form an unbounded chain, so a recursive edge carrying one is widened.
+fn domain_admitted(callee: &ValueRef, args: &[Contract]) -> bool {
+    let literals = literal_values(callee);
+    fn ok(c: &Contract, literals: &[ValueRef]) -> bool {
+        match c {
+            Contract::Kind(_) | Contract::Top | Contract::Bottom | Contract::Indeterminate(_) => true,
+            Contract::Equals(v) => literals.contains(v),
+            Contract::Union(a, b) => ok(a, literals) && ok(b, literals),
+            _ => false,
+        }
+    }
+    args.iter().all(|c| ok(c, &literals))
+}
+
+/// Downgrade proven findings to the third voice — a widened-domain trap is *unproven*
+/// for the demanded domain, not refuted (Archive9 §7).
+fn downgrade(findings: Vec<Finding>) -> Vec<Finding> {
+    findings
+        .into_iter()
+        .map(|f| match f.severity {
+            Severity::Error => Finding {
+                severity: Severity::Warning,
+                message: format!("{} (unproven for this call's domain — found after widening)", f.message),
+                ..f
+            },
+            _ => f,
+        })
+        .collect()
 }
 
 /// The summary of one `(instance, input-domain)` body node.

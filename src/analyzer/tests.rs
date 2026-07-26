@@ -2104,3 +2104,100 @@ mod body_safety {
         assert!(a.accepted(), "always() = true kills the bad branch: {:?}", a.findings);
     }
 }
+
+// ── Archive9 §17 — alternative totality + widened-domain refutation discipline ──
+
+mod alternatives {
+    use super::{apply, empty, konst, name, nc, prim, analyze};
+    use crate::ast::PrimOp;
+    use crate::contract::{Contract, Kind, Verdict, subcontract};
+    use crate::interner::Interner;
+    use crate::oracle::run_source_in;
+
+    #[test]
+    fn a_non_function_alternative_is_rejected() {
+        // §17.2: `(b ? good : 1)()` — the `1` alternative is provably not callable, so a
+        // represented execution traps. It must not vanish because a known function
+        // alternative is present.
+        let mut i = Interner::new();
+        let root = run_source_in("good = () => 1\nroot = (b) => (b ? good : 1)()\nroot", &mut i).unwrap().0;
+        let mut env = empty();
+        env.insert("root".into(), Contract::Equals(root));
+        env.insert("c".into(), Contract::Kind(Kind::Boolean));
+        let a = analyze(&apply(name("root"), vec![name("c")]), &env, &nc(), &mut i);
+        assert!(!a.accepted(), "the non-function alternative `1` traps when called: {:?}", a.findings);
+    }
+
+    #[test]
+    fn an_unknown_function_alternative_is_not_sharpened_away() {
+        // §17.3: callee = Equals(good) ∪ Kind(Function). The unknown alternative may
+        // return anything, so the application must NOT sharpen to `good`'s exact
+        // `Equals(1)` — otherwise a downstream `+ 1` would look proven safe.
+        let mut i = Interner::new();
+        let good = run_source_in("good = () => 1\ngood", &mut i).unwrap().0;
+        let mut env = empty();
+        env.insert(
+            "f".into(),
+            Contract::Union(Box::new(Contract::Equals(good)), Box::new(Contract::Kind(Kind::Function))),
+        );
+        let a = analyze(&apply(name("f"), vec![]), &env, &nc(), &mut i);
+        let one = Contract::Equals(i.integer(1));
+        assert!(
+            !matches!(subcontract(&a.contract, &one, &mut i), Verdict::Proven),
+            "the unknown alternative must keep the result unsharpened, got {:?}",
+            a.contract
+        );
+        // And a downstream numeric use is not proven safe.
+        let b = analyze(&prim(PrimOp::Add, vec![apply(name("f"), vec![]), konst(i.integer(1))]), &env, &nc(), &mut i);
+        assert!(!b.findings.is_empty(), "the unknown callee leaves the downstream `+ 1` unproven");
+    }
+}
+
+// ── Archive9 §17.1/§17.4 — widened-domain refutation + advance-bounded termination ──
+
+mod recursive_domains {
+    use super::{analyze, apply, empty, konst, name, nc};
+    use crate::contract::Contract;
+    use crate::interner::Interner;
+    use crate::oracle::run_source_in;
+    use crate::rational::Rational;
+
+    #[test]
+    fn a_widened_domain_trap_does_not_refute_the_narrower_call() {
+        // §17.1: f(0) → f(1) → 1 is concretely safe. Widening `Equals(1)` to `Number`
+        // would make `1 + "x"` live, but that trap has no witness represented in
+        // `Equals(1)` — it must not refute the call. Here `1` is in the program's literal
+        // vocabulary, so the recursive edge is analyzed at its exact domain anyway and
+        // the dead-arm rule prunes the trapping branch.
+        let mut i = Interner::new();
+        let f = run_source_in(
+            "f = (x) => x == 0 ? f(1) : (x == 1 ? 1 : 1 + \"x\")\nf",
+            &mut i,
+        )
+        .unwrap()
+        .0;
+        let mut env = empty();
+        env.insert("f".into(), Contract::Equals(f));
+        let zero = i.integer(0);
+        let a = analyze(&apply(name("f"), vec![konst(zero)]), &env, &nc(), &mut i);
+        assert!(a.accepted(), "f(0) → f(1) → 1 is safe; the Number-only trap must not refute it: {:?}", a.findings);
+    }
+
+    #[test]
+    fn a_growing_non_singleton_recursive_domain_terminates() {
+        // §17.4: f(x + y, y) over Ranges generates Range(0,1) → Range(1,3) → Range(2,5)
+        // → … — an unbounded chain of distinct domains. Termination must come from the
+        // finite admitted basis (a computed `Range` is not in the program's literal
+        // vocabulary, so the recursive edge widens into the Kind basis and stabilizes),
+        // not from a fuel counter. This test *terminating* is the assertion.
+        let mut i = Interner::new();
+        let f = run_source_in("f = (x, y) => f(x + y, y)\nf", &mut i).unwrap().0;
+        let mut env = empty();
+        env.insert("f".into(), Contract::Equals(f));
+        env.insert("a".into(), Contract::Range(Rational::from(0), Rational::from(1)));
+        env.insert("b".into(), Contract::Range(Rational::from(1), Rational::from(2)));
+        let a = analyze(&apply(name("f"), vec![name("a"), name("b")]), &env, &nc(), &mut i);
+        // No claim about the verdict — only that analysis terminated by construction.
+        let _ = a.accepted();
+    }
+}

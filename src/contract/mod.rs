@@ -142,6 +142,37 @@ impl Contract {
         }
     }
 
+    /// The contract's abstraction into the **finite Kind basis** — a *total* widening
+    /// (`self ⊑ kind_abstraction(self)` always) whose range is the seven `Kind`s plus
+    /// `Top`/`Bottom`/`Indeterminate`. Unlike [`Contract::generalize`] (which only widens
+    /// singletons) this is defined on every form, so iterating it reaches a fixed point
+    /// in one step — the property that bounds the analyzer's recursive state universe
+    /// when a *computed* domain escapes the program's finite literal vocabulary
+    /// (Archive9 §13–§16). Sound in one direction only: it may admit values the original
+    /// did not, so it can never be used to *refute* the narrower domain.
+    pub fn kind_abstraction(&self) -> Contract {
+        let num = Contract::Kind(Kind::Number);
+        match self {
+            Contract::Top | Contract::Bottom | Contract::Kind(_) | Contract::Indeterminate(_) => self.clone(),
+            Contract::Equals(v) => value_kind(v).map(Contract::Kind).unwrap_or_else(|| self.clone()),
+            Contract::Range(..)
+            | Contract::Greater(_)
+            | Contract::GreaterEq(_)
+            | Contract::Less(_)
+            | Contract::LessEq(_)
+            | Contract::Mod { .. }
+            | Contract::Geo { .. } => num,
+            Contract::Tuple(_) | Contract::Concat(_) | Contract::LengthRestricted(..) => Contract::Kind(Kind::Tuple),
+            Contract::Record(_) | Contract::HasField(_) => Contract::Kind(Kind::Record),
+            Contract::Union(a, b) => {
+                let (ka, kb) = (a.kind_abstraction(), b.kind_abstraction());
+                if ka == kb { ka } else { Contract::Top }
+            }
+            // Difference/Intersection/Ref: `Top` is always a sound widening.
+            _ => Contract::Top,
+        }
+    }
+
     /// Whether this contract has a **proven** inhabitant — a sampled value that
     /// genuinely belongs (`sample` ∩ `contains`). Sound one-way: `true` ⇒ inhabited
     /// (with a witness); `false` is **not** a proof of emptiness (the sampler is

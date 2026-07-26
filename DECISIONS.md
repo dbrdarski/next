@@ -6,6 +6,56 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-26 — Archive9: the finite admitted-domain basis + total alternative enumeration
+
+Archive(9) approved the `InstanceBodySummary` unification but found three blockers: a
+widened domain could **refute** a narrower call (false rejection), `callee_alternatives`
+**dropped** non-`Equals(fn)` leaves (false acceptance), and dynamic widening did **not
+guarantee termination** (a live hang). All three fixed. Full tree 322 lib + 111
+conformance, clippy clean.
+
+- **Alternative enumeration is now total** [§9–§11]. `CalleeAlt = Known(fn) |
+  UnknownFunction | NotAFunction`; `callee_alternatives` classifies **every** live leaf
+  (`Union` recurses; `Bottom` drops as proven-empty), and `analyze_apply` combines them
+  conjunctively: `NotAFunction` → operation-safety **Error** + `Bottom`;
+  `UnknownFunction` → **Warning** + `produced = Top` + `MayFallThrough` (never a
+  sharpening); `Known` → the precise body summary. So `(b ? good : 1)()` rejects (§17.2)
+  and `Equals(good) ∪ Kind(Function)` no longer sharpens to `good`'s `Equals(1)` (§17.3).
+  The old whole-contract `disjoint(cc, Function)` check is subsumed and removed.
+- **A widened domain may not refute** [§6–§8]. Findings from a state reached by widening
+  are **downgraded to `Warning`** — the trap need not have a witness represented in the
+  demanded domain. Never dropped silently (they stay visible as the third voice), never a
+  refutation. This is the variance rule: *broad-domain safety ⇒ narrow safe; broad-domain
+  refutation ⇒ narrow refuted only with a represented witness.*
+- **Termination from a finite admitted basis, not dynamic widening** [§13–§16]. A
+  recursive edge is analyzed at its **exact** domain only when that domain lies in the
+  program's finite, advance-known vocabulary — `domain_admitted`: every leaf is a
+  `Kind`/`Top`/`Bottom`/`Indeterminate`, or an `Equals(v)` whose value appears as a
+  literal in the reachable group (`bodywalk::literal_values`, §4b's "derived from the
+  finite program"). A **computed** domain outside it (`Range(1,3) → Range(2,5) → …`)
+  widens into the **Kind basis** via the new total `Contract::kind_abstraction` (defined
+  on every form, so it reaches a fixed point in one step, unlike `generalize`), and the
+  state universe is thereby bounded in advance: exact states ⊆ vocabulary^arity, widened
+  states ⊆ Kind-basis^arity.
+  - **Why exact-when-admitted matters:** it is what keeps `f(0) → f(1) → 1` precise
+    (§17.1 accepts — `1` is a program literal, so the dead-arm rule prunes the trapping
+    branch) *while* Archive8's `f(0) → f("x")` still rejects (`"x"` is a literal too, so
+    that genuine trap is found at its own narrow domain). Widening those would have
+    broken one or the other.
+- **Verified — the §17 gate:** widened-domain false refutation → **accept** (§17.1);
+  non-function alternative → **reject** (§17.2); unknown-function alternative → not
+  sharpened, downstream unproven (§17.3); growing `Range` recursion → **terminates by
+  construction** (§17.4, 0.00s — no fuel, no stack limit). All Archive6/7/8 gates
+  unchanged.
+- **`// [ask-author]`:** none. Still owed toward the spec's full §4a/§4b form: the
+  admitted basis is computed per call (`literal_values` re-walks the group — a
+  memo/cache item, not correctness), and the *candidate graph* proper (pre-constructed
+  inventory + SCC over `(instance, admitted-domain)`) is still the destination; the
+  joint-correlated-operand driver is still not the normal `analyze_apply` path (§12);
+  `may_not_complete` and the AP-30 witness remain owed.
+
+---
+
 ## 2026-07-26 — Archive8: the InstanceBodySummary unification — (instance, input-domain) body analysis
 
 Archive(8) confirmed the Archive7 fixes but found `SAFETY_STACK` keyed by `Lambda`
