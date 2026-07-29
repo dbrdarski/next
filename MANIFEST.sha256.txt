@@ -1,7 +1,7 @@
-# NEXT canonical library manifest — 2026-07-24
+# NEXT canonical library manifest — 2026-07-29
 # Verify repo copies against these before trusting them (the stale-upload guard).
 
-5b2b07bdbaca90cc8d1b5745abf5efb967f49404c63e81b168d6873e8c57544d  next-design-compendium-v1-0.md
+6e68bae54932f6bd7c91b2229f15288c3a50a42cfda556e8b6356ae31bfa6521  next-design-compendium-v1-0.md
 8df0d90721b9ff0ad661fc77c42acf115e0a1337f5de3731bb279b0326837d7e  next-grammar-specification-v0-1.md
 9f8f07618e592e24f94b8c1177512a0163a155e838f2de6e773fc01c7a1afe55  next-kernel-ast-specification-v0-1.md
 75c2fe3377ec7d49129a6c3c268d3726a9731143318552a0e4986f3d1675f003  next-semantics-companion-v0-1.md
@@ -10,8 +10,12 @@
 159a52a3f7ce6708700af7ce9b5ac5cd12bfe2ce76bd7703ebe9b7b2c2dbcda3  next-recursive-contracts-specification-v0-2.md
 48900b0e6167a2fa5ed3521c4a2b704737fc6cfcde4f758370bf71b8bb4b4d20  next-application-induction-specification-v0-8.md
 3ec302b22ba4f67f35194b40d8ee936089961361e2e66375b3225b383c7fb0b4  next-tuple-length-family-specification-v0-3.md
+4df090491b1eebe90c638ec4e616efdfab25ae8cb33f26e337a79dd358bb5d68  next-region-table-specification-v0-3.md
 7a6bef542ce5c9947a028e5a50ccb17e391b04e3cc6e81bd337fa6dbbe472233  next-phase-a-worked-examples-recovered.md
-ea1ba838ebc9db0572d547276095cd2e9a36c6ce26ad7cfecc91ff330248bce4  CLAUDE.md
+cbdc28da39c387fe5fd0a8bd3dfc8269fdb9b08e89bc447a5cdb55da9ebaedcb  CLAUDE.md
 23454c169bd267d5cd2346a9c89a734bc6f5809a2d722a9d1f863fe596f751c3  OwedItems-CLOSED.md
 2c2ed513ba1ac7260d474398763e8914d5a990652fa20595235653e8796251f7  HANDOVER-open-threads-2026-07-23.md
-01094488733eb826dbd41d6701e293d8810cb54a81472af1128862fac7665826  HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md
+84cf396cb96f0049a85c96000e28a3975614d0211324a2cd7af2b9f665f37727  HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md
+85b2cb14a13a4fa31c3eeab2edf8deeed442aff0cac2da791828579c5bf28632  next-termination-decisions-v4.md
+84fb0bf0587dc50bafdfdbfcae951cfe7147b7da43af70cf0758b7a012be2eb1  next-late-resolution-v0-5.md
+d6026d1d6943f8c902f68c0b93a13f93256b59cf17448523dfcf12713f0af7f8  next-grounding-spec-v1-handover.md

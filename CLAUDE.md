@@ -2,7 +2,9 @@
 
 You are implementing **NEXT**, a language whose design is complete and recorded in four normative documents in this repository. Your job is implementation, not design.
 
-**Open design threads — do not treat the affected text as settled:** see `HANDOVER-open-threads-2026-07-23.md`, continued by `HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md` (later record wins on Thread C). (A) open-value observation legality + its trap class; (B) function equality under the freeze slice; (C) the equality-freeze exclusions — provenance unratified (zero-annihilation, cancellation, identity elimination, and the closed-enumeration narrowing). All three are PENDING-§5-adjacent and block no current work; **MU-10 and H-05 are the tests that move if the rulings change.**
+**Design method (read before adding any new analysis capability):** `next-late-resolution-v0-5.md` (v0.1–v0.4 superseded, on disk as history; four rounds integrated; five rounds, final confirmatory ACCEPTED — DESIGN-CLOSED, author stamp 2026-07-27; the gate for Investigation 2) — the late-resolution law, its preconditions, the nine-entry dissolution ledger, the formation-vs-judgment line, and the 8-point checklist (C1–C8). Run the checklist before proposing mechanisms; imports smuggle declaration-time eagerness.
+
+**Open design threads — do not treat the affected text as settled:** see `HANDOVER-open-threads-2026-07-23.md`, continued by `HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md` (later record wins on Thread C; **rulings 2026-07-27 in its Part XI: specific `a/0` identity formalized, `Numeric` contract adopted**). (A) open-value observation legality + its trap class; (B) function equality under the freeze slice; (C) the equality-freeze exclusions — provenance unratified (zero-annihilation, cancellation, identity elimination, and the closed-enumeration narrowing). All three are PENDING-§5-adjacent and block no current work; **MU-10 and H-05 are the tests that move if the rulings change.**
 
 ## Normative documents (read in this order)
 

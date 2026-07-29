@@ -933,6 +933,43 @@ The main uncertainty is no longer whether the architecture can host serious math
 
 ---
 
+# Part XI — RULINGS 2026-07-27 [user]
+
+Part X items **2 and 3 are now ruled** (session of 2026-07-27, Fable). Everything else in Part X remains open
+in its stated order.
+
+## R-1 — Specific `a/0` formalized [user: "The specific a/0 — yes"]
+
+**Ruling.** Division remains total, and `a/0` denotes a **specific canonical value that retains its
+numerator's identity**: `1/0` and `2/0` are **distinct interned values**, comparable by ordinary `==`
+(pointer comparison, like every value). The generic `_ / 0` marker model (compendium C§7's
+`x/0 → Indeterminate(_/0)`) is **rejected** — this record supersedes that line per the standing
+later-record-wins authority on Thread C. `0/0` is likewise a specific value of its own.
+
+**What this ruling does NOT settle (still open, §§19/26/28):** the zero-denominator **algebra** — what
+`1/0 + 2/0`, `(2/0)/(1/0)`, `0 * (1/0)` yield; whether the structure is Laurent/Levi-Civita-flavored, a
+wheel, or NEXT-specific. The ruling fixes **identity** (specific, retained, interned), not arithmetic.
+Until the algebra is ruled, operations consuming a zero-denominator value remain unproven/undischarged at
+strict-`Number` seats, which is sound.
+
+## R-2 — `Numeric` adopted now [user: "Numeric — yes"]
+
+**Ruling.** The umbrella contract **`Numeric = Number ∪ ZeroDen`** (ordinary numbers plus the specific
+zero-denominator values of R-1) enters the contract vocabulary **now**, not with the future Number design.
+Division's output contract is `Numeric`. Strict `Number` seats demand discharge — narrowing away the
+`ZeroDen` alternatives — which under R-1 is ordinary value testing/matching against specific values (e.g.
+`x == 1/0`), preserving C§7's single-downstream-discharge discipline while replacing the marker model
+underneath with specific values.
+
+**Explicitly not ruled:** the Boolean analogue (`Logical`) discussed in the source session — raised, not
+adopted; do not carry it as settled.
+
+**Downstream consequence for Part X item 4:** the exclusion-trio revisit now proceeds against a concrete
+target — `x + 0` on a `Numeric` input is where identity-elimination interacts with the retained envelope
+(§§7–10) — with `Numeric` as a real contract rather than a placeholder name.
+
+---
+
 ## 35. One-sentence continuity statement
 
 > **NEXT is moving toward a model where Numbers are exact canonical mathematical DAG values, numerical approximations are renderings of those values, and algebraic canonicalization should be as mathematically comprehensive as the retained domain/semantic envelope safely permits; specific indeterminate expressions such as `1/0` must therefore preserve canonical identity rather than collapsing into a generic `_ / 0` marker.**
