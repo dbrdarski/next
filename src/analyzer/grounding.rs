@@ -27,11 +27,19 @@
 //! `Unproven` (GR-21; specimen 3c). The **closed-orbit** refutation form (GR-11) is a
 //! later increment.
 //!
-//! Candidate-locality (GR-04): outside applicability it concludes **nothing** —
-//! [`Verdict::Unproven`], always sound. Variable drift (§6), lexicographic (§5),
-//! exact-singleton chains (§4) and the WorldDecided classifier (§8) are later increments.
-//! **Not yet wired** into the body check — same discipline as `region.rs` /
-//! `bodycheck.rs`: build standalone, prove green, integrate after.
+//! **Multi-parameter counter descent (G-3, §6 GR-15a / GR-14 single component)** — a
+//! bare-argument measure: some argument position is a *counter* stopped by a half-line
+//! test (`n <= 0` / `n >= 100`) and stepped a constant in the stopping direction on every
+//! recursive call, the other positions carried freely (`(n, acc) => n <= 0 ? acc :
+//! f(n-1, acc+n)`). Structural landing — domain-independent. Point (`==`) stops (needing
+//! the grid) and compound measures (`2a+b`, needing substitute-and-normalize) are later
+//! increments.
+//!
+//! Candidate-locality (GR-04): outside applicability each candidate concludes **nothing**
+//! — [`Verdict::Unproven`], always sound. The compound-measure read (§6 GR-16),
+//! lexicographic (§5), exact-singleton chains (§4) and the WorldDecided classifier (§8)
+//! are later increments. **Not yet wired** into the body check — same discipline as
+//! `region.rs` / `bodycheck.rs`: build standalone, prove green, integrate after.
 
 use num_bigint::BigInt;
 
@@ -66,7 +74,9 @@ pub enum Verdict {
 /// drift-away (GR-23a). No witness ⇒ procedure-relative `Unproven` (GR-04/GR-21). Grounded
 /// is judged first: a proven descent is never also a divergence.
 pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Verdict {
-    if matches!(numeric_descent(callee, domain, cenv, interner), Some(Verdict::Grounded)) {
+    if matches!(numeric_descent(callee, domain, cenv, interner), Some(Verdict::Grounded))
+        || counter_descent(callee)
+    {
         return Verdict::Grounded;
     }
     if let Some(start) = point_value(domain)
@@ -94,7 +104,8 @@ fn numeric_descent(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, int
         if calls.is_empty() {
             bases.push(row.region.clone());
         } else {
-            for arg in &calls {
+            for arglist in &calls {
+                let arg = arglist.first()?; // spread / zero-arg self-call ⇒ inapplicable
                 drifts.push(constant_drift(arg, &param)?); // non-constant drift ⇒ inapplicable
             }
         }
@@ -159,7 +170,8 @@ fn drift_away(callee: &ValueRef, start: &Rational, cenv: &ContractEnv) -> bool {
             if calls.len() != 1 {
                 return false; // branching recursion — not a single forced path
             }
-            match constant_drift(&calls[0], &param) {
+            let Some(arg) = calls[0].first() else { return false };
+            match constant_drift(arg, &param) {
                 Some(d) => drift = Some(d),
                 None => return false,
             }
@@ -193,6 +205,102 @@ fn reaches(start: &Rational, d: &Rational, base: &Contract) -> bool {
     }
 }
 
+/// Multi-parameter **counter descent** (§6 GR-15a with a bare-argument measure — the
+/// single-component case of GR-14's lexicographic certificate). Some argument position is
+/// a *counter*: a base arm — reached **before** any recursive arm — stops on it with a
+/// **half-line** test (`p <= c` / `p >= c` / strict), and every recursive call steps that
+/// position by a constant strictly in the stopping direction (floor δ = |drift|). The
+/// other positions are carried freely. Landing is **structural** — a floored monotone step
+/// crosses a half-line in finitely many steps (Archimedean), independent of the domain, so
+/// no per-parameter domain is needed. Point (`==`) stops need the grid and stay with
+/// `numeric_descent` (single parameter) / a later increment.
+fn counter_descent(callee: &ValueRef) -> bool {
+    let Some(closure) = callee.as_closure() else { return false };
+    let Some(params) = param_names(&closure.lambda.params) else { return false };
+    let Expr::Match(m) = &*closure.lambda.body else { return false };
+
+    // Classify arms in order: a base arm (no self-call) offers its guard as a stop; a
+    // recursive arm offers each self-call's positional argument list.
+    let mut stops: Vec<Expr> = Vec::new();
+    let mut rec_calls: Vec<Vec<Expr>> = Vec::new();
+    let mut first_rec = usize::MAX;
+    for (idx, item) in m.items.iter().enumerate() {
+        let MatchItem::Arm(arm) = item else { continue };
+        let mut calls = Vec::new();
+        collect_self_calls(&arm.result, &closure, callee, &mut calls);
+        if calls.is_empty() {
+            // A stop is only sound if it is tested *before* any recursion can fire.
+            if let Some(g) = &arm.guard
+                && idx < first_rec
+            {
+                stops.push(g.clone());
+            }
+        } else {
+            rec_calls.extend(calls);
+            first_rec = first_rec.min(idx);
+        }
+    }
+    if rec_calls.is_empty() {
+        return false;
+    }
+    // Some argument position is a floored counter with a matching, early-enough stop.
+    (0..params.len()).any(|i| counter_ok(i, &params[i], &stops, &rec_calls))
+}
+
+/// Position `i` (`param`) is a floored counter: every recursive call steps it by a nonzero
+/// constant of a single sign, and a half-line stop on `param` faces that direction.
+fn counter_ok(i: usize, param: &str, stops: &[Expr], rec_calls: &[Vec<Expr>]) -> bool {
+    let mut ascending: Option<bool> = None;
+    for call in rec_calls {
+        let Some(arg) = call.get(i) else { return false };
+        let Some(d) = constant_drift(arg, param) else { return false };
+        if d.is_zero() {
+            return false; // a carried (non-moving) position is not a counter
+        }
+        let up = d > Rational::from(0);
+        match ascending {
+            None => ascending = Some(up),
+            Some(prev) if prev != up => return false, // mixed directions — not monotone
+            _ => {}
+        }
+    }
+    let Some(ascending) = ascending else { return false };
+    stops.iter().any(|g| stop_matches(g, param, ascending))
+}
+
+/// Whether guard `g` is a half-line stop `param ⋈ c` whose satisfied side lies in the
+/// direction the counter moves: a descending counter needs `param <= c` / `param < c`; an
+/// ascending counter needs `param >= c` / `param > c`.
+fn stop_matches(g: &Expr, param: &str, ascending: bool) -> bool {
+    let Expr::PrimOp { op, args } = g else { return false };
+    if args.len() != 2 {
+        return false;
+    }
+    // GR-15a: exactly one varying side is `param`, the other a constant.
+    let op = if is_param(&args[0], param) && const_num(&args[1]).is_some() {
+        *op
+    } else if is_param(&args[1], param) && const_num(&args[0]).is_some() {
+        flip(*op)
+    } else {
+        return false;
+    };
+    matches!(
+        (op, ascending),
+        (PrimOp::Le | PrimOp::Lt, false) | (PrimOp::Ge | PrimOp::Gt, true)
+    )
+}
+
+/// The comparison with operands swapped (`a < b` ⇔ `b > a`); `==`/`!=` are symmetric.
+fn flip(op: PrimOp) -> PrimOp {
+    match op {
+        PrimOp::Lt => PrimOp::Gt,
+        PrimOp::Gt => PrimOp::Lt,
+        PrimOp::Le => PrimOp::Ge,
+        PrimOp::Ge => PrimOp::Le,
+        other => other,
+    }
+}
+
 // ── Reading the shape ─────────────────────────────────────────────────────────
 
 /// The single bound parameter name (`(n)`), or `None` for any other parameter shape.
@@ -202,6 +310,19 @@ fn single_param(params: &Pat) -> Option<String> {
         [PatElem::Pat(Pat::Bind(n))] => Some(n.clone()),
         _ => None,
     }
+}
+
+/// Every bound parameter name in a flat parameter tuple (`(n, acc)` → `["n", "acc"]`), or
+/// `None` if any element is not a bare binding (a rest or nested pattern).
+fn param_names(params: &Pat) -> Option<Vec<String>> {
+    let Pat::Tuple(elems) = params else { return None };
+    elems
+        .iter()
+        .map(|e| match e {
+            PatElem::Pat(Pat::Bind(n)) => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The constant drift of a recursive call's argument on `param`: `param - c → -c`,
@@ -230,19 +351,27 @@ fn point_value(c: &Contract) -> Option<Rational> {
     }
 }
 
-/// Every self-call argument in `e` — the applications whose callee resolves (through the
-/// closure's captured environment) to the recursing closure `cv`. Descends every
-/// subexpression except nested lambdas (distinct instances); mirrors `bodywalk`'s walk so
-/// no self-call is missed (an unread self-call could otherwise be a false proof).
-fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Expr>) {
+/// Every self-call's **positional argument list** in `e` — the applications whose callee
+/// resolves (through the closure's captured environment) to the recursing closure `cv`.
+/// Descends every subexpression except nested lambdas (distinct instances); mirrors
+/// `bodywalk`'s walk so no self-call is missed (an unread self-call could otherwise be a
+/// false proof). A self-call carrying a spread argument has no reliable positional mapping
+/// and is recorded as an **empty** list — every candidate then rejects it.
+fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) {
     match e {
         Expr::Const(_) | Expr::Ref(_) => {}
         Expr::Lambda(_) => {} // a distinct instance — not this body's recursion
         Expr::Apply { callee, args } => {
-            if resolves_to_self(callee, closure, cv)
-                && let Some(Arg::Expr(a)) = args.first()
-            {
-                out.push(a.clone());
+            if resolves_to_self(callee, closure, cv) {
+                let mut positional = Vec::new();
+                let mut clean = true;
+                for a in args {
+                    match a {
+                        Arg::Expr(x) => positional.push(x.clone()),
+                        Arg::Spread(_) => clean = false,
+                    }
+                }
+                out.push(if clean { positional } else { Vec::new() });
             }
             collect_self_calls(callee, closure, cv, out);
             for a in args {
@@ -434,5 +563,42 @@ mod tests {
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
         assert_eq!(ground(&cd, &five, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    // ── G-3: multi-parameter counter descent (§6 GR-15a) ─────────────────────
+
+    #[test]
+    fn accumulator_counter_grounds_descending() {
+        // `n` is the counter (drift −1 toward the `n <= 0` stop); `acc` is carried freely.
+        // Structural landing — the (broad) domain is irrelevant.
+        let mut i = Interner::new();
+        let s = f("f = (n, acc) => n <= 0 ? acc : f(n - 1, acc + n)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    #[test]
+    fn accumulator_counter_grounds_ascending() {
+        // Ascending counter toward an upper stop `n >= 100` (drift +1) — the mirror case.
+        let mut i = Interner::new();
+        let s = f("f = (n, acc) => n >= 100 ? acc : f(n + 1, acc + n)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    #[test]
+    fn counter_moving_away_from_the_stop_is_unproven() {
+        // Drift +1 but the stop `n <= 0` is a *lower* half-line — the counter moves away,
+        // never crossing it. No matching stop → Unproven (it genuinely diverges for n > 0).
+        let mut i = Interner::new();
+        let s = f("f = (n, acc) => n <= 0 ? acc : f(n + 1, acc)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
+    #[test]
+    fn a_carried_only_recursion_has_no_counter() {
+        // Neither position moves toward its stop: `n` is carried and the stop is on the
+        // carried `acc`. No floored counter → Unproven (sound — it can diverge).
+        let mut i = Interner::new();
+        let s = f("f = (n, acc) => acc <= 0 ? n : f(n, acc)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
     }
 }

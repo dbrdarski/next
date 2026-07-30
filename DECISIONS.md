@@ -6,6 +6,35 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-3: multi-parameter counter descent (§6 GR-15a)
+
+Breadth — grounding now covers the common **accumulator + counter** shape. `grounding.rs`
++4 tests. **352 lib** + 111 conformance green, clippy clean. Still unwired.
+
+- **`counter_descent(callee)`** — the single-component case of GR-14, a bare-argument
+  measure (GR-15a). Some argument position is a *counter*: a base arm reached **before**
+  any recursive arm stops on it with a **half-line** test (`n <= 0` / `n >= 100`), and
+  every recursive call steps that position by a constant strictly in the stopping
+  direction (floor δ = |drift|); the other positions are carried freely. **Landing is
+  structural and domain-independent** — a floored monotone step crosses a half-line in
+  finitely many steps (Archimedean), so no per-parameter domain projection is needed. Both
+  orientations (descend→lower stop, ascend→upper stop) via `stop_matches`/`flip`.
+- **Grounds** `f = (n, acc) => n <= 0 ? acc : f(n-1, acc+n)` and its ascending mirror.
+  **Sound Unproven:** a counter moving *away* from its stop (`f(n+1)` under `n <= 0`), and
+  a carried-only recursion (stop on a non-moving position). Point (`==`) multi-param stops
+  need the grid + domain → deferred (single-param point base stays with `numeric_descent`).
+- **Soundness details:** the stop must be tested at an arm index **before** any recursive
+  arm (`idx < first_rec`), else first-match could reach the recursion first; a spread
+  self-call has no reliable positional mapping → recorded empty → rejected. The walker
+  `collect_self_calls` now yields each self-call's **full positional arg list**
+  (`Vec<Vec<Expr>>`); G-1/G-2 read position 0.
+- **Deferred:** §6 compound measures (`2a+b`, substitute-and-normalize GR-16 — needs
+  poly-NF), point-base multi-param (grid), §5 lexicographic (multi-component), §7
+  closed-orbit, §4 exact-singleton chains, §8 WorldDecided; then wiring. **`// [ask-author]`:**
+  none.
+
+---
+
 ## 2026-07-30 — Grounding G-2: the drift-away refutation (§7 / GR-23a)
 
 The negative half of the numeric certificate — the same machinery, from the other side.
