@@ -79,10 +79,15 @@ built in code, §16 proofs owed**.
   *architecturally closed; C§17 item **discharged***). **§2–§4 computation BUILT**
   (`analyzer/region.rs`, 2026-07-30): `region_table` (cases (a) exact-vs-constant + (d)
   total fallback; pattern∩guard) + the `select` remainder walk (singleton fast path).
-  Capture-free single-parameter. Owed: cases (b)/(c) over captures, arg-tuple projection
-  (§5, multi-param), the annotated-tuple **instance cache** (C§13.4), and the **call-site
-  body check** that consumes this table (the accepted-domain-dissolved safety proof,
-  gating 14.1–14.3). Compound/negated guards currently read as case (d) (sound).
+  Capture-free single-parameter. The **call-site body check** `BodySafe(instance, arg)`
+  is **BUILT** too (`analyzer/bodycheck.rs`, 2026-07-30): consumes the table, binds the
+  parameter per selected row, analyzes each result with the RT-14 witness discipline
+  (only a definitely-reached row refutes). Gates 14.1–14.3 (`bad()`/`f("hello")`
+  rejected, `helper(0)` accepted, path-sensitive). Owed: cases (b)/(c) over captures,
+  arg-tuple projection (§5, multi-param), the guards' own path demands, the
+  annotated-tuple **instance cache** (C§13.4), and the **wiring** — replace
+  `analyze_apply`'s body-safety machinery with `body_check`, then delete the superseded
+  functions (audit §5). Compound/negated guards currently read as case (d) (sound).
 - **Grounding v1** — `next-grounding-specification-v0-5.md` (0.5.1, DESIGN-CLOSED,
   compendium 1.0.18; GR-01…GR-30; Phase GR suite). Implementation + §13/§16 discharge
   owed (exact-chain bound theorem; lex joint-settlement; multigraph decomposition

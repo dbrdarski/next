@@ -32,11 +32,15 @@ pub struct Row {
     pub result: Expr,
 }
 
-/// A selected row's **effective** candidate region (`remaining ∩ region` at selection)
-/// and its result — the output of the [`select`] walk.
+/// A selected row's **effective** candidate region (`remaining ∩ region` at selection),
+/// its result, and its `exact` bit — the output of the [`select`] walk. `exact` carries
+/// the witness discipline downstream (RT-14): only a *definitely reached* row (this row
+/// exact **and** every earlier selected row exact) may refute; a may-region row's trap
+/// is at most unproven.
 #[derive(Clone, Debug)]
 pub struct Selected {
     pub region: Contract,
+    pub exact: bool,
     pub result: Expr,
 }
 
@@ -89,7 +93,7 @@ pub fn select(table: &[Row], arg_domain: &Contract) -> Vec<Selected> {
         let mut out = Vec::new();
         for row in table {
             if row.region.contains(v) {
-                out.push(Selected { region: Contract::Equals(v.clone()), result: row.result.clone() });
+                out.push(Selected { region: Contract::Equals(v.clone()), exact: row.exact, result: row.result.clone() });
                 if row.exact {
                     break; // an exact row containing the point consumes it
                 }
@@ -102,7 +106,11 @@ pub fn select(table: &[Row], arg_domain: &Contract) -> Vec<Selected> {
     let mut out = Vec::new();
     for row in table {
         if !disjoint(&remaining, &row.region) {
-            out.push(Selected { region: intersect(remaining.clone(), row.region.clone()), result: row.result.clone() });
+            out.push(Selected {
+                region: intersect(remaining.clone(), row.region.clone()),
+                exact: row.exact,
+                result: row.result.clone(),
+            });
         }
         if row.exact {
             remaining = Contract::Difference(Box::new(remaining), Box::new(row.region.clone()));

@@ -2337,3 +2337,99 @@ mod region {
         assert_eq!(select(&rows, &nine).len(), 1);
     }
 }
+
+// ── Call-site body check §6 / E3-E7 — the accepted-domain gate (14.1–14.3) ─────
+
+mod bodycheck {
+    use super::{ActKind, Severity, arm, closure, konst, matchx, name, one_param, prim};
+    use crate::analyzer::bodycheck::body_check;
+    use crate::ast::{Expr, Pat, PrimOp};
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    fn has_error(fs: &[crate::analyzer::Finding]) -> bool {
+        fs.iter().any(|f| f.severity == Severity::Error)
+    }
+    fn eqc(i: &mut Interner, v: i64) -> Contract {
+        Contract::Equals(i.integer(v))
+    }
+
+    #[test]
+    fn gate_14_1_unconditional_bad_body_rejects_the_call() {
+        // () => 1 + "x" — one input tuple (); the body traps. bad() is rejected.
+        let mut i = Interner::new();
+        let (one, x) = (i.integer(1), i.string("x"));
+        let body = prim(PrimOp::Add, vec![konst(one), konst(x)]);
+        let bad = closure(&mut i, Pat::Tuple(vec![]), body, ActKind::Pure);
+        assert!(has_error(&body_check(&bad, &[], &cenv(), &mut i)), "bad() must reject");
+    }
+
+    #[test]
+    fn gate_14_2_numeric_requirement_from_the_body() {
+        // x => x + 1 — the body demands Number of x. f(Number) accepted; f(String)
+        // rejected; f(Top) unproven (a warning, not a rejection).
+        let mut i = Interner::new();
+        let one = i.integer(1);
+        let f = closure(&mut i, one_param("x"), prim(PrimOp::Add, vec![name("x"), konst(one)]), ActKind::Pure);
+        assert!(!has_error(&body_check(&f, &[Contract::Kind(Kind::Number)], &cenv(), &mut i)), "f(Number) ok");
+        assert!(has_error(&body_check(&f, &[Contract::Kind(Kind::String)], &cenv(), &mut i)), "f(String) rejects");
+        // f(Top) is at least flagged (never silently accepted); severity is a precision
+        // detail of the operation-safety sampler (warning today, could sharpen to error).
+        assert!(!body_check(&f, &[Contract::Top], &cenv(), &mut i).is_empty(), "f(Top) flagged");
+    }
+
+    /// n == 0 ? 1 : n + "x"
+    fn cond_body(i: &mut Interner) -> Expr {
+        let (zero, one, x) = (i.integer(0), i.integer(1), i.string("x"));
+        matchx(
+            None,
+            vec![
+                arm(None, Some(prim(PrimOp::Eq, vec![name("n"), konst(zero)])), konst(one)),
+                arm(None, None, prim(PrimOp::Add, vec![name("n"), konst(x)])),
+            ],
+        )
+    }
+
+    #[test]
+    fn gate_14_3_path_sensitive_accepted_region() {
+        // AcceptedDomain = Equals(0) ∪ String — proved path-sensitively through the
+        // region table: f(0) ok; f(5) rejected (the else arm's 5+"x" traps, definite);
+        // f(String) ok (the else arm is String+String); f(Top) unproven (mixed).
+        let mut i = Interner::new();
+        let body = cond_body(&mut i);
+        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
+        let zero = eqc(&mut i, 0);
+        assert!(!has_error(&body_check(&f, &[zero], &cenv(), &mut i)), "f(0) ok");
+        let five = eqc(&mut i, 5);
+        assert!(has_error(&body_check(&f, &[five], &cenv(), &mut i)), "f(5) rejects (5 + \"x\")");
+        assert!(!has_error(&body_check(&f, &[Contract::Kind(Kind::String)], &cenv(), &mut i)), "f(String) ok");
+        // f(Top): the else arm is exact and definitely reached, and a concrete witness
+        // (n = 5, reaching `5 + "x"`) traps — so the unrestricted call is refuted, not
+        // merely unproven. Top ⊄ (Equals(0) ∪ String).
+        assert!(has_error(&body_check(&f, &[Contract::Top], &cenv(), &mut i)), "f(Top) rejects (witness 5)");
+    }
+
+    #[test]
+    fn rt14_a_may_region_trap_does_not_refute() {
+        // (n) => n*n <= 5 ? n + "x" : 0 — the guard is opaque (case d, non-exact), so
+        // even though `n + "x"` traps for a numeric n, the may-region row cannot refute:
+        // the finding downgrades to a warning (RT-14 witness discipline).
+        let mut i = Interner::new();
+        let (five, x, zero) = (i.integer(5), i.string("x"), i.integer(0));
+        let guard = prim(PrimOp::Le, vec![prim(PrimOp::Mul, vec![name("n"), name("n")]), konst(five)]);
+        let body = matchx(
+            None,
+            vec![
+                arm(None, Some(guard), prim(PrimOp::Add, vec![name("n"), konst(x)])),
+                arm(None, None, konst(zero)),
+            ],
+        );
+        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
+        let fs = body_check(&f, &[Contract::Kind(Kind::Number)], &cenv(), &mut i);
+        assert!(!has_error(&fs), "opaque-guard row may not refute — warning only");
+        assert!(fs.iter().any(|f| f.severity == Severity::Warning), "but it is flagged unproven");
+    }
+}

@@ -28,7 +28,7 @@ recovery deletes.
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **328 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **332 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 19 files verify** (07-30 grounding landing) |
@@ -68,7 +68,7 @@ version. `⬜` = design absorbed, implementation is the recovery Phase-2 build.
 | μ-canonicalization | v0.5 | ✅ | §6 universal interning: registered drift, PENDING-§5 (OwedItems) |
 | Recursive contracts | v0.2 patch **0.2.2** | ✅ | Concat guardedness + sourceProgress |
 | Tuple-length family | v0.3 patch **0.3.1** | ✅ | §1–§5 built; string-length contract lift owed; §16 proofs owed |
-| **Region-table computation** | **v0.3 patch 0.3.2** | 🟡 | design-closed; **§2–§4 computation built** (`analyzer/region.rs` — capture-free 1-param; cases a/d + selection walk; 5 tests). Owed: captures (b/c), arg-tuple projection (§5), the call-site body check that consumes it |
+| **Region-table computation + call-site body check** | **v0.3 patch 0.3.2 + E3/E-7** | 🟡 | design-closed; **built** (`analyzer/region.rs` §2–§4 + `analyzer/bodycheck.rs` = `BodySafe(instance, arg)`, RT-14 witness discipline). Gates 14.1–14.3 (`bad()` rejected / `f("hello")` rejected / `helper(0)` accepted, path-sensitive). Capture-free 1-param; **not yet wired into `analyze_apply`** (audit §5 delete pending). Owed: captures (b/c), arg-tuple projection (§5), instance cache, wiring+delete |
 | **Grounding v1** | **v0.5 patch 0.5.1** | ⬜ | **design-closed** (compendium 1.0.18); GR-01…30, Phase GR; implementation + §16 owed |
 | Late-resolution / termination-decisions | v0.5 / v4 | ✅ | method + pre-spec source for grounding (design record) |
 | Application & induction | v0.8 patch **0.8.2** | ⬜ | design-closed; **call-site build superseded by the region-table recovery** (audit §5 — §4 map below) |

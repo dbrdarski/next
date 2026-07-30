@@ -6,6 +6,46 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Recovery Phase 2, step 2: the call-site body check (the 14.1–14.3 gate)
+
+The safety proof that consumes the region table — `BodySafe(instance, argument)`, the
+dissolved accepted-domain (E3/E-7, errata). New module `src/analyzer/bodycheck.rs`;
+5 tests; the recovery's gate examples pass. Full tree **332 lib** + 111 conformance,
+clippy clean. **Still no superseded machinery deleted** (audit §5 — the check is
+standalone, not yet wired into `analyze_apply`).
+
+- **`body_check(callee, args, cenv, interner) → Vec<Finding>`** — there is no
+  materialized accepted domain (dissolved); a call is proven safe by **running the
+  ordinary body check under the actual input**. For a single-parameter callee: build
+  the region table, `select` the reachable rows for the argument, bind the parameter to
+  each selected row's region, and `analyze` the row's result — reusing the existing
+  operation-safety machinery. Captures bind to `Equals(value)`. Zero-parameter bodies
+  analyze directly.
+- **RT-14 witness discipline [chose].** A row's finding is an `Error` only when the row
+  is **definitely reached** — this row exact **and** every earlier selected row exact —
+  so a real input reaches it; a may-region (non-exact) row's `Error` downgrades to a
+  `Warning` (an over-approximate candidate invents no witness).
+- **The gate, verified:** **14.1** `() => 1 + "x"` → `bad()` rejected (the body traps
+  for its one input `()`). **14.2** `x => x + 1` → `f(Number)` ok, `f(String)` rejected,
+  `f(Top)` flagged. **14.3** `n => n == 0 ? 1 : n + "x"` → the accepted region
+  `Equals(0) ∪ String` proved **path-sensitively**: `f(0)` ok, `f(5)` **rejected** (the
+  exact else-arm's `5 + "x"` traps, a definite refutation with witness 5), `f(String)`
+  ok (the else arm is `String + String`), `f(Top)` rejected (witness 5). RT-14: an
+  opaque-guard row's trap is a warning, never a rejection.
+- **Correction while writing:** I first expected `f(Top)` in 14.3 to be *unproven*; it's
+  a genuine **refutation** — over `Top` the sampler produces `n = 5`, which reaches the
+  exact else and traps, so the input obligation (`n : String` on that path) is refuted
+  by a represented witness. `Top ⊄ (Equals(0) ∪ String)`. (14.2's `f(Top)` is only a
+  warning today — the `Top + Number` sampler is incomplete; sound, less precise.)
+- **Scope / next:** capture-free, zero-/single-parameter. Owed: multi-parameter
+  (argument-tuple projection §5), the guards' own path demands, the C§13.4 instance
+  cache, and the **wiring** — replace `analyze_apply`'s call-site body-safety machinery
+  with `body_check`, then delete the superseded functions (audit §5, once the current
+  behaviours hold).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Recovery Phase 2, step 1: the region-table computation
 
 The first build of the recovery (author-directed: demand core → region table →
