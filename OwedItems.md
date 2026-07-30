@@ -94,38 +94,45 @@ corrected key* **hangs** on `a_growing_union_recursive_domain_terminates` and
 analysis never converges. The old machine bounds this with **widening** (`domain_admitted`
 + `kind_abstraction`).
 
-**Correction (2026-07-30, third revision — grounding is NOT this bound).** I earlier called
-grounding "the specified replacement for that bound." **Wrong, verified.** Both hanging
-tests are **non-terminating programs** with no base case (`f = (x, y) => f(x + y, y)`;
-`f = (x, b) => f(b ? x : 0, b)` — their own comments say "No claim about the verdict — only
-that analysis terminated"). Grounding is a *termination* judgment; it correctly returns
-**Unproven** for both (test `grounding::…::baseless_divergent_recursions_are_unproven_not_grounded`),
-so a grounding verdict can **never** cut them. The analyzer must terminate even on
-divergent programs (GR-05: "C§13.3 bounds the compiler's symbolic procedure, not runtime
-recursion") — and that bound is the **finite-domain abstraction**, GR-03's *"instance's
-finite row-set lattice"* (the old `domain_admitted` + widening is a crude version): keep
-concrete/literal singletons exact (so `f(10) → f(9) → … → f(5)` still traces a deep trap),
-map computed/growing domains into the finite lattice (so `f(Range)` stabilizes). Grounding
-is **orthogonal** — A-NEG's derived-input-domain source and per-row return-fact admission
-(GR-02), now **built (G-1…G-8)**, but it does not bound the swap's unfolding.
+**Correction (2026-07-30, verified against the specs — widening is FOREIGN; the bug is that
+`bodycheck.rs` unfolds).** Two prior framings were wrong: grounding is *not* the bound
+(the two hanging tests are non-terminating programs — `f = (x,y) => f(x+y,y)`,
+`f = (x,b) => f(b?x:0,b)` — so grounding correctly returns Unproven; test
+`baseless_divergent_recursions_are_unproven_not_grounded`), **and** re-introducing widening
+was the wrong instinct. NEXT does **not** analyze recursion by unfolding an abstract
+interpreter to a fixpoint; widening is a *foreign* (abstract-interpretation) mechanism the
+design deliberately avoids. The spec-verified native mechanism:
 
-**Consequence for the audit §5 DELETE list:** the finite-domain abstraction
-(`domain_admitted` + widening, or its GR-03 row-set-lattice refinement) is
-**load-bearing for analysis termination over growing domains** and cannot simply be
-deleted — the swap needs it ported/refined, not replaced by grounding. Therefore:
+- **Don't unfold — summarize.** Region-table §8: *"the recursion move: analyze the
+  suspension, don't expand it."* Compendium §10.6: a return fact is a summary — *"for
+  inputs ⊑ I, the return ⊑ C"*, settled jointly (SCC/vector), never unrolled.
+- **Shape-repeat cutoff bounds the instance chain** (app-induction §4a): the instance
+  inventory is a finite closure; *"target shape already in the sequence → no admission…
+  path depth ≤ the program's shape count."* **Built** — `inventory.rs` /
+  `reachable_closures`.
+- **Domains are the finite region partition** (app-induction §5 "partition rule" + GR-03's
+  *"instance's finite row-set lattice"*): facts index `I ⊆ GroundedRows`; a growing
+  concrete domain folds into a fixed row and the chain closes. **Built** — `region.rs`.
+  The trap soundness is intrinsic: each reachable row's result is checked **under the
+  row's own domain** (e.g. the `else`/`n≠0` row covers 5, so a deep `n==5` trap is caught
+  without tracing concrete `f(10)→f(9)→…`).
+- **Grounding derives `GroundedRows`** (the safe/reachable domain) and **refutation** stops
+  the divergent case. **Built** — `grounding.rs` (G-1…G-8).
 
-- A **wired** `body_summary` needs **both**: the corrected `(instance, domain)` key (done —
-  sound on the domain-changing example) **and** the finite-domain abstraction (widening /
-  GR-03 row-set lattice). The suite proves neither alone suffices: instance-key terminates
-  but is unsound; domain-key is sound but hangs on the two `..._terminates` tests.
-- `body_summary` + `errors()` + the corrected key remain in `bodycheck.rs` as
-  **built-but-unwired**, ready once the finite-domain abstraction is ported.
+**So the "design fork" (keep widening vs row-set lattice) is retired — widening is not an
+option; the row-set/partition mechanism is the only one, and its substrate is already
+built.** The real bug: `bodycheck.rs` **unfolds** (re-enters `body_summary` on recursive
+calls over concrete/growing domains). It must become a **summary-over-partition body
+check**: for a recursive callee, a **reachable-rows fixpoint** over `region.rs`'s finite
+partition — check each reachable row's result under its row domain, summarize recursive
+calls (shape-repeat cutoff), consult grounding/refutation for completion. This is the
+**demand core** (OwedItems §1) — a genuine rebuild of the body check from *unfolding* to
+*summary*, not a wire, but it reuses the built substrate and introduces nothing foreign.
 
-**Open design fork (surfaced to the author — this contradicts audit §5's "delete widening").**
-Two ways to supply the finite-domain bound: **(a)** keep/port `domain_admitted` +
-`kind_abstraction` to the new body-check layer; **(b)** implement GR-03's finite row-set
-lattice (the specified form — literals exact, computed folded into rows). Author ruling
-needed before the swap can be wired; grounding (though valuable and built) is not the gate.
+- Owed sub-pieces: multi-parameter region tables (§5 arg-tuple projection — the two growing
+  tests are 2-param); the **A-NEG derived-input-domain** output from grounding (the domain
+  the body is checked under); then wire + delete the old `instance_body_summary` /
+  `domain_admitted` / `kind_abstraction` (the crude widening the partition rule replaces).
 
 ---
 

@@ -6,6 +6,39 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Demand core step 1: reachable-rows fixpoint (spec-verified; widening retired)
+
+Verified the body-check recursion mechanism against the specs, then built the substrate.
+`bodycheck.rs` +3 tests; **367 lib** + 111 conformance green, clippy clean.
+
+- **Spec verification.** NEXT does **not** unfold recursion (region-table §8: "analyze the
+  suspension, don't expand it"; compendium §10.6: return facts are summaries). The
+  termination bound is the **finite region partition** — app-induction §4a shape-repeat
+  cutoff (*"path depth ≤ the program's shape count"*, built: `inventory.rs`) + §5's
+  partition rule / GR-03's *"instance's finite row-set lattice"* (built: `region.rs`).
+  **Widening is a foreign (abstract-interpretation) mechanism NEXT deliberately avoids** —
+  the "keep widening vs row-set lattice" fork from the prior entry is **retired**; widening
+  was never an option. Grounding is orthogonal (A-NEG derived domain + return-fact
+  admission), not the bound.
+- **The real bug:** `bodycheck.rs` **unfolds** (re-enters `body_summary` over concrete/
+  growing domains). Fix: a **summary-over-partition** body check.
+- **Built — `reachable_rows(callee, param, arg)`** (GR-03 finite row-set lattice): the finite
+  set of `region_table` row indices a call reaches through recursion — seed with the rows
+  `arg` selects, and for each reachable row that recurses, add the rows its recursive-call
+  argument domain selects. A **growing** concrete domain folds into a fixed row → the
+  closure is finite (bounded by row count), **no widening**. Plus `selected_indices` (the
+  remainder walk returning indices). Verified: `f(0) → f("x")` reaches **both** rows (the
+  `else`/Top row where `x+1` traps is covered — so a summary check catches the trap without
+  unfolding); `f(x) => f(x+1)` folds into **one** row (finite, no hang); countDown reaches
+  base+step.
+- **Next:** the summary body check that walks these rows (check each row's result under its
+  row domain, summarize recursion via the shape cutoff), then multi-parameter region tables
+  (§5 — the two growing tests are 2-param) and the A-NEG derived domain; then wire + delete
+  `instance_body_summary`/`domain_admitted`/`kind_abstraction`.
+- **`// [ask-author]`:** none — widening-retirement is spec-grounded (§8/§10.6/§4a/§5/GR-03).
+
+---
+
 ## 2026-07-30 — Wiring finding: grounding is NOT the swap's termination bound (third revision)
 
 Set out to wire `ground()` into the body check to bound the growing-domain unfolding (the

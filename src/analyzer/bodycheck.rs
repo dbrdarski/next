@@ -14,37 +14,27 @@
 //! projection, §5) and the guards' own path demands are owed; this is not yet wired
 //! into `analyze_apply` (the superseded machinery still runs — audit §5).
 //!
-//! **Swap status (finding, 2026-07-30, corrected).** Wiring `body_summary` in place of
-//! `induction::instance_body_summary` was attempted, failed one test, and reverted. The
-//! failure was **not** a grounding gap — it was a wrong cycle key in [`ACTIVE`]. The
-//! first cut of the guard keyed on the *instance* alone, so `f = (x) => x==0 ? f("x") :
-//! x+1` called as `f(0)` cut its `f("x")` edge (f already active) and discarded the
-//! `"x" + 1` trap. The fix is the **(instance, domain)** key (C§13.2a / GR-07: nodes are
-//! *"instance × row/domain"*) — the same key the old `ACTIVE_BODIES` uses: `f(0)` and
-//! `f("x")` are distinct nodes, so `f("x")` is analyzed and the trap is caught. That
-//! demand chain **terminates on its own** (`f("x")` reaches `x+1`, no further recursion)
-//! — no termination bound is needed for this example, and grounding is a *termination*
-//! judgment, not what it needs. What grounding **is** needed for: bounding a domain that
-//! grows without end (`f(Range(1,3)) → f(Range(2,5)) → …`, all distinct nodes → the
-//! analysis would not converge), the job the old machine's widening does. So grounding
-//! gates **deleting the widening / the swap+delete**, not fixing domain-changing
-//! recursion. The pinning test: `body_safety::a_recursive_call_over_a_new_domain_is_analyzed`.
-//!
-//! **Verified empirically (2026-07-30).** Wiring `body_summary` *with* this corrected
-//! `(instance, domain)` key was run against the full suite: it **hangs** on
-//! `a_growing_union_recursive_domain_terminates` and
-//! `recursive_domains::a_growing_non_singleton_recursive_domain_terminates` — the
-//! growing-domain cases — because the correct key (rightly) refuses to cut distinct nodes
-//! and there is no bound yet. So a *wired* machine needs **both** the correct key (this
-//! change, sound on the example) **and** the termination bound (grounding, unbuilt).
-//! Reverted to unwired; the key change stands as the right key for when it is wired.
+//! **Recursion (finding, 2026-07-30, spec-verified — see `OwedItems.md §0.1`).** The
+//! swap attempt hung on growing-domain recursion. Two prior diagnoses were wrong (a cycle
+//! key; then grounding). The verified truth: NEXT does **not** unfold recursion (region-
+//! table §8: *"analyze the suspension, don't expand it"*; §10.6 return facts are
+//! summaries), and widening is a **foreign** mechanism. The termination bound is the
+//! **finite region partition** (GR-03 row-set lattice / app-induction §4a shape cutoff):
+//! a growing concrete domain folds into a fixed row, so the reachable-row closure is
+//! finite. [`reachable_rows`] computes that closure — the substrate for the summary body
+//! check that will **replace `body_check`'s unfolding**: check each reachable row once
+//! under the row's own domain (so a trap anywhere in a reachable row is caught without
+//! unfolding), summarize recursive calls (shape cutoff), consult grounding/refutation for
+//! completion. The `(instance, domain)` [`ACTIVE`] key below is the pre-fixpoint stopgap
+//! and is superseded by the row-closure approach.
 
 use std::cell::RefCell;
 
-use crate::analyzer::region::{region_table, select};
+use crate::analyzer::grounding::collect_self_calls;
+use crate::analyzer::region::{Row, region_table, select};
 use crate::analyzer::{Completion, Finding, Severity, TypeEnv, analyze, bind_pattern};
 use crate::ast::{Pat, PatElem};
-use crate::contract::{Contract, ContractEnv};
+use crate::contract::{Contract, ContractEnv, disjoint};
 use crate::env::Binding;
 use crate::interner::Interner;
 use crate::value::ValueRef;
@@ -150,6 +140,77 @@ pub fn body_check(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, inte
     }
 }
 
+/// The demand core's **reachable-rows fixpoint** (GR-03 finite row-set lattice). The finite
+/// set of `region_table` **row indices** a call over `arg` can reach through recursion: seed
+/// with the rows `arg` selects, and for each reachable row whose result recurses, compute
+/// the recursive call's argument domain and add the rows *it* selects. Because a growing
+/// concrete domain (`Range(1,3) → Range(2,5) → …`) folds into a fixed row, the closure is
+/// **finite** — bounded by the row count — with no widening. This is the substrate the
+/// summary body check walks: each reachable row is checked once, **under the row's own
+/// domain**, so a trap living anywhere in a reachable row is caught without unfolding the
+/// recursion (`f(0) → f("x")` reaches the `else` row, whose `Top` domain covers `String`, so
+/// `x + 1` traps).
+///
+/// Substrate only in this increment (proved by its tests); the summary body check that
+/// walks these rows — replacing `body_check`'s unfolding — is the next increment.
+#[allow(dead_code)]
+fn reachable_rows(callee: &ValueRef, param: &str, arg: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Vec<usize> {
+    let Some(closure) = callee.as_closure() else { return vec![] };
+    let table = region_table(&closure.lambda.body, param, cenv);
+    let mut seen: Vec<usize> = Vec::new();
+    let mut work: Vec<usize> = selected_indices(&table, arg);
+    while let Some(i) = work.pop() {
+        if seen.contains(&i) {
+            continue;
+        }
+        seen.push(i);
+        let mut calls = Vec::new();
+        collect_self_calls(&table[i].result, &closure, callee, &mut calls);
+        for arglist in &calls {
+            let Some(arg_expr) = arglist.first() else { continue };
+            let mut env = capture_env(callee);
+            env.insert(param.to_string(), table[i].region.clone());
+            let dom = analyze(arg_expr, &env, cenv, interner).contract;
+            for j in selected_indices(&table, &dom) {
+                if !seen.contains(&j) && !work.contains(&j) {
+                    work.push(j);
+                }
+            }
+        }
+    }
+    seen.sort_unstable();
+    seen
+}
+
+/// The row indices a value in `domain` may select — the first-match remainder walk of
+/// [`select`], returning indices (exact rows consume, uncertain rows do not).
+#[allow(dead_code)]
+fn selected_indices(table: &[Row], domain: &Contract) -> Vec<usize> {
+    if let Contract::Equals(v) = domain {
+        let mut out = Vec::new();
+        for (i, row) in table.iter().enumerate() {
+            if row.region.contains(v) {
+                out.push(i);
+                if row.exact {
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+    let mut remaining = domain.clone();
+    let mut out = Vec::new();
+    for (i, row) in table.iter().enumerate() {
+        if !disjoint(&remaining, &row.region) {
+            out.push(i);
+        }
+        if row.exact {
+            remaining = Contract::Difference(Box::new(remaining), Box::new(row.region.clone()));
+        }
+    }
+    out
+}
+
 /// The single-parameter shape this increment handles.
 enum Param {
     /// No parameter (`()`).
@@ -186,5 +247,47 @@ fn downgrade(f: Finding) -> Finding {
     match f.severity {
         Severity::Error => Finding { severity: Severity::Warning, ..f },
         Severity::Warning => f,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oracle::harness::run_source_in;
+
+    fn f(src: &str, i: &mut Interner) -> ValueRef {
+        run_source_in(src, i).unwrap().0
+    }
+
+    #[test]
+    fn domain_changing_recursion_reaches_both_rows() {
+        // f(0) → f("x"): the `x==0` row (0) and — via the recursive call's String target —
+        // the `else` row (1). Both reachable; the else row's Top domain is where `x + 1`
+        // traps, so a summary check over these rows catches it without unfolding.
+        let mut i = Interner::new();
+        let g = f("f = (x) => x == 0 ? f(\"x\") : x + 1\nf", &mut i);
+        let zero = Contract::Equals(i.integer(0));
+        assert_eq!(reachable_rows(&g, "x", &zero, &ContractEnv::new(), &mut i), vec![0, 1]);
+    }
+
+    #[test]
+    fn growing_domain_recursion_has_a_finite_row_closure() {
+        // `f(x) => f(x + 1)` grows the domain forever, but every domain folds into the single
+        // (baseless) row — so the reachable-rows closure is finite: one row, no widening, no
+        // hang. This is GR-03's finite row-set lattice replacing the old machine's widening.
+        let mut i = Interner::new();
+        let g = f("f = (x) => f(x + 1)\nf", &mut i);
+        let five = Contract::Equals(i.integer(5));
+        assert_eq!(reachable_rows(&g, "x", &five, &ContractEnv::new(), &mut i).len(), 1);
+    }
+
+    #[test]
+    fn descending_recursion_reaches_base_and_step_rows() {
+        // countDown: from Equals(5) the else (step) row recurses over Number, which selects
+        // both the base (n==0) and step rows — a finite two-row closure.
+        let mut i = Interner::new();
+        let g = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        let five = Contract::Equals(i.integer(5));
+        assert_eq!(reachable_rows(&g, "n", &five, &ContractEnv::new(), &mut i), vec![0, 1]);
     }
 }

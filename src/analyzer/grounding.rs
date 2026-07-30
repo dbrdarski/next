@@ -725,8 +725,9 @@ fn point_value(c: &Contract) -> Option<Rational> {
 }
 
 /// Every self-call's **positional argument list** in `e` (paths discarded) — the shape
-/// [`numeric_descent`] / [`measure_descent`] read. Thin wrapper over [`walk`].
-fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) {
+/// [`numeric_descent`] / [`measure_descent`] read, and the demand core's reachable-rows
+/// fixpoint (`bodycheck`). Thin wrapper over [`walk`].
+pub(crate) fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) {
     let mut full = Vec::new();
     walk(e, closure, std::slice::from_ref(cv), &[], &[], &mut full);
     out.extend(full.into_iter().map(|(args, _)| args));
