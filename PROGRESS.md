@@ -9,29 +9,31 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-30 · **recovery spec-unblocked.** The Phase-1 audit's four
-"blocking rulings" are resolved by the 07-30 landing (region-table + grounding
-specs; `InferredAcceptedDomain`/eager-vs-lazy **dissolved** by errata E-6/E-7/E-8 —
-§3). Region table + call-site body check are **built** (`region.rs`/`bodycheck.rs`);
-the swap to wire them was attempted and **reverted**. Verified diagnosis (§3): the
-cycle guard needed the **(instance, domain)** key (fixed), and wiring then **hangs** on
-growing-domain recursion — so the audit-§5 delete is **grounding-gated for termination**.
-Next: **implement grounding (C§10)**, then swap + delete. This maintainer file was
-rebaselined to the specs 07-30 — the intervening tail/Archive `✅` rows below are
-development history the recovery supersedes, not the target architecture.
+**Snapshot:** 2026-07-30 · **the swap landed; the demand core is wired but not yet sound.**
+`analyze_apply` now runs the **summary-over-partition** body check
+(`bodycheck::body_summary`), replacing `induction::instance_body_summary`; the old widening
+machinery (`instance_body_summary`, `domain_admitted`, `kind_abstraction`, `ACTIVE_BODIES`,
+`literal_values`) is **deleted** (−288 lines). Recursion is bounded by the §4a shape cutoff +
+the finite region partition — **no widening**. Grounding (G-1…G-8) is a built, tested
+subsystem but is **unwired** (orthogonal — A-NEG / return-fact admission, not the swap gate).
+**Not sound yet:** the Archive-11 review found four adversarial holes — RT-14 uncertain-prefix
+(**fixed**, blocker 1a) plus three that need the unified **`(instance, row-set)` SCC summary**
+(1b false-reject on coarse targets; 2a multi-param + 2b mutual false-accepts; 3 recursive
+fall-through) — pinned as `#[ignore]` tests in `bodycheck.rs`, tracked as task #52. The
+`✅`/tail rows below are development history; the summary-over-partition core is the target
+architecture, with the SCC summary the remaining soundness work.
 
 ---
 
 ## 1. Scoreboard (machine-checked)
 
 All rows verified by `cargo test` / `cargo clippy` / `shasum -c` on **2026-07-30**
-(not inherited). **Caveat:** many of the 323 lib tests exercise the superseded
-call-site machinery (§4 recovery note); they pass but count wrong-layer code the
-recovery deletes.
+(not inherited). **Caveat:** green ≠ sound — the suite does not yet cover the four
+Archive-11 adversarial cases (one fixed, three pinned `#[ignore]`; task #52).
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **363 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **371 passed, 0 failed, 4 ignored** (the pinned blockers) |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 19 files verify** (07-30 grounding landing) |
@@ -71,8 +73,8 @@ version. `⬜` = design absorbed, implementation is the recovery Phase-2 build.
 | μ-canonicalization | v0.5 | ✅ | §6 universal interning: registered drift, PENDING-§5 (OwedItems) |
 | Recursive contracts | v0.2 patch **0.2.2** | ✅ | Concat guardedness + sourceProgress |
 | Tuple-length family | v0.3 patch **0.3.1** | ✅ | §1–§5 built; string-length contract lift owed; §16 proofs owed |
-| **Region-table body check — WIRED (summary-over-partition)** | **v0.3 patch 0.3.2 + E3/E-7** | ✅🟡 | **The swap is done, the NEXT way.** `analyze_apply` Known-callee → `bodycheck::body_summary` (replacing `instance_body_summary`): §4a shape-repeat cutoff + `check_recursive_body` (reachable region rows × reaching domains, GR-03 finite row-set lattice), recursion **summarized not unfolded**, **no widening**. Full suite green, no hang — domain-changing trap rejects, the two growing-domain tests terminate (fold into finite rows), RT-14 holds. Owed: multi-param arg-tuple region tables (§5 — whole-body fallback now), delete the dead `instance_body_summary`/`domain_admitted`/`kind_abstraction` |
-| **Grounding v1** (termination bound) | **v0.5 patch 0.5.1** | 🟡 | **design-closed** (compendium 1.0.18); GR-01…30, Phase GR. **G-1..G-8 built** (`analyzer/grounding.rs`, three-voiced): numeric descent (GR-05), constant-drift refutation (GR-23a — descending/ascending/period-1), program-expressed linear measures (§6 — `2a+b`), lexicographic (§5 — path-sensitive), structural descent (§2b — tuple peel), and **mutual recursion** (GR-07 — SCC per-edge descent, `isEven`/`isOdd`). Owed: point-base/Ackermann (GR-18 grid+domain), peel-k grid, oscillator cycle composition, general closed-orbit (GR-11), §4 exact-chains, §8 WorldDecided; then wiring (the swap gate); §16 discharge. *ACCEPTED pending author stamp* |
+| **Region-table body check — WIRED (summary-over-partition)** | **v0.3 patch 0.3.2 + E3/E-7** | 🟡 | **Swapped + widening deleted (−288 lines), but NOT yet sound.** `analyze_apply` Known-callee → `bodycheck::body_summary`: §4a shape-repeat cutoff + `check_recursive_body` (reachable region rows × reaching domains, GR-03 finite row-set lattice), recursion **summarized not unfolded**, **no widening**. Suite green + terminates. **Archive-11 review holes:** RT-14 uncertain-prefix (blocker 1a **fixed**); 1b/2a/2b/3 pinned `#[ignore]` (task #52 — the unified `(instance, row-set)` SCC summary). Owed: that SCC summary (precise cross-instance reaching + completion), multi-param region tables (§5 — whole-body fallback now, **unsound**) |
+| **Grounding v1** (termination bound) | **v0.5 patch 0.5.1** | 🟡 | **design-closed** (compendium 1.0.18); GR-01…30, Phase GR. **G-1..G-8 built** (`analyzer/grounding.rs`, three-voiced): numeric descent (GR-05), constant-drift refutation (GR-23a — descending/ascending/period-1), program-expressed linear measures (§6 — `2a+b`), lexicographic (§5 — path-sensitive), structural descent (§2b — tuple peel), and **mutual recursion** (GR-07 — SCC per-edge descent, `isEven`/`isOdd`). Owed: point-base/Ackermann (GR-18 grid+domain), peel-k grid, oscillator cycle composition, general closed-orbit (GR-11), §4 exact-chains, §8 WorldDecided; §16 discharge. **Built + tested but UNWIRED** — `ground()` has no analyzer call sites; it is orthogonal to the swap (A-NEG / return-fact admission), not the termination bound. *ACCEPTED pending author stamp* |
 | Late-resolution / termination-decisions | v0.5 / v4 | ✅ | method + pre-spec source for grounding (design record) |
 | Application & induction | v0.8 patch **0.8.2** | ⬜ | design-closed; **call-site build superseded by the region-table recovery** (audit §5 — §4 map below) |
 | Test suite | v0.1 + **07-30 (Phase GR added)** | 🟡 | PR/FE/MU implemented; Phase GR + A-WRK grids stubbed |
@@ -105,21 +107,16 @@ superseded call-site machinery per audit §5 (nothing deleted until the replacem
 passes `bad()`-rejected / `f("hello")`-rejected / `helper(0)`-accepted / divergence
 -terminates / no-user-fn-executed). Full owed picture in `OwedItems.md`.
 
-**Finding (2026-07-30, corrected + verified) — the swap needs grounding for *termination*.**
-Region table + call-site body check are **built** (`region.rs`/`bodycheck.rs`; 14.1–14.3
-green); `body_summary` matches the old interface. Wiring was attempted, and the failure
-was **misdiagnosed then corrected**: (1) the one failing test (`f(0)→f("x")→"x"+1`) was a
-**wrong cycle key** — the guard keyed on the closure *instance* instead of **(instance,
-domain)** (C§13.2a / GR-07); fixed (`ACTIVE: Vec<(ValueRef, Vec<Contract>)>`), and that
-example needs no grounding (it terminates by crashing). (2) Wiring *with the corrected
-key* then **hangs** on `a_growing_union_recursive_domain_terminates` and
-`recursive_domains::a_growing_non_singleton_recursive_domain_terminates` — a domain that
-grows without end is an unbounded stream of distinct nodes. **That** is what needs a
-termination bound: the old `domain_admitted`/widening, whose specified replacement is
-**grounding (C§10)** (GR-05 descent/landing). So a wired machine needs **both** the
-corrected key (done) and the bound (grounding); the suite proves neither alone suffices.
-**Build order:** region table (done) → **grounding (C§10, termination bound)** → swap +
-audit-§5 delete. Detail in `OwedItems.md §0.1` and `DECISIONS.md` (Phase-2 step 5).
+**Current state (2026-07-30) — the swap landed; it is wired but not yet sound.** The
+summary-over-partition body check is **wired** (`analyze_apply → bodycheck::body_summary`)
+and the widening machinery is **deleted** (−288 lines). Termination is the finite region
+partition + §4a shape cutoff — **not** grounding (an earlier diagnosis that grounding was
+the termination bound was **wrong**: the two `..._terminates` tests are non-terminating
+programs, so grounding declines them; the bound is the row partition). **Soundness is the
+open work:** the Archive-11 review found the summary check passes the suite but the suite
+covers none of the hard cases — RT-14 uncertain-prefix (blocker 1a, **fixed**), and three
+that need the unified `(instance, row-set)` SCC summary (1b/2a/2b/3, pinned `#[ignore]`,
+task #52). Detail in `DECISIONS.md` (Archive-11 entry) and `OwedItems.md §0.1`.
 
 **Open policy pick (author's, not blocking the build):** P-1 / Principle 9 —
 warn-and-compile vs reject for unproven grounding (blocker (4) now SATISFIED [1.0.18];
