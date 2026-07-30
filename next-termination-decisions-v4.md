@@ -345,3 +345,5 @@ finiteness with the Q factor, terminology syncs; R6: the completion closure cove
 semantic-state stability for exact chains). All [user] rulings preserved at their original
 strength; assistant overclaims demoted where found. The grounding specification drafts from this note;
 §4 lists what it must discharge — compendium C§17 [1.0.16] registers the same package.*
+
+*Discharged [2026-07-30]: the grounding specification drafted from this note is `next-grounding-specification-v0-5.md` (patch 0.5.1) — DESIGN-CLOSED after four rounds (dispositions in its Appendices R1–R4); compendium 1.0.18 registers the landing.*
