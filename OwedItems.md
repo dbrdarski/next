@@ -162,11 +162,15 @@ built in code, §16 proofs owed**.
   descent, §2b): peel recursion `l :: { [] => …; [h, ...rest] => f(rest) }` — the peeled
   tuple parameter's length is intrinsically `GE(0) ∧ Mod(1,0)` and strictly descends, so it
   terminates with no domain and no base check (exhaustiveness is E10's concern); the
-  accumulator variant grounds, rebuild-the-whole (`f([h, ...rest])`) Unproven. `ground` is
-  three-voiced. Candidate-locality (GR-04). **Owed:** point-base / **Ackermann** (GR-18 grid
+  accumulator variant grounds, rebuild-the-whole (`f([h, ...rest])`) Unproven. **G-7 BUILT**
+  (constant-drift refutation generalized): `drift_away` refutes any constant drift —
+  descending (GR-23a), ascending, and the **period-1 self-loop** `f(n)` (GR-11 degenerate
+  closed orbit); one forced linear path, witness-gated. `ground` is three-voiced.
+  Candidate-locality (GR-04). **Owed:** point-base / **Ackermann** (GR-18 grid
   + domain — `==0` stops give no lower bound), **peel-k grid** (base must cover lengths
-  `0..k-1`), `restrict_len` structural facts (GR-08), nonlinear measures, §7 **closed-orbit**
-  refutation (GR-11; specimen 22b), §4 exact-singleton chains, §8 WorldDecided; mutual SCC;
+  `0..k-1`), `restrict_len` structural facts (GR-08), nonlinear measures, general
+  **closed-orbit cycle** refutation (GR-11; specimen 22b), §4 exact-singleton chains, §8
+  WorldDecided; mutual SCC;
   the **wiring** into the body check (the swap gate, task #50); §13/§16 discharge (exact-chain
   bound theorem; lex joint-settlement; multigraph decomposition lemma; per-rule soundness;
   GR-27 preservation check). This is A-NEG's second domain source.

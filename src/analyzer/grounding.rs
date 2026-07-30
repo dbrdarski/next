@@ -20,12 +20,14 @@
 //!     (`n == 0`) needs grid alignment — handled here for the clean unit-drift integer
 //!     lattice (`countDown` / `factorial` on `GE(0) ∧ Mod(1,0)`).
 //!
-//! **Refutation (G-2, §7)** — the **drift-away** certificate (GR-23a): from an *admitted*
-//! represented-exact start written at the call (GR-22, e.g. `f(1)`), a single forced
-//! linear descent whose forward lattice provably misses every base region diverges →
-//! [`Verdict::Refuted`]. A broad (non-represented-exact) domain admits no witness → stays
-//! `Unproven` (GR-21; specimen 3c). The **closed-orbit** refutation form (GR-11) is a
-//! later increment.
+//! **Refutation (G-2/G-7, §7)** — the **constant-drift** certificate (GR-20/23): from an
+//! *admitted* represented-exact start written at the call (GR-22, e.g. `f(1)`), a single
+//! forced linear recursion whose forward orbit `{ start + drift·k }` provably misses every
+//! base region diverges → [`Verdict::Refuted`]. Covers `drift < 0` (GR-23a drift-away),
+//! `drift > 0` (ascending mirror), and `drift == 0` (a **period-1 closed orbit** — GR-11's
+//! degenerate case, `f(n)` on itself). A broad (non-represented-exact) domain admits no
+//! witness → stays `Unproven` (GR-21; specimen 3c). The general closed-orbit form (a
+//! required-dependency cycle, GR-11) is a later increment.
 //!
 //! **Program-expressed linear-measure descent (G-3/G-4, §6 GR-15a/16)** — a base arm's
 //! half-line stop `E ⋈ c` whose varying side `E` is a *linear* measure over the parameters
@@ -76,8 +78,8 @@ pub enum Verdict {
     /// Well-founded descent **and** landing proven — the recursion terminates on this
     /// domain, so the analysis may stop unfolding it.
     Grounded,
-    /// A represented-exact witness forces nontermination (§7) — minted by the drift-away
-    /// certificate (GR-23a); the closed-orbit form (GR-11) is a later increment.
+    /// A represented-exact witness forces nontermination (§7) — minted by the constant-drift
+    /// certificate (GR-23a drift-away, its ascending mirror, and the period-1 closed orbit).
     Refuted,
     /// No candidate proved and no witness refuted (GR-04) — the sound default.
     Unproven,
@@ -164,12 +166,14 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
     }
 }
 
-/// The GR-23a **drift-away** refutation from a represented-exact start `start`: a single
-/// forced *linear* recursion (one recursive row, one self-call, constant negative drift)
-/// whose forward lattice `{ start + drift·k : k ≥ 0 }` provably misses **every** base
-/// region — a denotationally forced infinite descent (GR-20/23). Because the lattice
-/// includes the start (`k = 0`), a start that already sits in a base is not a valid
-/// recursive start and is correctly rejected. Sound: `true` only when the miss is certain.
+/// The **constant-drift refutation** from a represented-exact start `start` (GR-20/23): a
+/// single forced *linear* recursion (one recursive row, one self-call, **any** constant
+/// drift) whose forward orbit `{ start + drift·k : k ≥ 0 }` provably misses **every** base
+/// region — a denotationally forced infinite path. `drift < 0` is the GR-23a drift-away
+/// (descending), `drift > 0` its ascending mirror, and `drift == 0` a **period-1 closed
+/// orbit** (GR-11's degenerate case — `f(n)` recurring on itself). Because the orbit
+/// includes the start (`k = 0`), a start already in a base is correctly rejected. Sound:
+/// `true` only when the miss is certain.
 fn drift_away(callee: &ValueRef, start: &Rational, cenv: &ContractEnv) -> bool {
     let Some(closure) = callee.as_closure() else { return false };
     let Some(param) = single_param(&closure.lambda.params) else { return false };
@@ -189,36 +193,43 @@ fn drift_away(callee: &ValueRef, start: &Rational, cenv: &ContractEnv) -> bool {
                 return false; // branching recursion — not a single forced path
             }
             let Some(arg) = calls[0].first() else { return false };
-            match constant_drift(arg, &param) {
+            match position_drift(arg, &param) {
                 Some(d) => drift = Some(d),
                 None => return false,
             }
         }
     }
     let Some(d) = drift else { return false };
-    if rec_rows != 1 || d >= Rational::from(0) {
-        return false; // not a single strictly-descending forced path
+    if rec_rows != 1 {
+        return false; // not a single forced path
     }
-    // Forced descent that misses every base ⇒ never lands ⇒ diverges. `!reaches` over the
-    // whole lattice is both base-disjointness (v) and transition closure (vi).
+    // A forced orbit that misses every base ⇒ never lands ⇒ diverges. `!reaches` over the
+    // whole orbit is both base-disjointness (v) and transition closure (vi).
     bases.iter().all(|b| !reaches(start, &d, b))
 }
 
-/// Whether the descending lattice `{ start + d·k : k ≥ 0 }` (`d < 0`) reaches `base`.
-/// Conservative: an unrecognized base shape returns `true`, blocking a refutation.
+/// Whether the arithmetic progression `{ start + d·k : k ≥ 0 }` reaches `base` — the forward
+/// orbit of a constant-drift recursion (`d < 0` descends, `d > 0` ascends, `d == 0` is a
+/// period-1 fixed point). Conservative: an unrecognized base shape returns `true`, blocking
+/// a refutation.
 fn reaches(start: &Rational, d: &Rational, base: &Contract) -> bool {
-    // A point `p` lies on the lattice iff `(start − p) / |d|` is a non-negative integer.
+    // A point `p` is on the orbit iff `k = (p − start)/d` is a non-negative integer (or, when
+    // the orbit is a fixed point, `p == start`).
     if let Some(p) = point_value(base) {
-        let q = (start.clone() - p) / -d.clone();
+        if d.is_zero() {
+            return &p == start;
+        }
+        let q = (start.clone() - p) / -d.clone(); // = (p − start)/d, the step count k
         return q.is_integer() && q >= Rational::from(0);
     }
+    let zero = Rational::from(0);
     match base {
-        // An unbounded descent always crosses into a downward half-line.
-        Contract::LessEq(_) | Contract::Less(_) => true,
-        // An upward half-line is reached only if the start already lies in it (`k = 0`);
-        // every later state only descends further away.
-        Contract::GreaterEq(b) => start >= b,
-        Contract::Greater(b) => start > b,
+        // Reached iff some orbit value falls in the half-line: a descent always crosses a
+        // downward half-line; otherwise the extreme value is the start.
+        Contract::LessEq(b) => *d < zero || start <= b,
+        Contract::Less(b) => *d < zero || start < b,
+        Contract::GreaterEq(b) => *d > zero || start >= b,
+        Contract::Greater(b) => *d > zero || start > b,
         _ => true, // unknown base shape — block the refutation (sound)
     }
 }
@@ -855,6 +866,26 @@ mod tests {
         let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
         let two = Contract::Equals(i.integer(2));
         assert_eq!(ground(&step2, &two, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
+    #[test]
+    fn self_loop_is_a_period_1_closed_orbit() {
+        // `f(n)` recurs on itself with drift 0. From witness 5 (∉ the base {0}) the orbit is
+        // {5} forever → refuted (GR-11 degenerate closed orbit).
+        let mut i = Interner::new();
+        let s = f("f = (n) => n == 0 ? 0 : f(n)\nf", &mut i);
+        let five = Contract::Equals(i.integer(5));
+        assert_eq!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted);
+    }
+
+    #[test]
+    fn ascending_drift_away_refutes_from_a_witness() {
+        // `f(n+1)` ascends; from witness 5 the orbit 5, 6, 7, … never meets the point base 0
+        // → refuted. (Over a broad domain the same function is only Unproven — no witness.)
+        let mut i = Interner::new();
+        let s = f("f = (n) => n == 0 ? 0 : f(n + 1)\nf", &mut i);
+        let five = Contract::Equals(i.integer(5));
+        assert_eq!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted);
     }
 
     #[test]

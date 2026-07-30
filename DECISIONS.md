@@ -6,6 +6,27 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-7: constant-drift refutation generalized (period-1 orbit + ascending)
+
+Rounded out the refutation side — `drift_away` now handles **any** constant drift, not just
+descending. `grounding.rs` +2 tests; **361 lib** + 111 conformance green, clippy clean.
+
+- **Generalized `drift_away`/`reaches`.** The forward orbit `{ start + drift·k : k ≥ 0 }` is
+  refuting when it misses every base region, for `drift < 0` (GR-23a drift-away, descending),
+  `drift > 0` (ascending mirror), **and `drift == 0`** — a **period-1 closed orbit** (GR-11's
+  degenerate case: `f(n)` recurring on itself). Dropped the `d >= 0` rejection; read the drift
+  with `position_drift` (so a bare `f(n)` gives drift 0). `reaches` now special-cases the
+  fixed point (`p == start`) and picks the half-line crossing by drift sign.
+- **Refutes** `f = (n) => n == 0 ? 0 : f(n)` at witness 5 (orbit `{5}` forever) and
+  `f = (n) => n == 0 ? 0 : f(n + 1)` at witness 5 (ascends past the base 0). Existing
+  descending cases (specimen 12, even/odd witness parity) unchanged.
+- **Soundness preserved:** still one forced linear path (single recursive row + call); a
+  broad domain has no admitted witness → Unproven (GR-22). The general closed-orbit form
+  (a required-dependency *cycle*, GR-11 — specimen 22b) remains a later increment.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Grounding G-6: structural descent (§2b, tuple peel)
 
 Grounding moves beyond numbers — list/tuple recursion. `grounding.rs` +3 tests; **359 lib**
