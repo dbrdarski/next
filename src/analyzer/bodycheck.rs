@@ -34,7 +34,7 @@ use crate::analyzer::grounding::collect_self_calls;
 use crate::analyzer::region::{Row, region_table, select};
 use crate::analyzer::{Completion, Finding, Severity, TypeEnv, analyze, bind_pattern};
 use crate::ast::{Pat, PatElem};
-use crate::contract::{Contract, ContractEnv, disjoint};
+use crate::contract::{Contract, ContractEnv, Verdict, disjoint, subcontract};
 use crate::env::Binding;
 use crate::interner::Interner;
 use crate::value::ValueRef;
@@ -182,6 +182,97 @@ fn reachable_rows(callee: &ValueRef, param: &str, arg: &Contract, cenv: &Contrac
     seen
 }
 
+/// The **summary body check** — the demand core's safety pass, replacing `body_check`'s
+/// unfolding. Computes, per reachable region-table row, the **reaching domain** (the values
+/// that actually reach it through recursion) as a growing union, then checks each row's
+/// result **under its reaching domain**. Two facts make this sound *and* terminating with
+/// no widening:
+///
+/// - **Termination:** recursive-call target domains are computed under the fixed row
+///   **region** (not the accumulated domain), so only finitely many target contracts feed
+///   the union; growth stops by a semantic `⊑` check. A growing recursion (`f(x+1)`) folds
+///   its reaching domain into the row's region and converges.
+/// - **Precision where it matters:** a trap-bearing arm is guarded by an exact test (`x==0`),
+///   whose row region *is* the exact reaching domain — so `f(0) → f(1)` reaches the middle
+///   row with `Equals(1)` (the `1 + "x"` arm is pruned → accepted) while `f(0) → f("x")`
+///   reaches the else row with `Equals("x")` (`x + 1` traps → rejected). Coarse rows carry
+///   no domain-specific trap, so their over-approximation adds no false finding.
+///
+/// Recursive calls in a row's result are *summarized*, not unfolded (they are covered by the
+/// reachable-row set). **Not yet wired** — standalone this routes nested recursion through
+/// the live `instance_body_summary`, so the findings are correct but redundant; the wire
+/// (shape cutoff at `analyze_apply`) lands next.
+#[allow(dead_code)]
+fn check_recursive_body(callee: &ValueRef, param: &str, arg: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
+    let Some(closure) = callee.as_closure() else { return vec![] };
+    let table = region_table(&closure.lambda.body, param, cenv);
+    let mut reaching: Vec<Option<Contract>> = vec![None; table.len()];
+    for i in selected_indices(&table, arg) {
+        grow(&mut reaching[i], intersect(arg.clone(), table[i].region.clone()), interner);
+    }
+    // Fixpoint: propagate recursive-call targets (computed under the fixed row region, so the
+    // union is bounded and converges).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..table.len() {
+            if reaching[i].is_none() {
+                continue;
+            }
+            let mut calls = Vec::new();
+            collect_self_calls(&table[i].result, &closure, callee, &mut calls);
+            for arglist in &calls {
+                let Some(arg_expr) = arglist.first() else { continue };
+                let mut env = capture_env(callee);
+                env.insert(param.to_string(), table[i].region.clone());
+                let target = analyze(arg_expr, &env, cenv, interner).contract;
+                for j in selected_indices(&table, &target) {
+                    let add = intersect(target.clone(), table[j].region.clone());
+                    changed |= grow(&mut reaching[j], add, interner);
+                }
+            }
+        }
+    }
+    // Check each reachable row's result under its reaching domain (recursion summarized).
+    let base = capture_env(callee);
+    let mut findings = Vec::new();
+    for (i, dom) in reaching.iter().enumerate() {
+        let Some(dom) = dom else { continue };
+        let mut env = base.clone();
+        env.insert(param.to_string(), dom.clone());
+        findings.extend(analyze(&table[i].result, &env, cenv, interner).findings);
+    }
+    findings
+}
+
+/// Union `add` into `slot`, but only when it is not already covered (`add ⊑ slot`) — the
+/// semantic convergence check that bounds the reaching-domain fixpoint. Returns whether the
+/// slot grew.
+fn grow(slot: &mut Option<Contract>, add: Contract, interner: &mut Interner) -> bool {
+    match slot {
+        None => {
+            *slot = Some(add);
+            true
+        }
+        Some(cur) => {
+            if matches!(subcontract(&add, cur, interner), Verdict::Proven) {
+                false
+            } else {
+                *slot = Some(Contract::Union(Box::new(cur.clone()), Box::new(add)));
+                true
+            }
+        }
+    }
+}
+
+/// `Top ∩ x = x`; otherwise the raw `Intersection` (the algebra reasons about it).
+fn intersect(a: Contract, b: Contract) -> Contract {
+    match (a, b) {
+        (Contract::Top, x) | (x, Contract::Top) => x,
+        (a, b) => Contract::Intersection(Box::new(a), Box::new(b)),
+    }
+}
+
 /// The row indices a value in `domain` may select — the first-match remainder walk of
 /// [`select`], returning indices (exact rows consume, uncertain rows do not).
 #[allow(dead_code)]
@@ -289,5 +380,44 @@ mod tests {
         let g = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
         assert_eq!(reachable_rows(&g, "n", &five, &ContractEnv::new(), &mut i), vec![0, 1]);
+    }
+
+    fn has_error(findings: &[Finding]) -> bool {
+        findings.iter().any(|f| f.severity == Severity::Error)
+    }
+
+    #[test]
+    fn summary_check_accepts_the_unreached_deep_trap() {
+        // f(0) → f(1) → 1. The `1 + "x"` arm lives at x∉{0,1}, never reached. The middle row
+        // is checked under its **exact** reaching domain `Equals(1)`, which prunes that arm →
+        // no Error (accepted). The old machine needed widening + evidence downgrade for this.
+        let mut i = Interner::new();
+        let g = f("f = (x) => x == 0 ? f(1) : (x == 1 ? 1 : 1 + \"x\")\nf", &mut i);
+        let zero = Contract::Equals(i.integer(0));
+        let findings = check_recursive_body(&g, "x", &zero, &ContractEnv::new(), &mut i);
+        assert!(!has_error(&findings), "the unreached trap must not refute f(0): {findings:?}");
+    }
+
+    #[test]
+    fn summary_check_rejects_the_domain_changing_trap() {
+        // f(0) → f("x") → "x" + 1. The else row's reaching domain is `Equals("x")` (String),
+        // so `x + 1` definitely traps → Error (rejected) — with the right severity, from the
+        // exact reaching domain, not a downgraded warning.
+        let mut i = Interner::new();
+        let g = f("f = (x) => x == 0 ? f(\"x\") : x + 1\nf", &mut i);
+        let zero = Contract::Equals(i.integer(0));
+        let findings = check_recursive_body(&g, "x", &zero, &ContractEnv::new(), &mut i);
+        assert!(has_error(&findings), "the reached trap is caught: {findings:?}");
+    }
+
+    #[test]
+    fn summary_check_accepts_count_down_and_terminates() {
+        // countDown's reaching domains converge (Equals(5) ⊔ Number = Number by the ⊑ check),
+        // and its body has no trap → accepted, and the fixpoint terminates.
+        let mut i = Interner::new();
+        let g = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        let five = Contract::Equals(i.integer(5));
+        let findings = check_recursive_body(&g, "n", &five, &ContractEnv::new(), &mut i);
+        assert!(!has_error(&findings), "countDown is safe: {findings:?}");
     }
 }

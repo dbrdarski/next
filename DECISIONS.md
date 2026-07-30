@@ -6,6 +6,37 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Demand core step 2: the summary body check (sound + terminating, no widening)
+
+The body check reworked from **unfolding** to **summary-over-partition**. `bodycheck.rs`
++3 tests; **370 lib** + 111 conformance green, clippy clean. Still unwired.
+
+- **`check_recursive_body(callee, param, arg)`.** Per region-table row, compute the
+  **reaching domain** (values that reach it through recursion) as a growing union, then
+  check each reachable row's result **under its reaching domain**. Recursive calls are
+  summarized (covered by the reachable-row set), not unfolded.
+- **The design insight that resolves the precision/termination tension** (the crux I mapped
+  building this): **recursive-call target domains are computed under the fixed row
+  `region`**, not the accumulated domain — so only finitely many target contracts feed each
+  union and growth stops by a semantic `⊑` check (`grow`). A growing recursion (`f(x+1)`)
+  folds its reaching domain into the row region and converges — **no widening, no fuel**.
+  Yet precision is kept where it matters: a trap-bearing arm is guarded by an **exact** test
+  (`x==0`) whose row region *is* the exact reaching domain.
+- **Both hard soundness cases pass, standalone:**
+  - `f(0) → f(1) → 1` **accepted** — the `1+"x"` arm (x∉{0,1}) is checked under the middle
+    row's exact reaching domain `Equals(1)`, which prunes it. (The old machine needed
+    widening + evidence downgrade for exactly this.)
+  - `f(0) → f("x") → "x"+1` **rejected with an Error** — the else row's reaching domain is
+    `Equals("x")` (String), so `x+1` definitely traps. Right severity from the exact domain,
+    not a downgraded warning.
+  - countDown accepted and the fixpoint terminates (`Equals(5) ⊔ Number = Number` by `⊑`).
+- **Next:** wire it (shape cutoff at `analyze_apply` so recursive calls summarize instead of
+  routing through the live `instance_body_summary`); multi-parameter region tables (§5 — the
+  two growing tests are 2-param); then delete `instance_body_summary` / `domain_admitted` /
+  `kind_abstraction`. **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Demand core step 1: reachable-rows fixpoint (spec-verified; widening retired)
 
 Verified the body-check recursion mechanism against the specs, then built the substrate.
