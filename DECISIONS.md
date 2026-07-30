@@ -6,6 +6,36 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-1: the numeric constant-drift descent certificate (GR-05)
+
+First grounding increment — the **termination bound** the swap needs. New standalone
+module `src/analyzer/grounding.rs` (6 tests). **345 lib** + 111 conformance green, clippy
+clean. Not wired (same discipline as `region.rs`/`bodycheck.rs`).
+
+- **`ground(callee, domain, cenv, interner) → Verdict {Grounded, Refuted, Unproven}`.**
+  Judges a single-parameter self-recursive numeric function by GR-05's two components:
+  **(1) well-founded descent** — every recursive call's drift on the parameter is a
+  *negative constant* (`n - c`; exposed floor δ = |drift|); **(2) landing** — a downward
+  half-line base (`k <= 1`) lands structurally, a point base (`n == 0`) needs grid
+  alignment, handled for the clean unit-drift integer lattice (`GE(0) ∧ Mod(1,0)`).
+- **Proves:** `countDown`, `factorial` (self-call read even when nested under `n * _`),
+  half-line-base descent. **Sound Unproven (deferred):** ascending drift (no floor),
+  non-unit drift to a point base (specimen 12 — refuted in a later increment, not falsely
+  proved now), non-integer domain (dense measures deferred).
+- **Reuse:** `region_table` for the arm split (base vs recursive rows); a `bodywalk`-style
+  full-body walk to collect self-call args (resolving the callee through `closure.env` —
+  recursion lives in the captures); `subcontract` for the integer-lattice + `≥ base`
+  checks. **Candidate-locality (GR-04):** outside applicability → `Unproven`, never a
+  false proof.
+- **Deferred to later increments:** §7 refutation (drift-away / closed orbit), §6 variable
+  drift, §5 lexicographic, §4 exact-singleton chains, §8 WorldDecided; multi-parameter and
+  mutual SCC; then the **wiring** into the body check (the swap gate).
+- **`// [ask-author]`:** none. Flagged (not blocking): grounding v0.5 is *ACCEPTED pending
+  the author's stamp* — the judgment rules are stable; only the unproven **consequence**
+  (P-1 warn-vs-reject) is open, and that is a wiring-time concern, not a judgment one.
+
+---
+
 ## 2026-07-30 — Recovery Phase 2, step 5: corrected diagnosis — wrong cycle key, not a grounding gap (verified)
 
 Step 4 called the swap failure a "soundness regression blocked on grounding." Re-reading

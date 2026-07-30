@@ -41,6 +41,7 @@ pub mod application;
 pub mod bodycheck;
 pub mod bodywalk;
 pub mod domain;
+pub mod grounding;
 pub mod induction;
 pub mod inventory;
 pub mod obligation;
