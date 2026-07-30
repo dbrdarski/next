@@ -13,9 +13,10 @@
 "blocking rulings" are resolved by the 07-30 landing (region-table + grounding
 specs; `InferredAcceptedDomain`/eager-vs-lazy **dissolved** by errata E-6/E-7/E-8 —
 §3). Region table + call-site body check are **built** (`region.rs`/`bodycheck.rs`);
-the swap to wire them was attempted and **reverted** — the re-entry guard is unsound
-for domain-changing recursion, so the audit-§5 delete is **grounding-gated**. Next:
-**implement grounding (C§10)**, then swap + delete. This maintainer file was
+the swap to wire them was attempted and **reverted**. Verified diagnosis (§3): the
+cycle guard needed the **(instance, domain)** key (fixed), and wiring then **hangs** on
+growing-domain recursion — so the audit-§5 delete is **grounding-gated for termination**.
+Next: **implement grounding (C§10)**, then swap + delete. This maintainer file was
 rebaselined to the specs 07-30 — the intervening tail/Archive `✅` rows below are
 development history the recovery supersedes, not the target architecture.
 
@@ -70,7 +71,7 @@ version. `⬜` = design absorbed, implementation is the recovery Phase-2 build.
 | μ-canonicalization | v0.5 | ✅ | §6 universal interning: registered drift, PENDING-§5 (OwedItems) |
 | Recursive contracts | v0.2 patch **0.2.2** | ✅ | Concat guardedness + sourceProgress |
 | Tuple-length family | v0.3 patch **0.3.1** | ✅ | §1–§5 built; string-length contract lift owed; §16 proofs owed |
-| **Region-table computation + call-site body check** | **v0.3 patch 0.3.2 + E3/E-7** | 🟡 | design-closed; **built** (`analyzer/region.rs` §2–§4 + `analyzer/bodycheck.rs` = `BodySafe(instance, arg)`, RT-14 discipline; `body_summary` matches the old interface). Gates 14.1–14.3 (`bad()` rejected / `f("hello")` rejected / `helper(0)` accepted, path-sensitive). Capture-free 1-param; **not yet wired** — swap attempted+reverted (§3 finding): instance-keyed re-entry guard is **unsound for domain-changing recursion**, so the delete is **grounding-gated (C§10)**. Owed: captures (b/c), arg-tuple projection (§5), instance cache; then wiring+delete after grounding |
+| **Region-table computation + call-site body check** | **v0.3 patch 0.3.2 + E3/E-7** | 🟡 | design-closed; **built** (`analyzer/region.rs` §2–§4 + `analyzer/bodycheck.rs` = `BodySafe(instance, arg)`, RT-14 discipline; `body_summary` matches the old interface). Gates 14.1–14.3 (`bad()` rejected / `f("hello")` rejected / `helper(0)` accepted, path-sensitive). Capture-free 1-param; **not yet wired** — swap attempted+reverted (§3 finding): cycle guard fixed to **(instance, domain)** key (C§13.2a/GR-07); wiring then **hangs** on growing-domain recursion, so the delete is **grounding-gated for termination (C§10)**. Owed: captures (b/c), arg-tuple projection (§5), instance cache; then wiring+delete after grounding |
 | **Grounding v1** | **v0.5 patch 0.5.1** | ⬜ | **design-closed** (compendium 1.0.18); GR-01…30, Phase GR; implementation + §16 owed |
 | Late-resolution / termination-decisions | v0.5 / v4 | ✅ | method + pre-spec source for grounding (design record) |
 | Application & induction | v0.8 patch **0.8.2** | ⬜ | design-closed; **call-site build superseded by the region-table recovery** (audit §5 — §4 map below) |
@@ -104,16 +105,21 @@ superseded call-site machinery per audit §5 (nothing deleted until the replacem
 passes `bad()`-rejected / `f("hello")`-rejected / `helper(0)`-accepted / divergence
 -terminates / no-user-fn-executed). Full owed picture in `OwedItems.md`.
 
-**Finding (2026-07-30) — the DELETE step is grounding-gated.** The region-table
-computation + call-site body check are **built** (`region.rs`/`bodycheck.rs`;
-14.1–14.3 green), and `body_summary` matches the old interface. But **wiring the swap
-was attempted and reverted**: an instance-keyed re-entry guard is *unsound for
-domain-changing recursion* (`f(0) → f("x") → "x"+1` traps, yet the coarse cut accepts
-it). The old machinery is sound there only because it is **domain-indexed**, whose
-proper replacement is the **grounding arc (C§10)** — so `domain_admitted`/widening are
-soundness-load-bearing and cannot be deleted until grounding lands. **Corrected build
-order:** demand core / region table (done) → **grounding (C§10)** → swap + audit-§5
-delete. Detail in `OwedItems.md §0.1` and `DECISIONS.md` (Phase-2 step 4).
+**Finding (2026-07-30, corrected + verified) — the swap needs grounding for *termination*.**
+Region table + call-site body check are **built** (`region.rs`/`bodycheck.rs`; 14.1–14.3
+green); `body_summary` matches the old interface. Wiring was attempted, and the failure
+was **misdiagnosed then corrected**: (1) the one failing test (`f(0)→f("x")→"x"+1`) was a
+**wrong cycle key** — the guard keyed on the closure *instance* instead of **(instance,
+domain)** (C§13.2a / GR-07); fixed (`ACTIVE: Vec<(ValueRef, Vec<Contract>)>`), and that
+example needs no grounding (it terminates by crashing). (2) Wiring *with the corrected
+key* then **hangs** on `a_growing_union_recursive_domain_terminates` and
+`recursive_domains::a_growing_non_singleton_recursive_domain_terminates` — a domain that
+grows without end is an unbounded stream of distinct nodes. **That** is what needs a
+termination bound: the old `domain_admitted`/widening, whose specified replacement is
+**grounding (C§10)** (GR-05 descent/landing). So a wired machine needs **both** the
+corrected key (done) and the bound (grounding); the suite proves neither alone suffices.
+**Build order:** region table (done) → **grounding (C§10, termination bound)** → swap +
+audit-§5 delete. Detail in `OwedItems.md §0.1` and `DECISIONS.md` (Phase-2 step 5).
 
 **Open policy pick (author's, not blocking the build):** P-1 / Principle 9 —
 warn-and-compile vs reject for unproven grounding (blocker (4) now SATISFIED [1.0.18];

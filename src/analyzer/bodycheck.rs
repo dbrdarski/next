@@ -14,19 +14,30 @@
 //! projection, §5) and the guards' own path demands are owed; this is not yet wired
 //! into `analyze_apply` (the superseded machinery still runs — audit §5).
 //!
-//! **Swap blocker (finding, 2026-07-30).** Wiring `body_summary` in place of
-//! `induction::instance_body_summary` was attempted and reverted: the coarse
-//! instance-keyed [`ACTIVE`] re-entry guard is **unsound for domain-changing
-//! recursion**. `f = (x) => x==0 ? f("x") : x+1` called as `f(0)` recurses to `f("x")`,
-//! where `"x" + 1` traps at runtime; cutting the recursive edge on the *instance* (f is
-//! already active) discards that trap and accepts a trapping program. The superseded
-//! `instance_body_summary` handles it soundly via **domain-indexed** analysis (`"x"` is
-//! a program literal → the new-domain edge is analyzed, not cut). The sound replacement
-//! for that domain-indexed edge-following is the **grounding arc** (C§10), which derives
-//! the recursion's input domain — and grounding is not built. So the swap is blocked on
-//! grounding, not merely on `body_check`'s capture/multi-param coverage; the Archive9
-//! domain-indexed machinery (`domain_admitted`, widening) stays until grounding lands.
-//! The test that pins this: `body_safety::a_recursive_call_over_a_new_domain_is_analyzed`.
+//! **Swap status (finding, 2026-07-30, corrected).** Wiring `body_summary` in place of
+//! `induction::instance_body_summary` was attempted, failed one test, and reverted. The
+//! failure was **not** a grounding gap — it was a wrong cycle key in [`ACTIVE`]. The
+//! first cut of the guard keyed on the *instance* alone, so `f = (x) => x==0 ? f("x") :
+//! x+1` called as `f(0)` cut its `f("x")` edge (f already active) and discarded the
+//! `"x" + 1` trap. The fix is the **(instance, domain)** key (C§13.2a / GR-07: nodes are
+//! *"instance × row/domain"*) — the same key the old `ACTIVE_BODIES` uses: `f(0)` and
+//! `f("x")` are distinct nodes, so `f("x")` is analyzed and the trap is caught. That
+//! demand chain **terminates on its own** (`f("x")` reaches `x+1`, no further recursion)
+//! — no termination bound is needed for this example, and grounding is a *termination*
+//! judgment, not what it needs. What grounding **is** needed for: bounding a domain that
+//! grows without end (`f(Range(1,3)) → f(Range(2,5)) → …`, all distinct nodes → the
+//! analysis would not converge), the job the old machine's widening does. So grounding
+//! gates **deleting the widening / the swap+delete**, not fixing domain-changing
+//! recursion. The pinning test: `body_safety::a_recursive_call_over_a_new_domain_is_analyzed`.
+//!
+//! **Verified empirically (2026-07-30).** Wiring `body_summary` *with* this corrected
+//! `(instance, domain)` key was run against the full suite: it **hangs** on
+//! `a_growing_union_recursive_domain_terminates` and
+//! `recursive_domains::a_growing_non_singleton_recursive_domain_terminates` — the
+//! growing-domain cases — because the correct key (rightly) refuses to cut distinct nodes
+//! and there is no bound yet. So a *wired* machine needs **both** the correct key (this
+//! change, sound on the example) **and** the termination bound (grounding, unbuilt).
+//! Reverted to unwired; the key change stands as the right key for when it is wired.
 
 use std::cell::RefCell;
 
@@ -39,15 +50,18 @@ use crate::interner::Interner;
 use crate::value::ValueRef;
 
 thread_local! {
-    /// The callees currently being summarized — the **re-entry guard**. A recursive
-    /// edge (a callee already on the stack) returns the cycle assumption instead of
-    /// re-entering its own body, so a *wired* `body_summary` terminates. Keyed on the
-    /// closure **instance** — coarser than Archive9's domain-indexed cutoff, and (finding
-    /// 2026-07-30) **unsound for domain-changing recursion**: cutting on the instance
-    /// discards a trap that lives only on a new argument domain (see the module header).
-    /// This guard is therefore inert until grounding derives the recursion domain; it
-    /// stays for the standalone `body_summary` API but is not yet the wired cutoff.
-    static ACTIVE: RefCell<Vec<ValueRef>> = const { RefCell::new(Vec::new()) };
+    /// The `(instance, domain)` nodes currently being summarized — the **cycle guard**.
+    /// A demand reaching a node **already on the current path** closes a cycle and returns
+    /// the cycle assumption instead of re-entering the body (C§13.2a / grounding GR-02a;
+    /// GR-07 pins the node grain as *"instance × row/domain under the region partition"*).
+    /// The key is `(closure, argument contracts)` — **domain-indexed**, matching the old
+    /// machine's `ACTIVE_BODIES` key. `f(0) → f("x")` are *distinct* nodes, so `f("x")` is
+    /// analyzed (not cut) and its `"x" + 1` trap is caught — domain-changing recursion is
+    /// sound. What this guard does **not** yet do is *bound* a domain that grows without
+    /// end (`f(Range(1,3)) → f(Range(2,5)) → …`, all distinct nodes): that needs the
+    /// termination bound the old machine got from widening and grounding is the specified
+    /// replacement for. See the module header.
+    static ACTIVE: RefCell<Vec<(ValueRef, Vec<Contract>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A per-instance body summary — the region-table replacement for the wrong-layer
@@ -78,12 +92,14 @@ impl BodySummary {
 }
 
 /// Summarize applying `callee` to arguments described by `args`. Re-entrant on the same
-/// callee → the cycle assumption (terminates when wired into `analyze_apply`).
+/// `(instance, domain)` node → the cycle assumption (so a *wired* `body_summary`
+/// terminates on same-domain recursion; unbounded-domain growth still needs grounding).
 pub fn body_summary(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> BodySummary {
-    if ACTIVE.with(|s| s.borrow().iter().any(|c| c == callee)) {
+    let key = (callee.clone(), args.to_vec());
+    if ACTIVE.with(|s| s.borrow().contains(&key)) {
         return BodySummary::cycle();
     }
-    ACTIVE.with(|s| s.borrow_mut().push(callee.clone()));
+    ACTIVE.with(|s| s.borrow_mut().push(key));
     let findings = body_check(callee, args, cenv, interner);
     let (produced, completion) = whole_body(callee, args, cenv, interner);
     ACTIVE.with(|s| {

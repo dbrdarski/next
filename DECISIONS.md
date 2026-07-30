@@ -6,6 +6,37 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Recovery Phase 2, step 5: corrected diagnosis — wrong cycle key, not a grounding gap (verified)
+
+Step 4 called the swap failure a "soundness regression blocked on grounding." Re-reading
+the grounding spec and **empirically re-running the wire**, that attribution was wrong on
+the mechanism. Corrected here; the record (`bodycheck.rs` header, `OwedItems §0.1`) now
+matches. 339 lib + 111 conformance green, clippy clean, unwired.
+
+- **Grounding is a *termination* judgment** (GR-05 well-founded descent + landing; GR-11
+  closed-orbit refutation), not a safe-input-domain deriver. The step-4 example
+  `f=(x)=>x==0?f("x"):x+1` at `f(0)` **crashes** (`"x"+1`) — it terminates, so grounding
+  was never the tool for it.
+- **The real bug was my cycle key.** `body_summary`'s guard keyed on the closure
+  *instance* alone, cutting the `f("x")` edge and dropping the trap. The spec (C§13.2a /
+  GR-07: nodes are "instance × row/domain") and the old `ACTIVE_BODIES` key on
+  **(instance, domain)**. Fixed the guard to `Vec<(ValueRef, Vec<Contract>)>`. `f(0)` and
+  `f("x")` are distinct nodes → `f("x")` analyzed → trap caught. No grounding needed.
+- **What actually gates the swap — verified.** Wiring `body_summary` *with the corrected
+  key* **hangs** the suite on `a_growing_union_recursive_domain_terminates` and
+  `recursive_domains::a_growing_non_singleton_recursive_domain_terminates`: the correct
+  key won't cut distinct nodes, and a domain growing without end never converges. The old
+  widening bounds this; **grounding is the specified replacement for that bound.** So a
+  wired machine needs BOTH the correct key (done) AND the termination bound (grounding,
+  unbuilt) — the suite proves neither alone works (instance-key: unsound; domain-key:
+  hangs).
+- **Net:** design has no gap (safety check + (instance,domain) cycle detection + grounding
+  are all specified); the blocker is implementation of grounding's *termination bound*.
+  Task #50/#51 framing updated. Reverted the wire; kept the corrected key.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Recovery Phase 2, step 4: swap attempted → reverted (soundness); blocked on grounding
 
 Executed the swap the step-3 entry called "unblocked," and **reverted it**. The step-3
