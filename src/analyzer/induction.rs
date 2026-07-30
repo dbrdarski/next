@@ -27,10 +27,9 @@
 
 use std::cell::{Cell, RefCell};
 
-use crate::analyzer::bodywalk::{callee_targets, literal_values, reachable_closures};
+use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
 use crate::analyzer::obligation::accepted_domain;
-use crate::analyzer::outcome::{analyze_instance_body, summarize_instance};
-use crate::analyzer::{Finding, Severity};
+use crate::analyzer::outcome::summarize_instance;
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::interner::Interner;
 use crate::value::ValueRef;
@@ -47,14 +46,6 @@ thread_local! {
     /// call site drives exactly one bounded inference.
     static INFERRING: Cell<bool> = const { Cell::new(false) };
 
-    /// The `(instance, input-domain)` nodes whose bodies are currently under
-    /// [`instance_body_summary`] analysis — the **actual-call-edge** cycle stack
-    /// (Archive8). Keyed by the concrete instance *and* the demanded domain, so a
-    /// different closure of the same shape, or the same closure over a different domain,
-    /// is **not** falsely cut off. Termination: a shape re-entered over a *different*
-    /// domain generalizes its domain to Kinds (below), so the `(instance, Kind-domain)`
-    /// node stabilizes and the walk is bounded.
-    static ACTIVE_BODIES: RefCell<Vec<(ValueRef, Vec<Contract>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Whether a return-fact inference is currently running (the re-entrancy guard).
@@ -325,152 +316,6 @@ fn group_domains(
         .collect()
 }
 
-/// The one analysis of an `(instance, input-domain)` node (Archive8): the callee's
-/// body over `args`, yielding `produced` (its return contract), `completion` (E10), and
-/// `findings` (its proven traps, and its transitive callees' — nested applications
-/// recurse through `analyze → analyze_apply → instance_body_summary`, following the
-/// **actual abstract call edges**). Shared by safety, completion, and the non-recursive
-/// return, so all three reason over the same semantically meaningful node rather than
-/// three separate walks (the Archive8 unification).
-///
-/// **Identity is `(instance, domain)`, never shape** (Archive8 §3–§5): a different
-/// closure of the same shape (`make(bad)` vs `make(b)`) and the same closure over a
-/// different domain (`f(0)` recursing to `f("x")`) are distinct nodes and are **not**
-/// falsely cut off. Termination without a magic bound: an exact `(instance, domain)`
-/// cycle returns the recursive assumption (a cycle adds no new *direct* trap; `produced`
-/// coarsens, sharpened by the return induction); a shape re-entered over a **different**
-/// domain **generalizes its domain to Kinds** and re-enters over that, so the abstract
-/// node stabilizes (`f(5) → f(4) → … → f(Number)`), catching domain-independent traps
-/// while a diverging `loop()` is analyzed once, never run.
-pub fn instance_body_summary(
-    callee: &ValueRef,
-    args: &[Contract],
-    cenv: &ContractEnv,
-    interner: &mut Interner,
-) -> InstanceBodySummary {
-    if callee.as_fn().is_none() {
-        return InstanceBodySummary::top();
-    }
-    // A **re-entry** of the same instance (a recursive edge) is admitted at its exact
-    // domain only when that domain is built from the program's finite literal vocabulary
-    // (`domain_admitted`) — so `f(0) → f(1)` is analyzed precisely, while a *computed*
-    // domain (`f(Range(1,3)) → f(Range(2,5)) → …`) escapes the finite basis and is
-    // widened into the Kind basis instead. That is what bounds the recursive state
-    // universe in advance (Archive9 §13–§16). A **different instance of the same shape**
-    // (`make(bad)` vs `make(b)`) is never cut off — the key is the concrete instance.
-    let reentry = ACTIVE_BODIES.with(|s| s.borrow().iter().any(|(c, _)| c == callee));
-    let mut args = args.to_vec();
-    let mut widened = false;
-    if reentry && !domain_admitted(callee, &args) {
-        let abstracted: Vec<Contract> = args.iter().map(Contract::kind_abstraction).collect();
-        if abstracted != args {
-            widened = true;
-            args = abstracted;
-        }
-    }
-    // Exact `(instance, domain)` cycle → the recursive assumption (a cycle adds no new
-    // *direct* trap; `produced` coarsens, sharpened by the return induction).
-    let key = (callee.clone(), args.clone());
-    if ACTIVE_BODIES.with(|s| s.borrow().contains(&key)) {
-        return InstanceBodySummary::top();
-    }
-    ACTIVE_BODIES.with(|s| s.borrow_mut().push(key));
-    let out = match analyze_instance_body(callee, &args, cenv, interner) {
-        // **A widened domain may not refute the narrower call** (Archive9 §6–§8,
-        // Archive10 §6–§9): evidence found only after widening need not have a witness
-        // represented in the demanded domain (`f(1)` widened to `Number` reaches a branch
-        // `Equals(1)` never takes). **Both** existential channels obey this — a proven
-        // trap *and* a proven fall-through — so each drops to the third voice.
-        Some(a) => InstanceBodySummary {
-            produced: a.contract,
-            completion: if widened { downgrade_completion(a.completion) } else { a.completion },
-            findings: if widened { downgrade(a.findings) } else { a.findings },
-        },
-        None => InstanceBodySummary::top(),
-    };
-    ACTIVE_BODIES.with(|s| {
-        s.borrow_mut().pop();
-    });
-    out
-}
-
-/// Whether every position of `args` is drawn from the **finite admitted basis** for this
-/// callee: an **atom** — a `Kind`/`Top`/`Bottom`/`Indeterminate` leaf, or an `Equals(v)`
-/// whose value belongs to the program's literal vocabulary ([`literal_values`]).
-/// Everything else (computed forms like `Range`/`Mod`/`Concat`, computed singletons,
-/// **and unions**) is not admitted: a recursive edge carrying one is widened instead.
-///
-/// **Unions are deliberately excluded** [Archive10 §11–§12]. Admitting them recursively
-/// (`Union(admitted, admitted)`) does *not* keep the key space finite, because contract
-/// keys are compared **structurally** and `union_of` neither flattens nor deduplicates:
-/// `Equals(0)`, `Union(E0,E0)`, `Union(Union(E0,E0),E0)`, … are infinitely many distinct
-/// keys over a single literal, so `f = (x, b) => f(b ? x : 0, b)` never repeated a key
-/// and never widened (verified: it overflowed the stack). With atoms only, the admitted
-/// set per position is bounded by `|literals| + |Kinds| + 3`, so the exact state universe
-/// really is finite in advance. Restoring union precision needs a **canonical** union
-/// normal form (flatten/dedup/order) before it can be a key — Archive10's Option B.
-fn domain_admitted(callee: &ValueRef, args: &[Contract]) -> bool {
-    let literals = literal_values(callee);
-    args.iter().all(|c| match c {
-        Contract::Kind(_) | Contract::Top | Contract::Bottom | Contract::Indeterminate(_) => true,
-        Contract::Equals(v) => literals.contains(v),
-        _ => false,
-    })
-}
-
-/// A widened body's **completion** obeys the same evidence direction as its findings
-/// (Archive10 §7–§9): a fall-through proved only over the broader domain may live
-/// entirely in `D_broad ∖ D_narrow`, so it cannot refute the demanded state at an
-/// expecting seat. `FallsThrough` (existential, refuting) drops to `MayFallThrough`
-/// (the third voice); `Produces` and `MayFallThrough` are unaffected — a universal
-/// "every path produces" over a *larger* domain still holds on any subset.
-fn downgrade_completion(c: crate::analyzer::Completion) -> crate::analyzer::Completion {
-    use crate::analyzer::Completion;
-    match c {
-        Completion::FallsThrough => Completion::MayFallThrough,
-        other => other,
-    }
-}
-
-/// Downgrade proven findings to the third voice — a widened-domain trap is *unproven*
-/// for the demanded domain, not refuted (Archive9 §7).
-fn downgrade(findings: Vec<Finding>) -> Vec<Finding> {
-    findings
-        .into_iter()
-        .map(|f| match f.severity {
-            Severity::Error => Finding {
-                severity: Severity::Warning,
-                message: format!("{} (unproven for this call's domain — found after widening)", f.message),
-                ..f
-            },
-            _ => f,
-        })
-        .collect()
-}
-
-/// The summary of one `(instance, input-domain)` body node.
-pub struct InstanceBodySummary {
-    pub produced: Contract,
-    pub completion: crate::analyzer::Completion,
-    pub findings: Vec<Finding>,
-}
-
-impl InstanceBodySummary {
-    /// The coarse default (non-function, or a recursive-cycle assumption): produces
-    /// `Top`, completes, no proven trap (a cycle adds no new *direct* trap).
-    fn top() -> InstanceBodySummary {
-        InstanceBodySummary { produced: Contract::Top, completion: crate::analyzer::Completion::Produces, findings: vec![] }
-    }
-
-    /// The **Error**-severity findings only — the proven traps to surface at a call site.
-    /// A `Warning` (unproven safety) over a coarsened domain is spurious (`factorial`'s
-    /// `Number * Top` Mul), so propagating it would manufacture false findings; an
-    /// `Error` is `OpSafety::Refuted`, a proven trap. Sound; warnings staying local is a
-    /// diagnostic gap.
-    pub fn errors(&self) -> Vec<Finding> {
-        self.findings.iter().filter(|f| f.severity == Severity::Error).cloned().collect()
-    }
-}
 
 /// Whether `cv` participates in a call cycle (is recursive/mutual) — a back-edge to `cv`
 /// exists somewhere in its reachable call graph. A recursive return needs the induction

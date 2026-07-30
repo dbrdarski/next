@@ -15,9 +15,10 @@
 //! Closed **primitive** operations and **accesses** fold through the finite oracle
 //! kernel (`eval_prim` / `eval_expr` on a `Const` target) for an exact verdict; a
 //! **closed function call is never executed** — a callee's traps, completion, and
-//! non-recursive return come from its `(instance, input-domain)` body summary
-//! (`induction::instance_body_summary`), so static analysis never runs a user function
-//! (Archive6 §8/§9). Analysis runs in the **pure world** (matching the `eval_expr` truth
+//! non-recursive return come from the **summary-over-partition** body check
+//! (`bodycheck::body_summary`: the §4a shape cutoff + reachable region rows × reaching
+//! domains, GR-03 finite row-set lattice — no widening), so static analysis never runs a
+//! user function. Analysis runs in the **pure world** (matching the `eval_expr` truth
 //! source); world threading is a later increment. Index/slice bounds await C§17 (see
 //! `OwedItems.md`). `Write` and mutation are unanalyzed (type as `Top`).
 //!

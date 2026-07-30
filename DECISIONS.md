@@ -6,6 +6,33 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Demand core step 4: delete the widening machinery (−288 lines, suite green)
+
+With the summary body check wired and `instance_body_summary` dead, deleted the old
+call-site/widening machinery. **370 lib + 111 conformance green, clippy clean; −288 lines.**
+
+- **Deleted (`induction.rs`):** `instance_body_summary` + `InstanceBodySummary` struct/impl
+  (the wrong-layer call-site safety node), `domain_admitted` (the finite-literal admission
+  basis), `downgrade` / `downgrade_completion` (the widened-evidence third-voice drops), and
+  the `ACTIVE_BODIES` cycle stack. **Deleted (`bodywalk.rs`):** `literal_values` +
+  `collect_consts` + `collect_pattern_consts` (the program-literal vocabulary the admission
+  basis read). The widening (`Contract::kind_abstraction`) is **retired as an analyzer
+  mechanism** — the region partition (GR-03) replaces it.
+- **Kept (correctly not touched):** `kind_abstraction` itself stays in `contract/mod.rs` —
+  it is *also* used by three-valued `subcontract`'s kind fallback (a coincidental share, not
+  the widening role). The return-fact induction (`joint_vector_pass`, `call_return`,
+  `hypothesis_for`, `HYPOTHESES`, `Hypothesis`, `summarize_instance`, `analyze_instance_body`,
+  `is_recursive`) is untouched — it is the KEEP set, orthogonal to body safety.
+- **No test regression** — the widening never had a soundness role the partition rule
+  doesn't now cover; its only observable behaviours (growing-domain termination, the
+  widened-trap downgrade) are handled by the finite row-set closure + RT-14.
+- **The recovery arc is closed.** Region table + demand core + summary body check + §4a
+  cutoff + grounding (orthogonal), all wired; the wrong-layer machinery the Phase-1 audit
+  named is gone. Remaining: multi-parameter region tables (§5 — whole-body fallback now).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Demand core step 3: THE SWAP — summary body check wired, green, no widening
 
 The recovery's goal since the drift-away finding: `analyze_apply`'s Known-callee path now

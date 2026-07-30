@@ -69,9 +69,11 @@ oracle execution of user functions.
 summary-over-partition check: §4a shape cutoff + `check_recursive_body`'s reachable-rows ×
 reaching domains), replacing `instance_body_summary`. Full suite green, no hang; the
 domain-changing trap rejects and the two growing-domain tests terminate by folding into the
-finite region partition — **no widening, nothing foreign**. Remaining: delete the now-dead
-`instance_body_summary` / `domain_admitted` / `kind_abstraction`; multi-parameter region
-tables (§5). The multi-revision diagnosis history is kept below for provenance.
+finite region partition — **no widening, nothing foreign**. The dead widening machinery is
+**deleted** (−288 lines: `instance_body_summary`, `domain_admitted`, `downgrade`,
+`ACTIVE_BODIES`, `literal_values`/`collect_consts`); `kind_abstraction` stays only for
+`subcontract`'s kind fallback. Remaining: multi-parameter region tables (§5 — whole-body
+fallback now). The multi-revision diagnosis history is kept below for provenance.
 
 ---
 
