@@ -20,12 +20,18 @@
 //!     (`n == 0`) needs grid alignment — handled here for the clean unit-drift integer
 //!     lattice (`countDown` / `factorial` on `GE(0) ∧ Mod(1,0)`).
 //!
-//! Candidate-locality (GR-04): outside this candidate's applicability it concludes
-//! **nothing** — [`Verdict::Unproven`], always sound. Refutation (§7 drift-away / closed
-//! orbit), variable drift (§6), lexicographic (§5), exact-singleton chains (§4) and the
-//! WorldDecided classifier (§8) are later increments. **Not yet wired** into the body
-//! check — same discipline as `region.rs` / `bodycheck.rs`: build standalone, prove
-//! green, integrate after.
+//! **Refutation (G-2, §7)** — the **drift-away** certificate (GR-23a): from an *admitted*
+//! represented-exact start written at the call (GR-22, e.g. `f(1)`), a single forced
+//! linear descent whose forward lattice provably misses every base region diverges →
+//! [`Verdict::Refuted`]. A broad (non-represented-exact) domain admits no witness → stays
+//! `Unproven` (GR-21; specimen 3c). The **closed-orbit** refutation form (GR-11) is a
+//! later increment.
+//!
+//! Candidate-locality (GR-04): outside applicability it concludes **nothing** —
+//! [`Verdict::Unproven`], always sound. Variable drift (§6), lexicographic (§5),
+//! exact-singleton chains (§4) and the WorldDecided classifier (§8) are later increments.
+//! **Not yet wired** into the body check — same discipline as `region.rs` /
+//! `bodycheck.rs`: build standalone, prove green, integrate after.
 
 use num_bigint::BigInt;
 
@@ -46,15 +52,29 @@ pub enum Verdict {
     /// Well-founded descent **and** landing proven — the recursion terminates on this
     /// domain, so the analysis may stop unfolding it.
     Grounded,
-    /// A represented witness forces nontermination (§7) — never minted in G-1.
+    /// A represented-exact witness forces nontermination (§7) — minted by the drift-away
+    /// certificate (GR-23a); the closed-orbit form (GR-11) is a later increment.
     Refuted,
     /// No candidate proved and no witness refuted (GR-04) — the sound default.
     Unproven,
 }
 
 /// Judge whether `callee` recursing over input `domain` is grounded (terminates).
+///
+/// A candidate may prove groundedness (GR-05); failing that, an **admitted witness** — a
+/// represented-exact start actually written at the call (GR-22) — may **refute** via
+/// drift-away (GR-23a). No witness ⇒ procedure-relative `Unproven` (GR-04/GR-21). Grounded
+/// is judged first: a proven descent is never also a divergence.
 pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Verdict {
-    numeric_descent(callee, domain, cenv, interner).unwrap_or(Verdict::Unproven)
+    if matches!(numeric_descent(callee, domain, cenv, interner), Some(Verdict::Grounded)) {
+        return Verdict::Grounded;
+    }
+    if let Some(start) = point_value(domain)
+        && drift_away(callee, &start, cenv)
+    {
+        return Verdict::Refuted;
+    }
+    Verdict::Unproven
 }
 
 /// The numeric constant-drift descent certificate (GR-05). `None` ⇒ this candidate does
@@ -112,6 +132,64 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
         // Downward half-line base (`k <= b`): a strictly-decreasing integer chain must
         // eventually enter it, from any start (structural landing).
         None => matches!(base, Contract::LessEq(_) | Contract::Less(_)),
+    }
+}
+
+/// The GR-23a **drift-away** refutation from a represented-exact start `start`: a single
+/// forced *linear* recursion (one recursive row, one self-call, constant negative drift)
+/// whose forward lattice `{ start + drift·k : k ≥ 0 }` provably misses **every** base
+/// region — a denotationally forced infinite descent (GR-20/23). Because the lattice
+/// includes the start (`k = 0`), a start that already sits in a base is not a valid
+/// recursive start and is correctly rejected. Sound: `true` only when the miss is certain.
+fn drift_away(callee: &ValueRef, start: &Rational, cenv: &ContractEnv) -> bool {
+    let Some(closure) = callee.as_closure() else { return false };
+    let Some(param) = single_param(&closure.lambda.params) else { return false };
+    let rows = region_table(&closure.lambda.body, &param, cenv);
+
+    let mut bases = Vec::new();
+    let mut drift = None;
+    let mut rec_rows = 0;
+    for row in &rows {
+        let mut calls = Vec::new();
+        collect_self_calls(&row.result, &closure, callee, &mut calls);
+        if calls.is_empty() {
+            bases.push(row.region.clone());
+        } else {
+            rec_rows += 1;
+            if calls.len() != 1 {
+                return false; // branching recursion — not a single forced path
+            }
+            match constant_drift(&calls[0], &param) {
+                Some(d) => drift = Some(d),
+                None => return false,
+            }
+        }
+    }
+    let Some(d) = drift else { return false };
+    if rec_rows != 1 || d >= Rational::from(0) {
+        return false; // not a single strictly-descending forced path
+    }
+    // Forced descent that misses every base ⇒ never lands ⇒ diverges. `!reaches` over the
+    // whole lattice is both base-disjointness (v) and transition closure (vi).
+    bases.iter().all(|b| !reaches(start, &d, b))
+}
+
+/// Whether the descending lattice `{ start + d·k : k ≥ 0 }` (`d < 0`) reaches `base`.
+/// Conservative: an unrecognized base shape returns `true`, blocking a refutation.
+fn reaches(start: &Rational, d: &Rational, base: &Contract) -> bool {
+    // A point `p` lies on the lattice iff `(start − p) / |d|` is a non-negative integer.
+    if let Some(p) = point_value(base) {
+        let q = (start.clone() - p) / -d.clone();
+        return q.is_integer() && q >= Rational::from(0);
+    }
+    match base {
+        // An unbounded descent always crosses into a downward half-line.
+        Contract::LessEq(_) | Contract::Less(_) => true,
+        // An upward half-line is reached only if the start already lies in it (`k = 0`);
+        // every later state only descends further away.
+        Contract::GreaterEq(b) => start >= b,
+        Contract::Greater(b) => start > b,
+        _ => true, // unknown base shape — block the refutation (sound)
     }
 }
 
@@ -308,9 +386,10 @@ mod tests {
     }
 
     #[test]
-    fn off_grid_point_base_is_unproven_in_g1() {
-        // Drift −2 to point base 0: parity-straddling (specimen 12 — refuted later, not now).
-        // G-1 defers the non-unit grid check → Unproven (never a false proof).
+    fn off_grid_point_base_over_broad_domain_is_unproven() {
+        // Drift −2 to point base 0 over the *broad* domain: descent isn't proved (non-unit)
+        // and there is no admitted represented-exact witness (GR-22) → Unproven. The
+        // divergent inputs are only refuted from an *exact* start (next test; specimen 3c).
         let mut i = Interner::new();
         let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
         assert_eq!(ground(&step2, &nonneg_ints(), &ContractEnv::new(), &mut i), Verdict::Unproven);
@@ -322,5 +401,38 @@ mod tests {
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         assert_eq!(ground(&cd, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
+    // ── G-2: drift-away refutation (GR-23a) ──────────────────────────────────
+
+    #[test]
+    fn drift_away_refutes_off_grid_from_odd_witness() {
+        // Specimen 12: `f(n-2)` from the written argument 1 — the odd lattice 1, −1, −3, …
+        // misses the even point base 0 → forced infinite descent → refuted, witness 1.
+        let mut i = Interner::new();
+        let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
+        let one = Contract::Equals(i.integer(1));
+        assert_eq!(ground(&step2, &one, &ContractEnv::new(), &mut i), Verdict::Refuted);
+    }
+
+    #[test]
+    fn even_witness_of_the_same_function_is_not_refuted() {
+        // From 2 the lattice 2, 0, … *hits* the base 0 → terminates → not refuted (and the
+        // non-unit descent isn't proved either) → Unproven. Same function, opposite fate by
+        // witness parity.
+        let mut i = Interner::new();
+        let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
+        let two = Contract::Equals(i.integer(2));
+        assert_eq!(ground(&step2, &two, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
+    #[test]
+    fn exact_witness_where_descent_proves_grounds_not_refutes() {
+        // From an exact start where descent *does* prove (unit drift), Grounded wins — a
+        // proven descent is never also a divergence.
+        let mut i = Interner::new();
+        let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        let five = Contract::Equals(i.integer(5));
+        assert_eq!(ground(&cd, &five, &ContractEnv::new(), &mut i), Verdict::Grounded);
     }
 }

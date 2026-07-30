@@ -6,6 +6,36 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-2: the drift-away refutation (§7 / GR-23a)
+
+The negative half of the numeric certificate — the same machinery, from the other side.
+`grounding.rs` +3 tests. **348 lib** + 111 conformance green, clippy clean. Still unwired.
+
+- **`ground` now three-voiced.** After descent (GR-05) fails to prove, an **admitted
+  witness** — a represented-exact start actually written at the call (GR-22, i.e. the
+  domain is `Equals(v)` / a point) — may **refute** by drift-away. No witness (a broad
+  domain) ⇒ `Unproven`, never a synthesized witness (GR-21; specimen 3c).
+- **`drift_away(callee, start, cenv)` (GR-23a).** A single forced *linear* recursion (one
+  recursive row, one self-call, constant negative drift) whose forward lattice
+  `{ start + drift·k : k ≥ 0 }` provably **misses every base region** is a forced infinite
+  descent → `Refuted`. `reaches(start, d, base)` decides landing per base shape: a **point**
+  `p` is on the lattice iff `(start − p)/|d|` is a non-negative integer (the parity/grid
+  test); a downward half-line is always reached; an upward half-line only at `k = 0`;
+  unknown shapes are conservative (`true` → block the refutation). The lattice includes the
+  start, so a start already in a base is correctly not a valid divergent start.
+- **Specimen 12 lands as specified.** `f = n => n==0 ? 0 : f(n-2)`: from witness **1** the
+  odd lattice `1, −1, −3, …` misses the even base 0 → **Refuted, witness 1**; from **2**
+  the lattice hits 0 → **Unproven** (terminates, and non-unit descent isn't proved). Same
+  function, opposite fate by witness parity — the whole point of witnessed refutation.
+- **Soundness stance:** `drift_away` returns `true` only when the base-miss is certain;
+  branching recursion, non-constant drift, and unrecognized base shapes all yield `false`
+  (→ `Unproven`). No `interner` needed — the lattice test is exact rational arithmetic.
+- **Deferred:** the **closed-orbit** refutation (GR-11, the required-dependency cycle,
+  e.g. specimen 22b), §6 variable drift, §5 lex, §4 exact-singleton chains, §8 WorldDecided,
+  multi-param/SCC; then wiring. **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Grounding G-1: the numeric constant-drift descent certificate (GR-05)
 
 First grounding increment — the **termination bound** the swap needs. New standalone

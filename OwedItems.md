@@ -145,14 +145,17 @@ built in code, §16 proofs owed**.
   (`analyzer/grounding.rs`, 2026-07-30): `ground(callee, domain) → {Grounded, Refuted,
   Unproven}`, the numeric constant-drift descent certificate (GR-05) — well-founded
   descent (negative-constant drift, floor δ) + landing (half-line structural / point-base
-  grid for the unit-drift integer lattice). Grounds `countDown`/`factorial`/half-line over
-  `GE(0) ∧ Mod(1,0)`; sound Unproven for ascending drift, non-unit-drift point base
-  (specimen 12, refuted later), and non-integer domains. Candidate-locality (GR-04).
-  **Owed:** §7 refutation (drift-away/closed orbit), §6 variable drift, §5 lexicographic,
-  §4 exact-singleton chains, §8 WorldDecided; multi-parameter + mutual SCC; the **wiring**
-  into the body check (the swap gate, task #50); §13/§16 discharge (exact-chain bound
-  theorem; lex joint-settlement; multigraph decomposition lemma; per-rule soundness;
-  GR-27 preservation check). This is A-NEG's second domain source.
+  grid for the unit-drift integer lattice). **G-2 BUILT** (drift-away refutation, §7 /
+  GR-23a): from an admitted represented-exact witness (`Equals(v)`), a single forced linear
+  descent whose forward lattice misses every base region → `Refuted` (specimen 12: witness
+  1 refuted, witness 2 Unproven — parity-split; a broad domain has no admitted witness →
+  Unproven, GR-22). `ground` is now three-voiced. Candidate-locality (GR-04).
+  **Owed:** §7 **closed-orbit** refutation (GR-11, required-dependency cycle; specimen 22b),
+  §6 variable drift, §5 lexicographic, §4 exact-singleton chains, §8 WorldDecided;
+  multi-parameter + mutual SCC; the **wiring** into the body check (the swap gate, task
+  #50); §13/§16 discharge (exact-chain bound theorem; lex joint-settlement; multigraph
+  decomposition lemma; per-rule soundness; GR-27 preservation check). This is A-NEG's
+  second domain source.
 - **Application & induction v0.8 (+0.8.2)** — design-closed (*"the design condition
   dissolved when the tuple family closed"*, C§13.2). Implementation + C§16 discharge
   owed. The 0.8.2 GR-26 effect-world seat row (consumes, never establishes).
