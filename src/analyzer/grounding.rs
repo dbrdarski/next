@@ -53,6 +53,12 @@
 //! `GE(0) ∧ Mod(1, 0)`) strictly decreases and is bounded below by 0 — terminates
 //! regardless of the base, no domain needed.
 //!
+//! **Mutual recursion (G-8, §5 GR-07)** — the reachable closure group forms the mutual SCC;
+//! if every cross-call decreases a shared single-parameter measure and every recursive member
+//! has a descending half-line base, every cycle composes to a decrease so the group terminates
+//! (`isEven`/`isOdd` on `n <= 0`). The enumeration-free sufficient case; mixed-sign
+//! oscillator cycles need the full composition — later.
+//!
 //! Candidate-locality (GR-04): outside applicability each candidate concludes **nothing**
 //! — [`Verdict::Unproven`], always sound. Point-base/Ackermann (grid + domain, GR-18),
 //! exact-singleton chains (§4) and the WorldDecided classifier (§8) are later increments.
@@ -61,6 +67,7 @@
 
 use num_bigint::BigInt;
 
+use crate::analyzer::bodywalk::reachable_closures;
 use crate::analyzer::region::region_table;
 use crate::ast::{
     AccessForm, Arg, Bind, BindingRef, Element, Expr, Field, MatchItem, Pat, PatElem, PrimOp, Ref,
@@ -96,6 +103,7 @@ pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner
         || measure_descent(callee)
         || lex_descent(callee)
         || structural_descent(callee)
+        || mutual_descent(callee)
     {
         return Verdict::Grounded;
     }
@@ -414,7 +422,7 @@ fn lex_descent(callee: &ValueRef) -> bool {
     let Some(closure) = callee.as_closure() else { return false };
     let Some(params) = param_names(&closure.lambda.params) else { return false };
     let mut calls = Vec::new();
-    walk(&closure.lambda.body, &closure, callee, &params, &vec![false; params.len()], &mut calls);
+    walk(&closure.lambda.body, &closure, std::slice::from_ref(callee), &params, &vec![false; params.len()], &mut calls);
     if calls.is_empty() {
         return false;
     }
@@ -581,6 +589,80 @@ fn peel_binding(pat: &Pat) -> Option<String> {
     if peeled >= 1 { rest } else { None }
 }
 
+// ── Mutual recursion (GR-07) ──────────────────────────────────────────────────
+
+/// Mutual-recursion descent (§5 GR-07, the enumeration-free sufficient sub-case). The
+/// reachable closure group is the mutual SCC; if **every** cross-call in the group decreases
+/// a shared single-parameter measure by a constant and every recursive member has a
+/// descending half-line base on it, then every simple cycle composes to a strict decrease
+/// (a sum of negatives) and the measure is bounded below — so the whole group terminates.
+/// This discharges GR-07's per-cycle obligation by the stronger per-edge condition (no cycle
+/// enumeration); landing is structural (domain-independent). A composed measure that only
+/// descends over a *mixed-sign* cycle (the oscillator specimen) needs the full composition —
+/// a later increment.
+fn mutual_descent(callee: &ValueRef) -> bool {
+    let group = reachable_closures(callee.clone());
+    if group.len() < 2 {
+        return false; // single function — the self-recursion candidates handle it
+    }
+    group.iter().all(|f| member_descends(f, &group))
+}
+
+/// A group member is compatible with mutual descent: it makes no group call (a non-recursive
+/// leaf), or every group call decreases its parameter by a constant and it has a descending
+/// half-line base on that parameter.
+fn member_descends(f: &ValueRef, group: &[ValueRef]) -> bool {
+    let Some(closure) = f.as_closure() else { return false };
+    let Some(param) = single_param(&closure.lambda.params) else { return false };
+    let Expr::Match(m) = &*closure.lambda.body else { return false };
+
+    let mut stops = Vec::new();
+    let mut calls: Vec<Vec<Expr>> = Vec::new();
+    let mut first_call = usize::MAX;
+    for (idx, item) in m.items.iter().enumerate() {
+        let MatchItem::Arm(arm) = item else { continue };
+        let mut gc = Vec::new();
+        walk(&arm.result, &closure, group, &[], &[], &mut gc);
+        if gc.is_empty() {
+            if let Some(g) = &arm.guard
+                && idx < first_call
+            {
+                stops.push(g.clone());
+            }
+        } else {
+            calls.extend(gc.into_iter().map(|(args, _)| args));
+            first_call = first_call.min(idx);
+        }
+    }
+    if calls.is_empty() {
+        return true; // a non-recursive member — contributes no cycle edge
+    }
+    let decreases = calls.iter().all(|call| {
+        call.first()
+            .and_then(|arg| constant_drift(arg, &param))
+            .is_some_and(|d| d < Rational::from(0))
+    });
+    decreases && stops.iter().any(|g| descending_stop(g, &param))
+}
+
+/// Whether guard `g` is a **descending** half-line stop on `param` — `param <= c` /
+/// `param < c` (or the flipped `c >= param` / `c > param`) — the floor a decreasing measure
+/// lands in.
+fn descending_stop(g: &Expr, param: &str) -> bool {
+    let Expr::PrimOp { op, args } = g else { return false };
+    if args.len() != 2 {
+        return false;
+    }
+    let op = if is_param(&args[0], param) && const_num(&args[1]).is_some() {
+        *op
+    } else if is_param(&args[1], param) && const_num(&args[0]).is_some() {
+        flip(*op)
+    } else {
+        return false;
+    };
+    matches!(op, PrimOp::Le | PrimOp::Lt)
+}
+
 /// The comparison with operands swapped (`a < b` ⇔ `b > a`); `==`/`!=` are symmetric.
 fn flip(op: PrimOp) -> PrimOp {
     match op {
@@ -646,24 +728,25 @@ fn point_value(c: &Contract) -> Option<Rational> {
 /// [`numeric_descent`] / [`measure_descent`] read. Thin wrapper over [`walk`].
 fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) {
     let mut full = Vec::new();
-    walk(e, closure, cv, &[], &[], &mut full);
+    walk(e, closure, std::slice::from_ref(cv), &[], &[], &mut full);
     out.extend(full.into_iter().map(|(args, _)| args));
 }
 
-/// Every self-call in `e` paired with its **path lower-bound vector** — `lb[i] = true` iff
-/// parameter `i` is bounded below on the path that reaches this call (a `pᵢ > c` / `pᵢ >= c`
-/// guard, or the negation of an earlier `pᵢ <= c` / `pᵢ < c`). The applications whose callee
-/// resolves through `closure`'s captured environment to `cv`; descends every subexpression
-/// except nested lambdas (distinct instances); mirrors `bodywalk` so no self-call is missed
-/// (an unread self-call could be a false proof). A spread argument (no reliable positional
-/// mapping) records an **empty** list — every candidate then rejects it. With empty
-/// `params`/`lb` the lower-bound tracking is inert (the arg-only wrapper above).
-fn walk(e: &Expr, closure: &Closure, cv: &ValueRef, params: &[String], lb: &[bool], out: &mut Vec<(Vec<Expr>, Vec<bool>)>) {
+/// Every call in `e` to a member of the **target group** `cv`, paired with its **path
+/// lower-bound vector** — `lb[i] = true` iff parameter `i` is bounded below on the path that
+/// reaches this call (a `pᵢ > c` / `pᵢ >= c` guard, or the negation of an earlier `pᵢ <= c`
+/// / `pᵢ < c`). The applications whose callee resolves through `closure`'s captured
+/// environment to any group member (`[cv]` is the self-recursion case; the reachable group
+/// is the mutual case); descends every subexpression except nested lambdas (distinct
+/// instances); mirrors `bodywalk` so no call is missed (an unread one could be a false
+/// proof). A spread argument (no reliable positional mapping) records an **empty** list.
+/// With empty `params`/`lb` the lower-bound tracking is inert (the arg-only wrappers).
+fn walk(e: &Expr, closure: &Closure, cv: &[ValueRef], params: &[String], lb: &[bool], out: &mut Vec<(Vec<Expr>, Vec<bool>)>) {
     match e {
         Expr::Const(_) | Expr::Ref(_) => {}
         Expr::Lambda(_) => {} // a distinct instance — not this body's recursion
         Expr::Apply { callee, args } => {
-            if resolves_to_self(callee, closure, cv) {
+            if resolves_to_target(callee, closure, cv) {
                 let mut positional = Vec::new();
                 let mut clean = true;
                 for a in args {
@@ -759,12 +842,12 @@ fn walk(e: &Expr, closure: &Closure, cv: &ValueRef, params: &[String], lb: &[boo
     }
 }
 
-/// Whether `callee` is a reference that resolves, through `closure`'s captured
-/// environment, to the recursing closure `cv` (pointer identity — the self-capture is the
-/// same allocation).
-fn resolves_to_self(callee: &Expr, closure: &Closure, cv: &ValueRef) -> bool {
+/// Whether `callee` is a reference that resolves, through `closure`'s captured environment,
+/// to a member of the target group `targets` (pointer identity — a self- or mutual-capture
+/// is the same allocation).
+fn resolves_to_target(callee: &Expr, closure: &Closure, targets: &[ValueRef]) -> bool {
     let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = callee else { return false };
-    matches!(closure.env.lookup(n), Some(Binding::Value(v)) if &v == cv)
+    matches!(closure.env.lookup(n), Some(Binding::Value(v)) if targets.contains(&v))
 }
 
 fn is_param(e: &Expr, param: &str) -> bool {
@@ -916,6 +999,31 @@ mod tests {
         let mut i = Interner::new();
         let s = f("f = (a, b) => a <= b ? a : f(a - 1, b)\nf", &mut i);
         assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
+    // ── G-8: mutual recursion (§5 GR-07) ─────────────────────────────────────
+
+    #[test]
+    fn mutual_even_odd_grounds() {
+        // The cycle isEven → isOdd → isEven decreases `n` by 1 on every edge; both members
+        // have the descending half-line base `n <= 0`, so every round trip descends.
+        let mut i = Interner::new();
+        let src = "isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
+                   isOdd = (n) => n <= 0 ? false : isEven(n - 1)\n\
+                   isEven";
+        let ev = f(src, &mut i);
+        assert_eq!(ground(&ev, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    #[test]
+    fn mutual_recursion_that_does_not_descend_is_unproven() {
+        // The `ping`→`pong`→`ping` cycle carries `n` unchanged — no descent → Unproven.
+        let mut i = Interner::new();
+        let src = "ping = (n) => n <= 0 ? 0 : pong(n)\n\
+                   pong = (n) => n <= 0 ? 0 : ping(n)\n\
+                   ping";
+        let p = f(src, &mut i);
+        assert_eq!(ground(&p, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
     }
 
     // ── G-6: structural descent (§2b, tuple peel) ────────────────────────────

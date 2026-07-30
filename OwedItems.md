@@ -165,12 +165,17 @@ built in code, §16 proofs owed**.
   accumulator variant grounds, rebuild-the-whole (`f([h, ...rest])`) Unproven. **G-7 BUILT**
   (constant-drift refutation generalized): `drift_away` refutes any constant drift —
   descending (GR-23a), ascending, and the **period-1 self-loop** `f(n)` (GR-11 degenerate
-  closed orbit); one forced linear path, witness-gated. `ground` is three-voiced.
-  Candidate-locality (GR-04). **Owed:** point-base / **Ackermann** (GR-18 grid
-  + domain — `==0` stops give no lower bound), **peel-k grid** (base must cover lengths
-  `0..k-1`), `restrict_len` structural facts (GR-08), nonlinear measures, general
-  **closed-orbit cycle** refutation (GR-11; specimen 22b), §4 exact-singleton chains, §8
-  WorldDecided; mutual SCC;
+  closed orbit); one forced linear path, witness-gated. **G-8 BUILT** (mutual recursion,
+  GR-07): the reachable closure group is the SCC; if every cross-call decreases a shared
+  single-param measure and every recursive member has a descending half-line base, every
+  cycle composes to a decrease → grounded (`isEven`/`isOdd` on `n <= 0`); the enumeration-free
+  per-edge sufficient case. Generalized the self-call walker to a group (`resolves_to_target`).
+  `ground` is three-voiced. Candidate-locality (GR-04). **Owed:** point-base / **Ackermann**
+  (GR-18 grid + domain — `==0` stops give no lower bound), **peel-k grid** (base must cover
+  lengths `0..k-1`), `restrict_len` structural facts (GR-08), nonlinear measures,
+  **oscillator** cycle composition (mixed-sign, GR-07), general **closed-orbit cycle**
+  refutation (GR-11; specimen 22b), §4 exact-singleton chains, §8 WorldDecided; multi-param
+  mutual;
   the **wiring** into the body check (the swap gate, task #50); §13/§16 discharge (exact-chain
   bound theorem; lex joint-settlement; multigraph decomposition lemma; per-rule soundness;
   GR-27 preservation check). This is A-NEG's second domain source.

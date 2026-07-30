@@ -6,6 +6,32 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-8: mutual recursion (§5 GR-07)
+
+Grounding crosses function boundaries — mutual-recursion SCCs. `grounding.rs` +2 tests;
+**363 lib** + 111 conformance green, clippy clean. Still unwired.
+
+- **`mutual_descent(callee)`** — the reachable closure group (`reachable_closures`, from
+  `bodywalk`) is the mutual SCC. If **every** cross-call in the group decreases a shared
+  single-parameter measure by a constant and every recursive member has a descending
+  half-line base on it, then every simple cycle composes to a strict decrease (a sum of
+  negatives) and the measure is bounded below — the whole group terminates. This discharges
+  GR-07's per-cycle obligation by the **stronger, enumeration-free per-edge** condition (no
+  Johnson-style cycle walk); landing is structural (domain-independent).
+- **Generalized the self-call walker to a group.** `walk`'s target went from one closure
+  (`&ValueRef`) to a group (`&[ValueRef]`); `resolves_to_self` → `resolves_to_target`
+  (membership). Self-recursion (G-1..G-7) is the singleton-group case
+  (`std::slice::from_ref(cv)`) — behaviour unchanged. `member_descends` reads each member's
+  arms, collecting group-calls and descending half-line stops (`descending_stop`).
+- **Grounds** `isEven`/`isOdd` on `n <= 0` (each edge −1). **Sound Unproven:** a
+  `ping`/`pong` cycle carrying `n` unchanged (no descent). A single function → `group.len()
+  < 2` → skipped (the self-recursion candidates own it).
+- **Deferred:** mixed-sign oscillator cycles (composed descent needs the full cycle
+  composition, GR-07), point-base mutual (even/odd on `n == 0` — grid + domain), multi-param
+  / lexicographic mutual; then wiring. **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Grounding G-7: constant-drift refutation generalized (period-1 orbit + ascending)
 
 Rounded out the refutation side — `drift_away` now handles **any** constant drift, not just
