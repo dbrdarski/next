@@ -6,6 +6,36 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Recovery Phase 2, step 3: `body_summary` — the full region-table summary
+
+The drop-in candidate for the wrong-layer `induction::InstanceBodySummary`. Extended
+`bodycheck.rs`; 6 tests. Full tree **339 lib** + 111 conformance, clippy clean. Still
+standalone (not wired; nothing deleted).
+
+- **`body_summary(callee, args, cenv, interner) → BodySummary { produced, completion,
+  findings }`** — same shape as `InstanceBodySummary`. `findings` = the path-sensitive
+  [`body_check`] safety (RT-14 discipline); `produced`/`completion` = analyzing the whole
+  body once under the captures + argument-narrowed parameters (E10 exhaustiveness via
+  `analyze_match`; the whole-body safety findings discarded — `body_check` owns those).
+- **Terminates on recursion, verified.** `body_check`/`whole_body` route nested calls
+  through the *existing* recursion-safe apply path, so a recursive body doesn't loop and
+  still catches its local traps — `f = n => n==0 ? (1+"x") : f(n-1)` is rejected;
+  factorial summarizes coarsely (`produced` Top via the cycle) and completes. (The
+  re-entry guard that a *wired* `body_summary` needs — so it doesn't re-enter itself —
+  lands with the swap.)
+- **14.4 confirmed** — `capture_env` gives capture-dependent operation domains
+  (`make(1)` inner → Number, `make("s")` inner → String) for free.
+- **Now unblocked: the swap.** `body_summary` matches `InstanceBodySummary`'s interface
+  and verdicts on the gate. The remaining swap is: add the re-entry guard; rewire
+  `analyze_apply`'s `Known(cv)` branch to `body_summary` + the kept `call_return`
+  (recursive-produced sharpening); **delete** `instance_body_summary`, `domain_admitted`,
+  `kind_abstraction`, `literal_values`, `ACTIVE_BODIES`, the widening/downgrade pair
+  (audit §5). Expect some *precision* test motion — Archive9's domain-indexed recursion
+  precision is deliberately replaced by the coarser cycle + return induction.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Recovery Phase 2: wiring/delete investigation — swap blocked on recursion
 
 Investigated the swap (replace `analyze_apply`'s body-safety with `body_check`, delete

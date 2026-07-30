@@ -2456,3 +2456,101 @@ mod bodycheck_captures {
         assert!(!body_check(&adds, &[Contract::Kind(Kind::String)], &cenv, &mut i).iter().any(|f| f.severity == crate::analyzer::Severity::Error), "adds(String) ok — capture flips the domain");
     }
 }
+
+// ── body_check terminates on recursion (via the existing recursion-safe path) ──
+
+mod bodycheck_recursion {
+    use crate::analyzer::Severity;
+    use crate::analyzer::bodycheck::body_check;
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+
+    #[test]
+    fn recursive_body_with_a_local_trap_terminates_and_rejects() {
+        // f = (n) => n == 0 ? (1 + "x") : f(n - 1). body_check must terminate (the
+        // recursive f(n-1) routes through the existing recursion-safe apply path) and
+        // catch the base-arm's local trap.
+        let f = run_source("f = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        let fs = body_check(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
+        assert!(fs.iter().any(|x| x.severity == Severity::Error), "local trap in the base arm rejected");
+    }
+
+    #[test]
+    fn a_plain_recursion_terminates_cleanly() {
+        // factorial: no local trap over Number → no error, and it terminates.
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        let fs = body_check(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
+        assert!(!fs.iter().any(|x| x.severity == Severity::Error), "clean recursion: no error");
+    }
+}
+
+// ── body_summary — the full {produced, completion, findings} region-table summary ─
+
+mod bodycheck_summary {
+    use super::{ActKind, arm, closure, konst, matchx, name, one_param, prim};
+    use crate::analyzer::Completion;
+    use crate::analyzer::Severity;
+    use crate::analyzer::bodycheck::body_summary;
+    use crate::ast::PrimOp;
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+
+    fn has_error(fs: &[crate::analyzer::Finding]) -> bool {
+        fs.iter().any(|f| f.severity == Severity::Error)
+    }
+
+    #[test]
+    fn straight_line_body_produces_and_completes() {
+        // x => x + 1 over Number: produced Number, always completes, no findings.
+        let mut i = Interner::new();
+        let one = i.integer(1);
+        let f = closure(&mut i, one_param("x"), prim(PrimOp::Add, vec![name("x"), konst(one)]), ActKind::Pure);
+        let s = body_summary(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
+        assert_eq!(s.produced, Contract::Kind(Kind::Number));
+        assert!(matches!(s.completion, Completion::Produces));
+        assert!(!has_error(&s.findings));
+    }
+
+    #[test]
+    fn conditional_body_narrows_produced_by_the_live_arm() {
+        // n => n == 0 ? 1 : n + "x", applied to Equals(0): only the base arm is live, so
+        // produced = Equals(1) and there are no findings.
+        let mut i = Interner::new();
+        let (zero, one, x) = (i.integer(0), i.integer(1), i.string("x"));
+        let body = matchx(
+            None,
+            vec![
+                arm(None, Some(prim(PrimOp::Eq, vec![name("n"), konst(zero.clone())])), konst(one.clone())),
+                arm(None, None, prim(PrimOp::Add, vec![name("n"), konst(x)])),
+            ],
+        );
+        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
+        let arg = Contract::Equals(zero);
+        let s = body_summary(&f, &[arg], &ContractEnv::new(), &mut i);
+        assert_eq!(s.produced, Contract::Equals(one), "only the base arm is reachable for 0");
+        assert!(!has_error(&s.findings));
+    }
+
+    #[test]
+    fn recursion_summarizes_coarsely_and_terminates() {
+        // factorial: produced is coarse (the recursive call returns Top via the existing
+        // path), completion Produces, no findings — and it terminates.
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        let s = body_summary(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
+        assert!(!has_error(&s.findings));
+        assert!(matches!(s.completion, Completion::Produces), "the total ternary completes");
+    }
+
+    #[test]
+    fn recursion_with_a_local_trap_is_still_rejected() {
+        let f = run_source("f = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\nf").unwrap().0;
+        let mut i = Interner::new();
+        let s = body_summary(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
+        assert!(has_error(&s.findings), "the base-arm local trap is caught");
+    }
+}

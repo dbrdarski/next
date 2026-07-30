@@ -15,12 +15,44 @@
 //! into `analyze_apply` (the superseded machinery still runs — audit §5).
 
 use crate::analyzer::region::{region_table, select};
-use crate::analyzer::{Finding, Severity, TypeEnv, analyze};
+use crate::analyzer::{Completion, Finding, Severity, TypeEnv, analyze, bind_pattern};
 use crate::ast::{Pat, PatElem};
 use crate::contract::{Contract, ContractEnv};
 use crate::env::Binding;
 use crate::interner::Interner;
 use crate::value::ValueRef;
+
+/// A per-instance body summary — the region-table replacement for the wrong-layer
+/// `induction::InstanceBodySummary`. `findings` is the path-sensitive [`body_check`]
+/// safety; `produced` and `completion` come from analyzing the whole body under the
+/// argument (E10 exhaustiveness handled by `analyze_match`). Terminates on recursion:
+/// nested calls route through the existing recursion-safe apply path (the re-entry
+/// guard for a *wired* `body_summary` lands with the swap).
+#[derive(Clone, Debug)]
+pub struct BodySummary {
+    pub produced: Contract,
+    pub completion: Completion,
+    pub findings: Vec<Finding>,
+}
+
+/// Summarize applying `callee` to arguments described by `args`.
+pub fn body_summary(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> BodySummary {
+    let findings = body_check(callee, args, cenv, interner);
+    let (produced, completion) = whole_body(callee, args, cenv, interner);
+    BodySummary { produced, completion, findings }
+}
+
+/// `produced` (the body's inferred contract) and `completion` (E10), by analyzing the
+/// whole body once with the captures bound and the parameters narrowed by the argument
+/// tuple. Safety findings here are discarded — [`body_check`] supplies the
+/// path-sensitive ones.
+fn whole_body(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> (Contract, Completion) {
+    let Some(closure) = callee.as_closure() else { return (Contract::Top, Completion::Produces) };
+    let mut env = capture_env(callee);
+    bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+    let a = analyze(&closure.lambda.body, &env, cenv, interner);
+    (a.contract, a.completion)
+}
 
 /// Findings from checking a call to `callee` with argument contracts `args`. Empty ⇒ no
 /// finding proved. `Error` ⇒ a definitely-reached row traps (refutation); `Warning` ⇒
