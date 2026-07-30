@@ -6,6 +6,35 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-4: program-expressed compound measures (§6 GR-15a/16)
+
+Generalized G-3's bare counter into a **linear program-expressed measure** — the other
+half of §6. `grounding.rs` +2 tests; **354 lib** + 111 conformance green, clippy clean.
+Still unwired.
+
+- **`counter_descent` → `measure_descent`.** A base arm's half-line stop `E ⋈ c` whose
+  varying side `E` is a **linear** combination of the parameters (GR-15a: the expression
+  the base tests — `n`, `2a + b`). Drift per recursive call read by **substitute-and-
+  normalize** (GR-16): substitute the call's arguments into `E`, normalize as a linear
+  form, subtract; a nonzero constant of a single sign facing the stop is a floored monotone
+  measure. Coefficient-0 positions are carried freely. Structural, domain-independent
+  landing (half-line). **Subsumes** the bare-argument counter (`E = n`) — the G-3 tests all
+  pass unchanged.
+- **New machinery (self-contained, ~60 LOC):** `LinComb { coeffs, constant }` with
+  add/sub/scale; `linear_form(expr, params)` (Const/Ref/Add/Sub/Neg/Mul-by-constant → a
+  linear form; `param·param`, division-by-variable, non-param refs → `None`); `drift_on`
+  (the substitute-and-normalize). Written in-module rather than reusing `oracle::poly`
+  (private, canonicalization-oriented, no coefficient extraction).
+- **Grounds** `f = (a, b) => 2a+b <= 0 ? a : f(a-1, b+1)` — where **no single argument**
+  descends (b ascends) but the linear measure `2a+b` drifts −1. **Sound Unproven:** a
+  two-varying-side relational stop (`a <= b`) — the correlation is [permanent] and this
+  route concludes nothing (GR-15a/18), even when it happens to terminate.
+- **Deferred:** point-base grid + GR-18 range (needed for `E == c` compound stops),
+  nonlinear measures, §5 lexicographic (multi-component), §7 closed-orbit, §4
+  exact-singleton chains, §8 WorldDecided; then wiring. **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Grounding G-3: multi-parameter counter descent (§6 GR-15a)
 
 Breadth — grounding now covers the common **accumulator + counter** shape. `grounding.rs`

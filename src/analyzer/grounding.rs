@@ -27,19 +27,22 @@
 //! `Unproven` (GR-21; specimen 3c). The **closed-orbit** refutation form (GR-11) is a
 //! later increment.
 //!
-//! **Multi-parameter counter descent (G-3, §6 GR-15a / GR-14 single component)** — a
-//! bare-argument measure: some argument position is a *counter* stopped by a half-line
-//! test (`n <= 0` / `n >= 100`) and stepped a constant in the stopping direction on every
-//! recursive call, the other positions carried freely (`(n, acc) => n <= 0 ? acc :
-//! f(n-1, acc+n)`). Structural landing — domain-independent. Point (`==`) stops (needing
-//! the grid) and compound measures (`2a+b`, needing substitute-and-normalize) are later
-//! increments.
+//! **Program-expressed linear-measure descent (G-3/G-4, §6 GR-15a/16)** — a base arm's
+//! half-line stop `E ⋈ c` whose varying side `E` is a *linear* measure over the parameters
+//! (`n`; `2a + b`). Its drift per recursive call is read by **substitute-and-normalize**
+//! (GR-16): substitute the call's arguments into `E`, normalize as a linear form, subtract
+//! — a nonzero constant of a single sign facing the stop is a floored monotone measure;
+//! coefficient-0 positions are carried freely (`(n, acc) => n <= 0 ? acc : f(n-1, acc+n)`;
+//! `(a, b) => 2a+b <= 0 ? d : f(a-1, b+1)`). Structural, domain-independent landing.
+//! Subsumes the bare-argument counter. Point (`==`) stops (grid, GR-05(2)/GR-18) and
+//! nonlinear measures are later increments; two-varying-side relational stops are
+//! **[permanent]** unprovable by this route (GR-18).
 //!
 //! Candidate-locality (GR-04): outside applicability each candidate concludes **nothing**
-//! — [`Verdict::Unproven`], always sound. The compound-measure read (§6 GR-16),
-//! lexicographic (§5), exact-singleton chains (§4) and the WorldDecided classifier (§8)
-//! are later increments. **Not yet wired** into the body check — same discipline as
-//! `region.rs` / `bodycheck.rs`: build standalone, prove green, integrate after.
+//! — [`Verdict::Unproven`], always sound. The lexicographic certificate (§5), exact-
+//! singleton chains (§4) and the WorldDecided classifier (§8) are later increments. **Not
+//! yet wired** into the body check — same discipline as `region.rs` / `bodycheck.rs`:
+//! build standalone, prove green, integrate after.
 
 use num_bigint::BigInt;
 
@@ -75,7 +78,7 @@ pub enum Verdict {
 /// is judged first: a proven descent is never also a divergence.
 pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Verdict {
     if matches!(numeric_descent(callee, domain, cenv, interner), Some(Verdict::Grounded))
-        || counter_descent(callee)
+        || measure_descent(callee)
     {
         return Verdict::Grounded;
     }
@@ -205,16 +208,19 @@ fn reaches(start: &Rational, d: &Rational, base: &Contract) -> bool {
     }
 }
 
-/// Multi-parameter **counter descent** (§6 GR-15a with a bare-argument measure — the
-/// single-component case of GR-14's lexicographic certificate). Some argument position is
-/// a *counter*: a base arm — reached **before** any recursive arm — stops on it with a
-/// **half-line** test (`p <= c` / `p >= c` / strict), and every recursive call steps that
-/// position by a constant strictly in the stopping direction (floor δ = |drift|). The
-/// other positions are carried freely. Landing is **structural** — a floored monotone step
-/// crosses a half-line in finitely many steps (Archimedean), independent of the domain, so
-/// no per-parameter domain is needed. Point (`==`) stops need the grid and stay with
-/// `numeric_descent` (single parameter) / a later increment.
-fn counter_descent(callee: &ValueRef) -> bool {
+/// **Program-expressed linear-measure descent** (§6 GR-15a/16). A base arm — reached
+/// **before** any recursive arm — stops on a **half-line** test `E ⋈ c` whose varying side
+/// `E` is a *linear* combination of the parameters (GR-15a: the canonicalized expression
+/// the base tests; `n`, `2a + b`). Its drift across each recursive call is read by
+/// **substitute-and-normalize** (GR-16): substitute the call's argument expressions into
+/// `E`, normalize as a linear form, subtract — a nonzero constant of a single sign facing
+/// the stop is a floored monotone measure. Positions with coefficient 0 are carried
+/// freely. Landing is **structural** (a floored step crosses a half-line in finitely many
+/// steps — Archimedean), so no domain or range (GR-18) is needed. Subsumes the
+/// bare-argument counter (`E = n`). Point (`==`) stops need the grid (GR-05(2)/GR-18) and
+/// stay with `numeric_descent` / a later increment; two-varying-side (relational) stops
+/// contribute nothing (GR-15a).
+fn measure_descent(callee: &ValueRef) -> bool {
     let Some(closure) = callee.as_closure() else { return false };
     let Some(params) = param_names(&closure.lambda.params) else { return false };
     let Expr::Match(m) = &*closure.lambda.body else { return false };
@@ -243,19 +249,30 @@ fn counter_descent(callee: &ValueRef) -> bool {
     if rec_calls.is_empty() {
         return false;
     }
-    // Some argument position is a floored counter with a matching, early-enough stop.
-    (0..params.len()).any(|i| counter_ok(i, &params[i], &stops, &rec_calls))
+    stops.iter().any(|g| measure_ok(g, &params, &rec_calls))
 }
 
-/// Position `i` (`param`) is a floored counter: every recursive call steps it by a nonzero
-/// constant of a single sign, and a half-line stop on `param` faces that direction.
-fn counter_ok(i: usize, param: &str, stops: &[Expr], rec_calls: &[Vec<Expr>]) -> bool {
+/// Whether the half-line stop `g` reads as `E ⋈ c` for a linear measure `E` that drifts by
+/// a nonzero constant of a single sign facing the stop across every recursive call.
+fn measure_ok(g: &Expr, params: &[String], rec_calls: &[Vec<Expr>]) -> bool {
+    let Expr::PrimOp { op, args } = g else { return false };
+    if args.len() != 2 {
+        return false;
+    }
+    let (Some(l), Some(r)) = (linear_form(&args[0], params), linear_form(&args[1], params)) else {
+        return false;
+    };
+    // GR-15a: exactly one varying side. The measure `E` is it; orient the op as `E ⋈ c`.
+    let (e, op) = match (l.is_constant(), r.is_constant()) {
+        (false, true) => (l, *op),
+        (true, false) => (r, flip(*op)),
+        _ => return false, // both constant, or both varying (relational — [permanent])
+    };
     let mut ascending: Option<bool> = None;
     for call in rec_calls {
-        let Some(arg) = call.get(i) else { return false };
-        let Some(d) = constant_drift(arg, param) else { return false };
+        let Some(d) = drift_on(&e, call, params) else { return false };
         if d.is_zero() {
-            return false; // a carried (non-moving) position is not a counter
+            return false; // no progress on this measure
         }
         let up = d > Rational::from(0);
         match ascending {
@@ -265,29 +282,95 @@ fn counter_ok(i: usize, param: &str, stops: &[Expr], rec_calls: &[Vec<Expr>]) ->
         }
     }
     let Some(ascending) = ascending else { return false };
-    stops.iter().any(|g| stop_matches(g, param, ascending))
-}
-
-/// Whether guard `g` is a half-line stop `param ⋈ c` whose satisfied side lies in the
-/// direction the counter moves: a descending counter needs `param <= c` / `param < c`; an
-/// ascending counter needs `param >= c` / `param > c`.
-fn stop_matches(g: &Expr, param: &str, ascending: bool) -> bool {
-    let Expr::PrimOp { op, args } = g else { return false };
-    if args.len() != 2 {
-        return false;
-    }
-    // GR-15a: exactly one varying side is `param`, the other a constant.
-    let op = if is_param(&args[0], param) && const_num(&args[1]).is_some() {
-        *op
-    } else if is_param(&args[1], param) && const_num(&args[0]).is_some() {
-        flip(*op)
-    } else {
-        return false;
-    };
     matches!(
         (op, ascending),
         (PrimOp::Le | PrimOp::Lt, false) | (PrimOp::Ge | PrimOp::Gt, true)
     )
+}
+
+/// The drift of measure `e` across one recursive call — `E[args] − E` by substitute-and-
+/// normalize (GR-16): substitute each parameter with its argument's linear form, sum, and
+/// subtract. `Some(δ)` only when the result is a **constant** (correlation-preserving);
+/// otherwise the drift is relational and this route concludes nothing (GR-18).
+fn drift_on(e: &LinComb, call: &[Expr], params: &[String]) -> Option<Rational> {
+    let mut substituted = LinComb::constant(e.constant.clone(), params.len());
+    for (i, ci) in e.coeffs.iter().enumerate() {
+        if ci.is_zero() {
+            continue; // a coefficient-0 position is carried freely — its argument is irrelevant
+        }
+        let arg = call.get(i)?;
+        substituted = substituted.add(&linear_form(arg, params)?.scale(ci));
+    }
+    let drift = substituted.sub(e);
+    drift.is_constant().then_some(drift.constant)
+}
+
+/// A linear combination `Σ coeffs[i]·paramᵢ + constant` over the parameter list.
+#[derive(Clone)]
+struct LinComb {
+    coeffs: Vec<Rational>,
+    constant: Rational,
+}
+
+impl LinComb {
+    fn constant(constant: Rational, n: usize) -> LinComb {
+        LinComb { coeffs: vec![Rational::from(0); n], constant }
+    }
+    fn is_constant(&self) -> bool {
+        self.coeffs.iter().all(Rational::is_zero)
+    }
+    fn add(&self, o: &LinComb) -> LinComb {
+        LinComb {
+            coeffs: self.coeffs.iter().zip(&o.coeffs).map(|(a, b)| a.clone() + b.clone()).collect(),
+            constant: self.constant.clone() + o.constant.clone(),
+        }
+    }
+    fn sub(&self, o: &LinComb) -> LinComb {
+        LinComb {
+            coeffs: self.coeffs.iter().zip(&o.coeffs).map(|(a, b)| a.clone() - b.clone()).collect(),
+            constant: self.constant.clone() - o.constant.clone(),
+        }
+    }
+    fn scale(&self, k: &Rational) -> LinComb {
+        LinComb {
+            coeffs: self.coeffs.iter().map(|a| a.clone() * k.clone()).collect(),
+            constant: self.constant.clone() * k.clone(),
+        }
+    }
+}
+
+/// Parse `e` as a [`LinComb`] over `params`; `None` if it is nonlinear (`param·param`,
+/// division by a variable) or mentions a non-parameter reference.
+fn linear_form(e: &Expr, params: &[String]) -> Option<LinComb> {
+    match e {
+        Expr::Const(v) => Some(LinComb::constant(v.as_number()?.clone(), params.len())),
+        Expr::Ref(Ref::Immutable(BindingRef::Name(n))) => {
+            let i = params.iter().position(|p| p == n)?;
+            let mut lc = LinComb::constant(Rational::from(0), params.len());
+            lc.coeffs[i] = Rational::from(1);
+            Some(lc)
+        }
+        Expr::PrimOp { op: PrimOp::Add, args } if args.len() == 2 => {
+            Some(linear_form(&args[0], params)?.add(&linear_form(&args[1], params)?))
+        }
+        Expr::PrimOp { op: PrimOp::Sub, args } if args.len() == 2 => {
+            Some(linear_form(&args[0], params)?.sub(&linear_form(&args[1], params)?))
+        }
+        Expr::PrimOp { op: PrimOp::Neg, args } if args.len() == 1 => {
+            Some(LinComb::constant(Rational::from(0), params.len()).sub(&linear_form(&args[0], params)?))
+        }
+        Expr::PrimOp { op: PrimOp::Mul, args } if args.len() == 2 => {
+            let (a, b) = (linear_form(&args[0], params)?, linear_form(&args[1], params)?);
+            if a.is_constant() {
+                Some(b.scale(&a.constant))
+            } else if b.is_constant() {
+                Some(a.scale(&b.constant))
+            } else {
+                None // param · param — nonlinear
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The comparison with operands swapped (`a < b` ⇔ `b > a`); `==`/`!=` are symmetric.
@@ -565,7 +648,25 @@ mod tests {
         assert_eq!(ground(&cd, &five, &ContractEnv::new(), &mut i), Verdict::Grounded);
     }
 
-    // ── G-3: multi-parameter counter descent (§6 GR-15a) ─────────────────────
+    // ── G-3/G-4: program-expressed linear-measure descent (§6 GR-15a/16) ─────
+
+    #[test]
+    fn compound_measure_grounds_when_no_single_arg_descends() {
+        // `2a + b` drifts −1 under `f(a-1, b+1)` — but neither `a` nor `b` alone is a
+        // monotone counter (b ascends). Substitute-and-normalize reads the linear measure.
+        let mut i = Interner::new();
+        let s = f("f = (a, b) => 2 * a + b <= 0 ? a : f(a - 1, b + 1)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    #[test]
+    fn relational_two_varying_stop_is_unproven() {
+        // `a <= b` — both sides vary; the correlation is relational ([permanent]) and this
+        // route concludes nothing (GR-15a/18), even though it happens to terminate.
+        let mut i = Interner::new();
+        let s = f("f = (a, b) => a <= b ? a : f(a - 1, b)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
 
     #[test]
     fn accumulator_counter_grounds_descending() {

@@ -149,15 +149,16 @@ built in code, §16 proofs owed**.
   GR-23a): from an admitted represented-exact witness (`Equals(v)`), a single forced linear
   descent whose forward lattice misses every base region → `Refuted` (specimen 12: witness
   1 refuted, witness 2 Unproven — parity-split; a broad domain has no admitted witness →
-  Unproven, GR-22). **G-3 BUILT** (multi-parameter counter descent, §6 GR-15a / GR-14
-  single component): a bare-argument counter with a half-line stop stepped a constant in
-  the stopping direction, other positions carried; structural domain-independent landing
-  (accumulator+counter shape, both orientations). `ground` is three-voiced.
-  Candidate-locality (GR-04). **Owed:** §6 **compound measures** (`2a+b`,
-  substitute-and-normalize GR-16 — needs poly-NF) + point-base multi-param (grid), §5
-  **lexicographic** (multi-component), §7 **closed-orbit** refutation (GR-11; specimen 22b),
-  §4 exact-singleton chains, §8 WorldDecided; mutual SCC; the **wiring** into the body
-  check (the swap gate, task #50); §13/§16 discharge (exact-chain bound theorem; lex
+  Unproven, GR-22). **G-3/G-4 BUILT** (program-expressed linear-measure descent, §6
+  GR-15a/16): a base arm's half-line stop `E ⋈ c` with a **linear** measure `E` over the
+  params, drift read by **substitute-and-normalize** (own `LinComb`/`linear_form`); grounds
+  `2a+b <= 0 ? … : f(a-1, b+1)` where no single argument descends; coefficient-0 positions
+  carried; two-varying-side relational stops [permanent]-unprovable. Subsumes the bare
+  counter. `ground` is three-voiced. Candidate-locality (GR-04). **Owed:** point-base
+  compound stops (GR-18 range + grid), nonlinear measures, §5 **lexicographic**
+  (multi-component), §7 **closed-orbit** refutation (GR-11; specimen 22b), §4
+  exact-singleton chains, §8 WorldDecided; mutual SCC; the **wiring** into the body check
+  (the swap gate, task #50); §13/§16 discharge (exact-chain bound theorem; lex
   joint-settlement; multigraph decomposition lemma; per-rule soundness; GR-27 preservation
   check). This is A-NEG's second domain source.
 - **Application & induction v0.8 (+0.8.2)** — design-closed (*"the design condition
