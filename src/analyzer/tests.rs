@@ -2433,3 +2433,26 @@ mod bodycheck {
         assert!(fs.iter().any(|f| f.severity == Severity::Warning), "but it is flagged unproven");
     }
 }
+
+// ── Body check over captures (14.4) — capture-dependent operation demand ───────
+
+mod bodycheck_captures {
+    use crate::analyzer::bodycheck::body_check;
+    use crate::contract::{Contract, ContractEnv, Kind};
+    use crate::interner::Interner;
+    use crate::oracle::run_source;
+
+    #[test]
+    fn inner_closure_domain_depends_on_the_capture() {
+        // make = (y) => (x) => x + y. make(1)'s inner demands x : Number (x + 1);
+        // make("s")'s inner demands x : String (x + "s"). The capture parameterizes it.
+        let cenv = ContractEnv::new();
+        let add1 = run_source("make = (y) => (x) => x + y\nmake(1)").unwrap().0;
+        let mut i = Interner::new();
+        assert!(!body_check(&add1, &[Contract::Kind(Kind::Number)], &cenv, &mut i).iter().any(|f| f.severity == crate::analyzer::Severity::Error), "add1(Number) ok");
+        assert!(body_check(&add1, &[Contract::Kind(Kind::String)], &cenv, &mut i).iter().any(|f| f.severity == crate::analyzer::Severity::Error), "add1(String) rejects");
+
+        let adds = run_source("make = (y) => (x) => x + y\nmake(\"s\")").unwrap().0;
+        assert!(!body_check(&adds, &[Contract::Kind(Kind::String)], &cenv, &mut i).iter().any(|f| f.severity == crate::analyzer::Severity::Error), "adds(String) ok — capture flips the domain");
+    }
+}

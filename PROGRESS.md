@@ -28,7 +28,7 @@ recovery deletes.
 
 | Suite | Result |
 |---|---|
-| Unit tests (`cargo test --lib`) | **332 passed, 0 failed, 0 ignored** |
+| Unit tests (`cargo test --lib`) | **333 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
 | Manifest (`MANIFEST.sha256.txt`) | **all 19 files verify** (07-30 grounding landing) |

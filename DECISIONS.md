@@ -6,6 +6,37 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Recovery Phase 2: wiring/delete investigation — swap blocked on recursion
+
+Investigated the swap (replace `analyze_apply`'s body-safety with `body_check`, delete
+the superseded machinery). **Finding: premature — the swap is blocked; deferring it.**
+333 lib green. One test added (14.4).
+
+- **The current live path already passes the gate.** `instance_body_summary` (the live
+  safety path, Archive6–9) already rejects `bad()`, transitive body traps, and a
+  recursive body with a local trap (tests `direct/transitive_body_trap_is_rejected`,
+  `a_recursive_body_with_a_local_trap_is_rejected`). So `body_check` and the old path
+  **agree on verdicts**; the difference is architecture (region table vs call-site
+  body-safety propagation), not correctness — no smoking gun left to fix by swapping.
+- **14.4 already works.** `body_check`'s `capture_env` binds captures to `Equals(value)`,
+  so a capture-dependent *operation* domain falls out: `make = y => x => x + y`;
+  `make(1)`'s inner demands `x : Number`, `make("s")`'s demands `x : String`. Added
+  `bodycheck_captures::inner_closure_domain_depends_on_the_capture`.
+- **The blocker.** `instance_body_summary` bundles `{ produced, completion, findings }`
+  **and** handles recursion (the `ACTIVE_BODIES` re-entry cutoff + domain widening) and
+  multi-parameter. `body_check` returns only findings, over the non-recursive
+  single-parameter fragment. Wiring `body_check` into `analyze_apply` for a **recursive**
+  callee would **infinite-loop** (it analyzes the recursive call's body → `analyze_apply`
+  → `body_check` → …, with no re-entry guard). So the swap cannot land until `body_check`
+  becomes a full summary with recursion handling.
+- **Corrected order (audit §5's own):** extend `body_check` → a `{produced, completion,
+  findings}` summary; add the re-entry cutoff + re-plumb `call_return` (return induction,
+  the *keep* set) onto it (14.5); the capture-dependent-**guard** case (region-table
+  b/c) and multi-parameter (§5). **Then** the swap+delete is a clean drop-in. Reported
+  to the author before proceeding.
+
+---
+
 ## 2026-07-30 — Recovery Phase 2, step 2: the call-site body check (the 14.1–14.3 gate)
 
 The safety proof that consumes the region table — `BodySafe(instance, argument)`, the
