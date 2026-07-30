@@ -38,10 +38,17 @@
 //! nonlinear measures are later increments; two-varying-side relational stops are
 //! **[permanent]** unprovable by this route (GR-18).
 //!
+//! **Lexicographic descent (G-5, §5 GR-13/14)** — an ordered dictionary of argument
+//! positions that lex-decreases on every recursive call: the first changing position
+//! decreases, and every decreasing position is bounded below on that call's path (a guard
+//! gates its decrease — component-grain landing, `(a, b) => a <= 0 ? b : b <= 0 ?
+//! f(a-1, 10) : f(a, b-1)`). v1 positions are arguments only, components **descending**;
+//! ascending components and `==`/point-stop floors (Ackermann's — grid + domain) are later.
+//!
 //! Candidate-locality (GR-04): outside applicability each candidate concludes **nothing**
-//! — [`Verdict::Unproven`], always sound. The lexicographic certificate (§5), exact-
-//! singleton chains (§4) and the WorldDecided classifier (§8) are later increments. **Not
-//! yet wired** into the body check — same discipline as `region.rs` / `bodycheck.rs`:
+//! — [`Verdict::Unproven`], always sound. Structural descent (§2b, tuple length),
+//! exact-singleton chains (§4) and the WorldDecided classifier (§8) are later increments.
+//! **Not yet wired** into the body check — same discipline as `region.rs` / `bodycheck.rs`:
 //! build standalone, prove green, integrate after.
 
 use num_bigint::BigInt;
@@ -79,6 +86,7 @@ pub enum Verdict {
 pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Verdict {
     if matches!(numeric_descent(callee, domain, cenv, interner), Some(Verdict::Grounded))
         || measure_descent(callee)
+        || lex_descent(callee)
     {
         return Verdict::Grounded;
     }
@@ -373,6 +381,125 @@ fn linear_form(e: &Expr, params: &[String]) -> Option<LinComb> {
     }
 }
 
+// ── Lexicographic descent (§5 GR-13/14) ───────────────────────────────────────
+
+/// Lexicographic descent (§5 GR-13/14, single-function / one-cycle case). Some ordered
+/// sequence of argument positions (the *dictionary*) lex-decreases on every recursive
+/// call: reading the dictionary in order, the first position that changes does so by a
+/// **decrease**, and every position that decreases on a call is **bounded below on that
+/// call's path** (a lower-bound guard gates its decreasing transition — landing at
+/// component grain, GR-14 domain closure), so each component is well-founded. v1 dictionary
+/// positions are argument positions only (GR-14); components are **descending**. Ascending
+/// components and `==`/point-stop floors (Ackermann's — needing the grid + domain) are
+/// later increments.
+fn lex_descent(callee: &ValueRef) -> bool {
+    let Some(closure) = callee.as_closure() else { return false };
+    let Some(params) = param_names(&closure.lambda.params) else { return false };
+    let mut calls = Vec::new();
+    walk(&closure.lambda.body, &closure, callee, &params, &vec![false; params.len()], &mut calls);
+    if calls.is_empty() {
+        return false;
+    }
+    let positions: Vec<usize> = (0..params.len()).collect();
+    injective_seqs(&positions)
+        .into_iter()
+        .filter(|dict| dict.len() >= 2) // length-1 dictionaries are `measure_descent`'s job
+        .any(|dict| calls.iter().all(|(args, lb)| lex_call_ok(&dict, args, lb, &params)))
+}
+
+/// One recursive call lex-decreases under `dict`: reading the dictionary in order the first
+/// changed position decreases (a later increase/reset is fine once a decrease is fixed), and
+/// **every** decreasing position is lower-bounded on this call's path (`lb`).
+fn lex_call_ok(dict: &[usize], args: &[Expr], lb: &[bool], params: &[String]) -> bool {
+    let mut decreaser_found = false;
+    for &i in dict {
+        let Some(arg) = args.get(i) else { return false };
+        match position_drift(arg, &params[i]) {
+            Some(d) if d < Rational::from(0) => {
+                if !lb.get(i).copied().unwrap_or(false) {
+                    return false; // an ungated decrease — component not bounded below
+                }
+                decreaser_found = true; // the first decrease is the lex-decreaser (earlier were 0)
+            }
+            Some(d) if d > Rational::from(0) => {
+                if !decreaser_found {
+                    return false; // first change is an increase → not a lex decrease
+                }
+            }
+            Some(_) => {} // zero — carried, look further down the dictionary
+            None => {
+                if !decreaser_found {
+                    return false; // first change is an unreadable reset → cannot order
+                }
+            }
+        }
+    }
+    decreaser_found
+}
+
+/// The drift of parameter `param` in a recursive call's argument: `param → 0` (carried),
+/// `param ± c → ±c`, else `None`.
+fn position_drift(arg: &Expr, param: &str) -> Option<Rational> {
+    if is_param(arg, param) {
+        return Some(Rational::from(0));
+    }
+    constant_drift(arg, param)
+}
+
+/// If guard `g` (optionally `negated`) is a **lower bound** on a bare parameter — `p > c` /
+/// `p >= c`, or the negation of `p <= c` / `p < c` — its parameter index, else `None`.
+fn guard_lb(g: &Expr, negated: bool, params: &[String]) -> Option<usize> {
+    let Expr::PrimOp { op, args } = g else { return None };
+    if args.len() != 2 {
+        return None;
+    }
+    let (idx, op) = if let (Some(i), true) = (param_index(&args[0], params), const_num(&args[1]).is_some()) {
+        (i, *op)
+    } else if let (Some(i), true) = (param_index(&args[1], params), const_num(&args[0]).is_some()) {
+        (i, flip(*op))
+    } else {
+        return None;
+    };
+    let op = if negated { negate_cmp(op) } else { op };
+    matches!(op, PrimOp::Gt | PrimOp::Ge).then_some(idx)
+}
+
+/// The index of a bare parameter reference in `params`, else `None`.
+fn param_index(e: &Expr, params: &[String]) -> Option<usize> {
+    let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = e else { return None };
+    params.iter().position(|p| p == n)
+}
+
+/// The logical negation of a comparison operator.
+fn negate_cmp(op: PrimOp) -> PrimOp {
+    match op {
+        PrimOp::Lt => PrimOp::Ge,
+        PrimOp::Le => PrimOp::Gt,
+        PrimOp::Gt => PrimOp::Le,
+        PrimOp::Ge => PrimOp::Lt,
+        PrimOp::Eq => PrimOp::Ne,
+        PrimOp::Ne => PrimOp::Eq,
+        other => other,
+    }
+}
+
+/// Every non-empty ordered injective sequence of `items` (subsets × orderings) — the
+/// GR-14 dictionary enumeration, finite and bounded by arity.
+fn injective_seqs(items: &[usize]) -> Vec<Vec<usize>> {
+    let mut out = Vec::new();
+    for i in 0..items.len() {
+        let mut rest = items.to_vec();
+        let head = rest.remove(i);
+        out.push(vec![head]);
+        for mut tail in injective_seqs(&rest) {
+            let mut seq = vec![head];
+            seq.append(&mut tail);
+            out.push(seq);
+        }
+    }
+    out
+}
+
 /// The comparison with operands swapped (`a < b` ⇔ `b > a`); `==`/`!=` are symmetric.
 fn flip(op: PrimOp) -> PrimOp {
     match op {
@@ -434,13 +561,23 @@ fn point_value(c: &Contract) -> Option<Rational> {
     }
 }
 
-/// Every self-call's **positional argument list** in `e` — the applications whose callee
-/// resolves (through the closure's captured environment) to the recursing closure `cv`.
-/// Descends every subexpression except nested lambdas (distinct instances); mirrors
-/// `bodywalk`'s walk so no self-call is missed (an unread self-call could otherwise be a
-/// false proof). A self-call carrying a spread argument has no reliable positional mapping
-/// and is recorded as an **empty** list — every candidate then rejects it.
+/// Every self-call's **positional argument list** in `e` (paths discarded) — the shape
+/// [`numeric_descent`] / [`measure_descent`] read. Thin wrapper over [`walk`].
 fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) {
+    let mut full = Vec::new();
+    walk(e, closure, cv, &[], &[], &mut full);
+    out.extend(full.into_iter().map(|(args, _)| args));
+}
+
+/// Every self-call in `e` paired with its **path lower-bound vector** — `lb[i] = true` iff
+/// parameter `i` is bounded below on the path that reaches this call (a `pᵢ > c` / `pᵢ >= c`
+/// guard, or the negation of an earlier `pᵢ <= c` / `pᵢ < c`). The applications whose callee
+/// resolves through `closure`'s captured environment to `cv`; descends every subexpression
+/// except nested lambdas (distinct instances); mirrors `bodywalk` so no self-call is missed
+/// (an unread self-call could be a false proof). A spread argument (no reliable positional
+/// mapping) records an **empty** list — every candidate then rejects it. With empty
+/// `params`/`lb` the lower-bound tracking is inert (the arg-only wrapper above).
+fn walk(e: &Expr, closure: &Closure, cv: &ValueRef, params: &[String], lb: &[bool], out: &mut Vec<(Vec<Expr>, Vec<bool>)>) {
     match e {
         Expr::Const(_) | Expr::Ref(_) => {}
         Expr::Lambda(_) => {} // a distinct instance — not this body's recursion
@@ -454,33 +591,45 @@ fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<
                         Arg::Spread(_) => clean = false,
                     }
                 }
-                out.push(if clean { positional } else { Vec::new() });
+                out.push((if clean { positional } else { Vec::new() }, lb.to_vec()));
             }
-            collect_self_calls(callee, closure, cv, out);
+            walk(callee, closure, cv, params, lb, out);
             for a in args {
                 match a {
-                    Arg::Expr(x) | Arg::Spread(x) => collect_self_calls(x, closure, cv, out),
+                    Arg::Expr(x) | Arg::Spread(x) => walk(x, closure, cv, params, lb, out),
                 }
             }
         }
         Expr::PrimOp { args, .. } => {
             for a in args {
-                collect_self_calls(a, closure, cv, out);
+                walk(a, closure, cv, params, lb, out);
             }
         }
         Expr::Match(m) => {
             if let Some(s) = &m.scrutinee {
-                collect_self_calls(s, closure, cv, out);
+                walk(s, closure, cv, params, lb, out);
             }
+            // First-match: arm `k`'s result runs under the earlier guards negated plus its
+            // own guard — accumulate the lower bounds each contributes.
+            let mut acc = lb.to_vec();
             for item in &m.items {
                 match item {
-                    MatchItem::Bind(Bind { value, .. }) => collect_self_calls(value, closure, cv, out),
-                    MatchItem::Stmt(x) => collect_self_calls(x, closure, cv, out),
+                    MatchItem::Bind(Bind { value, .. }) => walk(value, closure, cv, params, &acc, out),
+                    MatchItem::Stmt(x) => walk(x, closure, cv, params, &acc, out),
                     MatchItem::Arm(arm) => {
+                        let mut branch = acc.clone();
                         if let Some(g) = &arm.guard {
-                            collect_self_calls(g, closure, cv, out);
+                            walk(g, closure, cv, params, &acc, out);
+                            if let Some(i) = guard_lb(g, false, params) {
+                                branch[i] = true;
+                            }
                         }
-                        collect_self_calls(&arm.result, closure, cv, out);
+                        walk(&arm.result, closure, cv, params, &branch, out);
+                        if let Some(g) = &arm.guard
+                            && let Some(i) = guard_lb(g, true, params)
+                        {
+                            acc[i] = true;
+                        }
                     }
                 }
             }
@@ -488,32 +637,32 @@ fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<
         Expr::TupleCons(els) => {
             for el in els {
                 match el {
-                    Element::Expr(x) | Element::Spread(x) => collect_self_calls(x, closure, cv, out),
+                    Element::Expr(x) | Element::Spread(x) => walk(x, closure, cv, params, lb, out),
                 }
             }
         }
         Expr::RecordCons(fs) => {
             for f in fs {
                 match f {
-                    Field::Field { value, .. } | Field::Spread(value) => collect_self_calls(value, closure, cv, out),
+                    Field::Field { value, .. } | Field::Spread(value) => walk(value, closure, cv, params, lb, out),
                     Field::Computed { key, value } => {
-                        collect_self_calls(key, closure, cv, out);
-                        collect_self_calls(value, closure, cv, out);
+                        walk(key, closure, cv, params, lb, out);
+                        walk(value, closure, cv, params, lb, out);
                     }
                 }
             }
         }
         Expr::Access { target, form, .. } => {
-            collect_self_calls(target, closure, cv, out);
+            walk(target, closure, cv, params, lb, out);
             match form {
                 AccessForm::Field(_) => {}
-                AccessForm::Index(x) => collect_self_calls(x, closure, cv, out),
+                AccessForm::Index(x) => walk(x, closure, cv, params, lb, out),
                 AccessForm::Slice { lo, hi } => {
                     if let Some(x) = lo {
-                        collect_self_calls(x, closure, cv, out);
+                        walk(x, closure, cv, params, lb, out);
                     }
                     if let Some(x) = hi {
-                        collect_self_calls(x, closure, cv, out);
+                        walk(x, closure, cv, params, lb, out);
                     }
                 }
             }
@@ -521,11 +670,11 @@ fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<
         Expr::Template(parts) => {
             for p in parts {
                 if let TemplatePart::Interp(x) = p {
-                    collect_self_calls(x, closure, cv, out);
+                    walk(x, closure, cv, params, lb, out);
                 }
             }
         }
-        Expr::Write { value, .. } => collect_self_calls(value, closure, cv, out),
+        Expr::Write { value, .. } => walk(value, closure, cv, params, lb, out),
     }
 }
 
@@ -665,6 +814,28 @@ mod tests {
         // route concludes nothing (GR-15a/18), even though it happens to terminate.
         let mut i = Interner::new();
         let s = f("f = (a, b) => a <= b ? a : f(a - 1, b)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
+    // ── G-5: lexicographic descent (§5 GR-13/14) ─────────────────────────────
+
+    #[test]
+    fn lexicographic_reset_grounds() {
+        // Dictionary [a, b]: `f(a-1, 10)` drops a (gated by a>0), resetting b; `f(a, b-1)`
+        // holds a and drops b (gated by b>0). Neither argument descends monotonically — the
+        // lex order does. Both floors come from the path guards, not the domain.
+        let mut i = Interner::new();
+        let s = f("f = (a, b) => a <= 0 ? b : b <= 0 ? f(a - 1, 10) : f(a, b - 1)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    #[test]
+    fn lexicographic_with_a_relational_floor_is_unproven() {
+        // `a` descends toward the stop `a == b`, but that stop is relational — it puts no
+        // constant lower bound on `a`, so the decrease is ungated. Sound Unproven (it does
+        // terminate, but this route cannot prove a floor).
+        let mut i = Interner::new();
+        let s = f("f = (a, b) => a == b ? a : f(a - 1, b)\nf", &mut i);
         assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
     }
 

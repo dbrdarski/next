@@ -153,14 +153,19 @@ built in code, §16 proofs owed**.
   GR-15a/16): a base arm's half-line stop `E ⋈ c` with a **linear** measure `E` over the
   params, drift read by **substitute-and-normalize** (own `LinComb`/`linear_form`); grounds
   `2a+b <= 0 ? … : f(a-1, b+1)` where no single argument descends; coefficient-0 positions
-  carried; two-varying-side relational stops [permanent]-unprovable. Subsumes the bare
-  counter. `ground` is three-voiced. Candidate-locality (GR-04). **Owed:** point-base
-  compound stops (GR-18 range + grid), nonlinear measures, §5 **lexicographic**
-  (multi-component), §7 **closed-orbit** refutation (GR-11; specimen 22b), §4
-  exact-singleton chains, §8 WorldDecided; mutual SCC; the **wiring** into the body check
-  (the swap gate, task #50); §13/§16 discharge (exact-chain bound theorem; lex
-  joint-settlement; multigraph decomposition lemma; per-rule soundness; GR-27 preservation
-  check). This is A-NEG's second domain source.
+  carried; two-varying-side relational stops [permanent]-unprovable. **G-5 BUILT**
+  (lexicographic descent, §5 GR-13/14 — path-sensitive): a dictionary of argument positions
+  that lex-decreases per call, each decreasing position bounded below by a path guard
+  (component-grain landing); the reset pattern (`a<=0 ? b : b<=0 ? f(a-1,10) : f(a,b-1)`)
+  grounds; relational floors (`a==b` stop) Unproven. Unified the self-call walker into a
+  path-threading `walk` carrying per-param lower-bound flags. `ground` is three-voiced.
+  Candidate-locality (GR-04). **Owed:** point-base / **Ackermann** (GR-18 grid + domain —
+  `==0` stops give no lower bound), §2b **structural descent** (tuple length), nonlinear
+  measures, §7 **closed-orbit** refutation (GR-11; specimen 22b), §4 exact-singleton
+  chains, §8 WorldDecided; mutual SCC; the **wiring** into the body check (the swap gate,
+  task #50); §13/§16 discharge (exact-chain bound theorem; lex joint-settlement; multigraph
+  decomposition lemma; per-rule soundness; GR-27 preservation check). This is A-NEG's
+  second domain source.
 - **Application & induction v0.8 (+0.8.2)** — design-closed (*"the design condition
   dissolved when the tuple family closed"*, C§13.2). Implementation + C§16 discharge
   owed. The 0.8.2 GR-26 effect-world seat row (consumes, never establishes).

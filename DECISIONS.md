@@ -6,6 +6,36 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-5: lexicographic descent (§5 GR-13/14)
+
+The first **path-sensitive** grounding candidate — the lex certificate. `grounding.rs`
++2 tests; **356 lib** + 111 conformance green, clippy clean. Still unwired.
+
+- **`lex_descent(callee)`.** Some ordered sequence of argument positions (the *dictionary*,
+  GR-14) lex-decreases on every recursive call: reading in order, the first changed position
+  **decreases**, and **every decreasing position is bounded below on that call's path** — a
+  lower-bound guard gates its decreasing transition (landing at component grain, GR-14
+  domain closure), so each component is well-founded. Grounds `(a, b) => a <= 0 ? b : b <= 0
+  ? f(a-1, 10) : f(a, b-1)` — neither argument descends monotonically (b resets to 10) but
+  the lex order does; both floors come from the **path guards**, not the domain.
+- **New machinery — path threading.** Unified the self-call walker into one `walk` that
+  carries a per-parameter **lower-bound vector** `lb`: entering a `Match` arm accumulates
+  the lower bounds its guard contributes (a `p > c`/`p >= c`, or the negation of an earlier
+  `p <= c`/`p < c` under first-match). `collect_self_calls` (G-1/G-2/G-4) is now a thin
+  wrapper dropping paths. Plus `lex_call_ok` (the per-call lex+gating check), `position_drift`
+  (`param → 0`, `param ± c → ±c`), `guard_lb`/`negate_cmp`/`param_index`, and `injective_seqs`
+  (the GR-14 dictionary enumeration, arity-bounded).
+- **Sound Unproven:** a relational floor (`a == b` stop puts no constant lower bound on
+  `a` → its decrease is ungated) — terminates, but this route can't prove a floor.
+- **Scope (honest):** v1 dictionary positions are argument positions only (GR-14);
+  components are **descending**; floors come from half-line/guard lower bounds. **Ackermann
+  is not yet covered** — its `m == 0`/`n == 0` point stops give `!= 0` on negation (no
+  lower bound), needing the grid + domain (GR-05(2)/GR-18) — a later increment. Single
+  function / one cycle; mutual SCC deferred.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Grounding G-4: program-expressed compound measures (§6 GR-15a/16)
 
 Generalized G-3's bare counter into a **linear program-expressed measure** — the other
