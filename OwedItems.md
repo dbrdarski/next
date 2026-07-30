@@ -76,10 +76,13 @@ built in code, §16 proofs owed**.
   resolution through the operation rules, three-valued adjudication at origin. The
   substrate the recovery builds first.
 - **Region-table computation** — `next-region-table-specification-v0-3.md` (0.3.1–0.3.2,
-  *architecturally closed; C§17 region-table item **discharged**, erratum 2026-07-24*).
-  Cases (a)–(d) = "the regionalization law"; exact-bit remainder walk; pattern∩guard;
-  annotated-tuple cache. Suite RT-01…RT-14. **Build it** (non-recursive capture-free
-  fragment first, 14.1–14.3 as the gate; then captures 14.4; then recursion).
+  *architecturally closed; C§17 item **discharged***). **§2–§4 computation BUILT**
+  (`analyzer/region.rs`, 2026-07-30): `region_table` (cases (a) exact-vs-constant + (d)
+  total fallback; pattern∩guard) + the `select` remainder walk (singleton fast path).
+  Capture-free single-parameter. Owed: cases (b)/(c) over captures, arg-tuple projection
+  (§5, multi-param), the annotated-tuple **instance cache** (C§13.4), and the **call-site
+  body check** that consumes this table (the accepted-domain-dissolved safety proof,
+  gating 14.1–14.3). Compound/negated guards currently read as case (d) (sound).
 - **Grounding v1** — `next-grounding-specification-v0-5.md` (0.5.1, DESIGN-CLOSED,
   compendium 1.0.18; GR-01…GR-30; Phase GR suite). Implementation + §13/§16 discharge
   owed (exact-chain bound theorem; lex joint-settlement; multigraph decomposition

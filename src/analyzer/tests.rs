@@ -2218,3 +2218,122 @@ fn a_growing_union_recursive_domain_terminates() {
     let a = analyze(&apply(name("f"), vec![name("k"), name("c")]), &env, &nc(), &mut i);
     let _ = a.accepted(); // the assertion is that analysis terminated at all
 }
+
+// ── Region-table computation (recovery Phase 2; region-table spec v0.3) ────────
+
+mod region {
+    use super::{arm, konst, matchx, name, prim};
+    use crate::analyzer::region::{region_table, select};
+    use crate::ast::{Expr, Pat, PrimOp};
+    use crate::contract::{Contract, ContractEnv};
+    use crate::interner::Interner;
+    use crate::rational::Rational;
+
+    fn cenv() -> ContractEnv {
+        ContractEnv::new()
+    }
+    /// A singleton argument contract `Equals(v)`.
+    fn eq(i: &mut Interner, v: i64) -> Contract {
+        Contract::Equals(i.integer(v))
+    }
+
+    /// `n == 0 ? 1 : n + "x"` (desugared): Match(∅, [Arm(guard n==0, 1), Arm(n+"x")]).
+    fn ternary(i: &mut Interner) -> Expr {
+        let (zero, one, x) = (i.integer(0), i.integer(1), i.string("x"));
+        matchx(
+            None,
+            vec![
+                arm(None, Some(prim(PrimOp::Eq, vec![name("n"), konst(zero)])), konst(one)),
+                arm(None, None, prim(PrimOp::Add, vec![name("n"), konst(x)])),
+            ],
+        )
+    }
+
+    #[test]
+    fn ternary_is_two_rows_equals0_then_top() {
+        let mut i = Interner::new();
+        let body = ternary(&mut i);
+        let rows = region_table(&body, "n", &cenv());
+        assert_eq!(rows.len(), 2);
+        // row 0: n == 0 → Range(0,0), exact; row 1: unconditional → Top, exact.
+        assert!(matches!(rows[0].region, Contract::Range(_, _)) && rows[0].exact, "row0 Equals(0) exact");
+        assert!(matches!(rows[1].region, Contract::Top) && rows[1].exact, "row1 Top exact");
+    }
+
+    #[test]
+    fn selection_walk_resolves_first_match_by_exactness() {
+        let mut i = Interner::new();
+        let body = ternary(&mut i);
+        let rows = region_table(&body, "n", &cenv());
+        // Over Top: both rows selected; row 1's effective region is Top ∖ Equals(0).
+        let sel = select(&rows, &Contract::Top);
+        assert_eq!(sel.len(), 2, "both branches carried");
+        assert!(matches!(sel[1].region, Contract::Difference(_, _)), "row1 effective = remaining");
+        // f(0): only row 0 (the exact match consumes; remaining becomes empty).
+        let z = eq(&mut i, 0);
+        let s0 = select(&rows, &z);
+        assert_eq!(s0.len(), 1, "only the 0-arm reachable");
+        // f(5): only row 1 (row 0 disjoint on the point).
+        let five = eq(&mut i, 5);
+        let s5 = select(&rows, &five);
+        assert_eq!(s5.len(), 1, "only the else-arm reachable");
+    }
+
+    #[test]
+    fn pattern_arms_regionalize_the_scrutinee() {
+        // x :: { 0 => A  _ => B } — patterns on the parameter.
+        let mut i = Interner::new();
+        let (zero, a, b) = (i.integer(0), i.integer(10), i.integer(20));
+        let body = matchx(
+            Some(name("x")),
+            vec![arm(Some(Pat::Const(zero)), None, konst(a)), arm(Some(Pat::Wild), None, konst(b))],
+        );
+        let rows = region_table(&body, "x", &cenv());
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(rows[0].region, Contract::Equals(_)) && rows[0].exact, "0 pattern exact");
+        assert!(matches!(rows[1].region, Contract::Top) && rows[1].exact, "wildcard Top exact");
+    }
+
+    #[test]
+    fn an_opaque_guard_consumes_nothing() {
+        // (n) => n * n <= 5 ? A : B — the tested side is not the bare parameter → case
+        // (d): Top, non-exact. On a point argument BOTH arms stay selected.
+        let mut i = Interner::new();
+        let (five, a, b) = (i.integer(5), i.integer(1), i.integer(2));
+        let guard = prim(PrimOp::Le, vec![prim(PrimOp::Mul, vec![name("n"), name("n")]), konst(five)]);
+        let body = matchx(None, vec![arm(None, Some(guard), konst(a)), arm(None, None, konst(b))]);
+        let rows = region_table(&body, "n", &cenv());
+        assert!(matches!(rows[0].region, Contract::Top) && !rows[0].exact, "opaque guard: Top, non-exact");
+        let two = eq(&mut i, 2);
+        assert_eq!(select(&rows, &two).len(), 2, "non-exact consumes nothing — else stays live");
+    }
+
+    #[test]
+    fn rt05_ladder_the_walk_derives_the_rational_regions() {
+        // n :: { when n<=3 => P  when n<=7 => Q  _ => R } — rows LE(3), LE(7), Top, all
+        // exact; the walk derives the half-open middle region (3.5 lands in Q).
+        let mut i = Interner::new();
+        let (three, seven, p, q, r) = (i.integer(3), i.integer(7), i.integer(1), i.integer(2), i.integer(3));
+        let body = matchx(
+            Some(name("n")),
+            vec![
+                arm(None, Some(prim(PrimOp::Le, vec![name("n"), konst(three)])), konst(p)),
+                arm(None, Some(prim(PrimOp::Le, vec![name("n"), konst(seven)])), konst(q)),
+                arm(None, None, konst(r)),
+            ],
+        );
+        let rows = region_table(&body, "n", &cenv());
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[0].region, Contract::LessEq(_)) && rows[0].exact);
+        assert!(matches!(rows[1].region, Contract::LessEq(_)) && rows[1].exact);
+        // n = 3.5 selects exactly the middle arm (Q).
+        let half = i.number(Rational::new(7.into(), 2.into()));
+        let sel = select(&rows, &Contract::Equals(half));
+        assert_eq!(sel.len(), 1, "3.5 lands in exactly one arm");
+        // n = 2 → first arm; n = 9 → last arm.
+        let two = eq(&mut i, 2);
+        assert_eq!(select(&rows, &two).len(), 1);
+        let nine = eq(&mut i, 9);
+        assert_eq!(select(&rows, &nine).len(), 1);
+    }
+}

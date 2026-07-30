@@ -45,6 +45,7 @@ pub mod inventory;
 pub mod obligation;
 pub mod outcome;
 pub mod refute;
+pub mod region;
 
 #[cfg(test)]
 mod tests;

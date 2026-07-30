@@ -6,6 +6,41 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Recovery Phase 2, step 1: the region-table computation
+
+The first build of the recovery (author-directed: demand core → region table →
+call-site body check). New module `src/analyzer/region.rs` (`next-region-table-
+specification-v0-3.md` §2–§4); 5 tests. Full tree **328 lib** + 111 conformance,
+clippy clean. **No superseded machinery deleted yet** (audit §5: nothing goes until
+the replacement passes the current behaviours).
+
+- **`region_table(body, param, cenv) → Vec<Row>`** — branch **reachability** as ordered
+  `(region, exact, result)` rows read forward from the arms. Guard case **(a)** (a
+  supported comparison of the parameter against a constant → the direct region,
+  `exact`): `n == v → Range(v,v)`, `n != v → Difference(Top, Equals)`, `< / <= / > / >=`
+  → `Less/LessEq/Greater/GreaterEq`, flip-aware. Case **(d)** (anything else — a
+  non-parameter tested side, an unsupported op) → `Top`, non-exact (total). Patterns
+  via `pattern_contract` with a no-rest exactness bit (§4).
+- **`select(table, arg_domain) → Vec<Selected>`** — the ordered remainder walk (§3):
+  a row is selected when `remaining ∩ region` is not proven empty; an **exact** row
+  subtracts, a non-exact row consumes nothing (so an opaque guard leaves the else-arm
+  live). First-match is the walk, never pre-carved (W-5).
+- **Chose — the singleton fast path.** A known argument `Equals(v)` selects by
+  denotational `Contract::contains(v)` (exact rows resolve first-match, §3), sidestepping
+  the accumulated-`Difference` imprecision the general algebra can't always simplify;
+  open domains use the general walk where over-selection is sound (branches carried +
+  joined). Verified: `n == 0 ? 1 : n+"x"` → 2 rows; `f(0)`/`f(5)`/`f(3.5)` each land in
+  one arm; opaque guard keeps both; the RT-05 ladder's `3.5` lands in the middle arm.
+- **Scope / next:** capture-free single-parameter fragment. Kernel-desugar note —
+  `&&`/`||`/`!` are Matches, so compound/negated guards read as case (d) (sound); a
+  `?:` chain nests (else-result is a Match the body check recurses into). Owed:
+  case (b)/(c) (captures), argument-tuple projection (§5, multi-param), and the
+  **call-site body check** that consumes this table (gates 14.1–14.3, replaces the
+  superseded machinery).
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Record rebaseline against the grounding landing (no code)
 
 Author feedback: my maintainer files (`PROGRESS`/`OwedItems`/`DECISIONS`) are dev
