@@ -6,6 +6,34 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Grounding G-6: structural descent (§2b, tuple peel)
+
+Grounding moves beyond numbers — list/tuple recursion. `grounding.rs` +3 tests; **359 lib**
++ 111 conformance green, clippy clean. Still unwired.
+
+- **`structural_descent(callee)`.** The body pattern-matches a parameter
+  (`l :: { [] => …, [h, ...rest] => … f(rest) … }`); every recursive arm's pattern peels
+  ≥1 element and binds a named remainder, and every self-call passes that remainder back in
+  the parameter's position. The parameter's **length** is intrinsically `GE(0) ∧ Mod(1,0)`
+  (a non-negative integer, tuple Λ-semantics) and drops by the peel count each step —
+  strictly decreasing and bounded below by 0.
+- **Key insight — termination is intrinsic, no base check needed.** A length that undershoots
+  the peel pattern simply stops matching it; exhaustiveness (a missing base) is **E10's**
+  concern, not grounding's. So peeling ≥1 always terminates — no domain, no numeric measure,
+  no landing check. `reaches`/grid machinery untouched.
+- **Grounds** `f = (l) => l :: { [] => 0; [h, ...rest] => 1 + f(rest) }` and the
+  accumulator variant `f = (l, acc) => … f(rest, acc + h)` (peeled position descends, `acc`
+  carried). **Sound Unproven:** recursing on the rebuilt whole tuple (`f([h, ...rest])`) —
+  no descent (also correctly declines specimen 22b's `f(l)` second call, which doesn't peel).
+- **Machinery:** `peel_binding(pat)` (a `Pat::Tuple` with ≥1 fixed element and one *named*
+  rest → the remainder name; unnamed/absent rest or `[...all]` → `None`); reuses the
+  scrutinee-is-a-parameter check (`param_index`) and `collect_self_calls`.
+- **Deferred:** peel-k with a length grid (a base must cover lengths `0..k-1`), `restrict_len`
+  structural facts (§2b via GR-08), point-base/Ackermann, §4 exact-singleton chains, §8
+  WorldDecided, mutual SCC; then wiring. **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-30 — Grounding G-5: lexicographic descent (§5 GR-13/14)
 
 The first **path-sensitive** grounding candidate — the lex certificate. `grounding.rs`

@@ -158,14 +158,18 @@ built in code, §16 proofs owed**.
   that lex-decreases per call, each decreasing position bounded below by a path guard
   (component-grain landing); the reset pattern (`a<=0 ? b : b<=0 ? f(a-1,10) : f(a,b-1)`)
   grounds; relational floors (`a==b` stop) Unproven. Unified the self-call walker into a
-  path-threading `walk` carrying per-param lower-bound flags. `ground` is three-voiced.
-  Candidate-locality (GR-04). **Owed:** point-base / **Ackermann** (GR-18 grid + domain —
-  `==0` stops give no lower bound), §2b **structural descent** (tuple length), nonlinear
-  measures, §7 **closed-orbit** refutation (GR-11; specimen 22b), §4 exact-singleton
-  chains, §8 WorldDecided; mutual SCC; the **wiring** into the body check (the swap gate,
-  task #50); §13/§16 discharge (exact-chain bound theorem; lex joint-settlement; multigraph
-  decomposition lemma; per-rule soundness; GR-27 preservation check). This is A-NEG's
-  second domain source.
+  path-threading `walk` carrying per-param lower-bound flags. **G-6 BUILT** (structural
+  descent, §2b): peel recursion `l :: { [] => …; [h, ...rest] => f(rest) }` — the peeled
+  tuple parameter's length is intrinsically `GE(0) ∧ Mod(1,0)` and strictly descends, so it
+  terminates with no domain and no base check (exhaustiveness is E10's concern); the
+  accumulator variant grounds, rebuild-the-whole (`f([h, ...rest])`) Unproven. `ground` is
+  three-voiced. Candidate-locality (GR-04). **Owed:** point-base / **Ackermann** (GR-18 grid
+  + domain — `==0` stops give no lower bound), **peel-k grid** (base must cover lengths
+  `0..k-1`), `restrict_len` structural facts (GR-08), nonlinear measures, §7 **closed-orbit**
+  refutation (GR-11; specimen 22b), §4 exact-singleton chains, §8 WorldDecided; mutual SCC;
+  the **wiring** into the body check (the swap gate, task #50); §13/§16 discharge (exact-chain
+  bound theorem; lex joint-settlement; multigraph decomposition lemma; per-rule soundness;
+  GR-27 preservation check). This is A-NEG's second domain source.
 - **Application & induction v0.8 (+0.8.2)** — design-closed (*"the design condition
   dissolved when the tuple family closed"*, C§13.2). Implementation + C§16 discharge
   owed. The 0.8.2 GR-26 effect-world seat row (consumes, never establishes).

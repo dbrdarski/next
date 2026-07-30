@@ -45,8 +45,14 @@
 //! f(a-1, 10) : f(a, b-1)`). v1 positions are arguments only, components **descending**;
 //! ascending components and `==`/point-stop floors (Ackermann's — grid + domain) are later.
 //!
+//! **Structural descent (G-6, §2b)** — recursion that peels a tuple parameter
+//! (`l :: { [] => …, [h, ...rest] => f(rest) }`): the recursive arm's pattern removes ≥1
+//! element and the call passes the remainder, so the parameter's length (intrinsically
+//! `GE(0) ∧ Mod(1, 0)`) strictly decreases and is bounded below by 0 — terminates
+//! regardless of the base, no domain needed.
+//!
 //! Candidate-locality (GR-04): outside applicability each candidate concludes **nothing**
-//! — [`Verdict::Unproven`], always sound. Structural descent (§2b, tuple length),
+//! — [`Verdict::Unproven`], always sound. Point-base/Ackermann (grid + domain, GR-18),
 //! exact-singleton chains (§4) and the WorldDecided classifier (§8) are later increments.
 //! **Not yet wired** into the body check — same discipline as `region.rs` / `bodycheck.rs`:
 //! build standalone, prove green, integrate after.
@@ -87,6 +93,7 @@ pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner
     if matches!(numeric_descent(callee, domain, cenv, interner), Some(Verdict::Grounded))
         || measure_descent(callee)
         || lex_descent(callee)
+        || structural_descent(callee)
     {
         return Verdict::Grounded;
     }
@@ -500,6 +507,69 @@ fn injective_seqs(items: &[usize]) -> Vec<Vec<usize>> {
     out
 }
 
+// ── Structural descent (§2b) ──────────────────────────────────────────────────
+
+/// **Structural descent** (§2b) — recursion that **peels** a tuple parameter. The body
+/// pattern-matches the parameter (`l :: { [] => …, [h, ...rest] => … f(rest) … }`); every
+/// recursive arm's pattern removes ≥1 element and binds the remainder, and every self-call
+/// passes that remainder back in the parameter's position. The parameter's **length** is
+/// intrinsically `GE(0) ∧ Mod(1, 0)` (a non-negative integer — tuple Λ-semantics) and drops
+/// by the peel count each step: strictly decreasing and bounded below by 0, so the recursion
+/// terminates **regardless of the base** (a length that undershoots the peel pattern simply
+/// stops matching it — exhaustiveness is E10's concern, not grounding's). Landing is
+/// intrinsic; no domain needed. Multi-parameter: the peeled position descends, others carried.
+fn structural_descent(callee: &ValueRef) -> bool {
+    let Some(closure) = callee.as_closure() else { return false };
+    let Some(params) = param_names(&closure.lambda.params) else { return false };
+    let Expr::Match(m) = &*closure.lambda.body else { return false };
+    let Some(scrut) = &m.scrutinee else { return false };
+    let Some(pos) = param_index(scrut, &params) else { return false };
+
+    let mut has_recursive = false;
+    for item in &m.items {
+        let MatchItem::Arm(arm) = item else { continue };
+        let mut calls = Vec::new();
+        collect_self_calls(&arm.result, &closure, callee, &mut calls);
+        if calls.is_empty() {
+            continue; // a base arm
+        }
+        // A recursive arm must peel the scrutinee and recurse on the remainder.
+        let Some(rest) = arm.pattern.as_ref().and_then(peel_binding) else {
+            return false;
+        };
+        for call in &calls {
+            let Some(arg) = call.get(pos) else { return false };
+            if !is_param(arg, &rest) {
+                return false; // the peeled position must carry the remainder
+            }
+        }
+        has_recursive = true;
+    }
+    has_recursive
+}
+
+/// The remainder binding of a **peeling** tuple pattern — `[e₁ … eₖ, ...rest]` (rest at any
+/// position) with **k ≥ 1** fixed elements and a single *named* rest → `rest`. `None` if
+/// there is no named rest, more than one rest, or nothing is peeled (`[...all]`).
+fn peel_binding(pat: &Pat) -> Option<String> {
+    let Pat::Tuple(elems) = pat else { return None };
+    let mut peeled = 0;
+    let mut rest = None;
+    for e in elems {
+        match e {
+            PatElem::Pat(_) => peeled += 1,
+            PatElem::Rest(Some(name)) => {
+                if rest.is_some() {
+                    return None; // one rest per level
+                }
+                rest = Some(name.clone());
+            }
+            PatElem::Rest(None) => return None, // unnamed rest — nothing to recurse on
+        }
+    }
+    if peeled >= 1 { rest } else { None }
+}
+
 /// The comparison with operands swapped (`a < b` ⇔ `b > a`); `==`/`!=` are symmetric.
 fn flip(op: PrimOp) -> PrimOp {
     match op {
@@ -814,6 +884,34 @@ mod tests {
         // route concludes nothing (GR-15a/18), even though it happens to terminate.
         let mut i = Interner::new();
         let s = f("f = (a, b) => a <= b ? a : f(a - 1, b)\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
+    // ── G-6: structural descent (§2b, tuple peel) ────────────────────────────
+
+    #[test]
+    fn list_peel_recursion_grounds_structurally() {
+        // Classic list recursion: `rest` is one element shorter than `l`, so the length
+        // strictly descends to the empty base. No domain, no numeric measure.
+        let mut i = Interner::new();
+        let s = f("f = (l) => l :: {\n [] => 0\n [h, ...rest] => 1 + f(rest)\n }\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    #[test]
+    fn peel_recursion_with_accumulator_grounds() {
+        // Multi-parameter: the peeled tuple position descends; the accumulator is carried.
+        let mut i = Interner::new();
+        let s = f("f = (l, acc) => l :: {\n [] => acc\n [h, ...rest] => f(rest, acc + h)\n }\nf", &mut i);
+        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+    }
+
+    #[test]
+    fn recursing_on_the_whole_tuple_is_unproven() {
+        // The recursive call rebuilds and passes the *whole* tuple (`[h, ...rest]`), not the
+        // shorter remainder — no length descent → Unproven (it diverges).
+        let mut i = Interner::new();
+        let s = f("f = (l) => l :: {\n [] => 0\n [h, ...rest] => f([h, ...rest])\n }\nf", &mut i);
         assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
     }
 
