@@ -1001,6 +1001,20 @@ mod tests {
         assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
     }
 
+    #[test]
+    fn baseless_divergent_recursions_are_unproven_not_grounded() {
+        // The analyzer's two growing-domain *termination* tests are non-terminating
+        // PROGRAMS (no base case). Grounding correctly declines them (Unproven), so a
+        // grounding verdict cannot bound the analyzer's unfolding of them — their bound is
+        // the finite-domain abstraction (domain_admitted + widening / the row-set lattice),
+        // which is a *different* mechanism than grounding. (Records the wiring finding.)
+        let mut i = Interner::new();
+        let g1 = f("f = (x, y) => f(x + y, y)\nf", &mut i);
+        assert_eq!(ground(&g1, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        let g2 = f("f = (x, b) => f(b ? x : 0, b)\nf", &mut i);
+        assert_eq!(ground(&g2, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+
     // ── G-8: mutual recursion (§5 GR-07) ─────────────────────────────────────
 
     #[test]

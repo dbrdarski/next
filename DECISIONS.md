@@ -6,6 +6,37 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Wiring finding: grounding is NOT the swap's termination bound (third revision)
+
+Set out to wire `ground()` into the body check to bound the growing-domain unfolding (the
+swap gate). **The premise was wrong**, verified before implementing. `grounding.rs` +1
+test; **364 lib** green.
+
+- **The two hanging tests are non-terminating PROGRAMS.** `a_growing_non_singleton…` is
+  `f = (x, y) => f(x + y, y)` and `a_growing_union…` is `f = (x, b) => f(b ? x : 0, b)` —
+  neither has a base case; both diverge at runtime. Their comments say "No claim about the
+  verdict — only that analysis terminated." So they test **analyzer** termination on a
+  divergent program, not a provable property.
+- **Grounding correctly returns Unproven for both** (new test
+  `baseless_divergent_recursions_are_unproven_not_grounded`). A grounding verdict therefore
+  cannot cut them — grounding is a *termination judgment*, and these do not terminate.
+- **So grounding is not the bound.** The analyzer must terminate even on divergent programs
+  (GR-05: C§13.3 bounds the symbolic procedure, not runtime recursion). That bound is the
+  **finite-domain abstraction** — GR-03's "instance's finite row-set lattice," of which the
+  old `domain_admitted` + widening is a crude version (literals exact so deep concrete traps
+  are still traced; computed domains folded into the finite lattice so growth stabilizes).
+- **Correction to steps 4/5.** Step 5 said "grounding is the specified replacement for that
+  bound." Wrong on this point. Grounding is **orthogonal** to analysis-termination: it is
+  A-NEG's derived-input-domain source and per-row return-fact admission (GR-02), now built
+  (G-1…G-8) and useful — but it does not unblock the swap. The swap needs the finite-domain
+  abstraction ported/refined, which **contradicts audit §5's "delete widening"** → an author
+  design fork (keep+port widening vs implement the GR-03 row-set lattice). Detail in
+  `OwedItems.md §0.1`. Tasks #50/#51 reframed.
+- **`// [ask-author]`:** the swap's finite-domain bound (widening vs row-set lattice) —
+  surfaced in OwedItems §0.1.
+
+---
+
 ## 2026-07-30 — Grounding G-8: mutual recursion (§5 GR-07)
 
 Grounding crosses function boundaries — mutual-recursion SCCs. `grounding.rs` +2 tests;

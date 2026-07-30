@@ -87,31 +87,45 @@ reaches `x+1`, no further recursion) — no bound, no grounding needed. Groundin
 example never fails to terminate — it crashes. So grounding was the wrong tool for it.
 
 **What actually gates the swap (verified empirically).** Wiring `body_summary` *with the
-corrected key* was run against the full suite: it **hangs** on
-`a_growing_union_recursive_domain_terminates` and
+corrected key* **hangs** on `a_growing_union_recursive_domain_terminates` and
 `recursive_domains::a_growing_non_singleton_recursive_domain_terminates`. The correct key
 (rightly) refuses to cut distinct nodes, and a domain that **grows without end**
-(`f(Range(1,3)) → f(Range(2,5)) → …`) presents an unbounded stream of distinct nodes →
-the analysis never converges. The old machine bounds this with **widening**
-(`domain_admitted` + `kind_abstraction`). **That** is the soundness-of-termination job
-whose specified replacement is grounding.
+(`f(Range(1,3)) → f(Range(2,5)) → …`) presents an unbounded stream of distinct nodes → the
+analysis never converges. The old machine bounds this with **widening** (`domain_admitted`
++ `kind_abstraction`).
 
-**Consequence for the audit §5 DELETE list:** `domain_admitted` / widening are
-load-bearing for **termination over growing domains** (not, as I first wrote, for the
-domain-changing example — the key handles that). They stay until grounding replaces the
-bound. Therefore:
+**Correction (2026-07-30, third revision — grounding is NOT this bound).** I earlier called
+grounding "the specified replacement for that bound." **Wrong, verified.** Both hanging
+tests are **non-terminating programs** with no base case (`f = (x, y) => f(x + y, y)`;
+`f = (x, b) => f(b ? x : 0, b)` — their own comments say "No claim about the verdict — only
+that analysis terminated"). Grounding is a *termination* judgment; it correctly returns
+**Unproven** for both (test `grounding::…::baseless_divergent_recursions_are_unproven_not_grounded`),
+so a grounding verdict can **never** cut them. The analyzer must terminate even on
+divergent programs (GR-05: "C§13.3 bounds the compiler's symbolic procedure, not runtime
+recursion") — and that bound is the **finite-domain abstraction**, GR-03's *"instance's
+finite row-set lattice"* (the old `domain_admitted` + widening is a crude version): keep
+concrete/literal singletons exact (so `f(10) → f(9) → … → f(5)` still traces a deep trap),
+map computed/growing domains into the finite lattice (so `f(Range)` stabilizes). Grounding
+is **orthogonal** — A-NEG's derived-input-domain source and per-row return-fact admission
+(GR-02), now **built (G-1…G-8)**, but it does not bound the swap's unfolding.
 
-- A **wired** `body_summary` needs **both**: the corrected `(instance, domain)` key (done
-  — sound on the example) **and** a termination bound (grounding — unbuilt). The suite
-  proves neither alone suffices: instance-key terminates but is unsound; domain-key is
-  sound but hangs on the two `..._terminates` tests.
+**Consequence for the audit §5 DELETE list:** the finite-domain abstraction
+(`domain_admitted` + widening, or its GR-03 row-set-lattice refinement) is
+**load-bearing for analysis termination over growing domains** and cannot simply be
+deleted — the swap needs it ported/refined, not replaced by grounding. Therefore:
+
+- A **wired** `body_summary` needs **both**: the corrected `(instance, domain)` key (done —
+  sound on the domain-changing example) **and** the finite-domain abstraction (widening /
+  GR-03 row-set lattice). The suite proves neither alone suffices: instance-key terminates
+  but is unsound; domain-key is sound but hangs on the two `..._terminates` tests.
 - `body_summary` + `errors()` + the corrected key remain in `bodycheck.rs` as
-  **built-but-unwired**, correct for the non-recursive + same-/finite-domain fragment,
-  and re-plumbed once grounding supplies the bound.
+  **built-but-unwired**, ready once the finite-domain abstraction is ported.
 
-The correct next recovery move is still **grounding (C§10)** — but for *termination
-bounding*, and the two `..._terminates` tests (not the domain-changing test) are what
-move when it lands.
+**Open design fork (surfaced to the author — this contradicts audit §5's "delete widening").**
+Two ways to supply the finite-domain bound: **(a)** keep/port `domain_admitted` +
+`kind_abstraction` to the new body-check layer; **(b)** implement GR-03's finite row-set
+lattice (the specified form — literals exact, computed folded into rows). Author ruling
+needed before the swap can be wired; grounding (though valuable and built) is not the gate.
 
 ---
 
