@@ -10,28 +10,24 @@
 //! may carry an `Error` (a real input reaches it and traps); a may-region row's trap is
 //! downgraded to a `Warning` (an over-approximate candidate invents no witness).
 //!
-//! Scope: capture-free, zero-/single-parameter. Multi-parameter (argument-tuple
-//! projection, §5) and the guards' own path demands are owed; this is not yet wired
-//! into `analyze_apply` (the superseded machinery still runs — audit §5).
-//!
-//! **Recursion (finding, 2026-07-30, spec-verified — see `OwedItems.md §0.1`).** The
-//! swap attempt hung on growing-domain recursion. Two prior diagnoses were wrong (a cycle
-//! key; then grounding). The verified truth: NEXT does **not** unfold recursion (region-
-//! table §8: *"analyze the suspension, don't expand it"*; §10.6 return facts are
-//! summaries), and widening is a **foreign** mechanism. The termination bound is the
-//! **finite region partition** (GR-03 row-set lattice / app-induction §4a shape cutoff):
-//! a growing concrete domain folds into a fixed row, so the reachable-row closure is
-//! finite. [`reachable_rows`] computes that closure — the substrate for the summary body
-//! check that will **replace `body_check`'s unfolding**: check each reachable row once
-//! under the row's own domain (so a trap anywhere in a reachable row is caught without
-//! unfolding), summarize recursive calls (shape cutoff), consult grounding/refutation for
-//! completion. The `(instance, domain)` [`ACTIVE`] key below is the pre-fixpoint stopgap
-//! and is superseded by the row-closure approach.
+//! **Recursion is summary-over-partition, WIRED (2026-07-30; spec-verified, `OwedItems.md
+//! §0.1`).** NEXT does **not** unfold recursion (region-table §8: *"analyze the suspension,
+//! don't expand it"*; §10.6 return facts are summaries) and never widens (a foreign
+//! mechanism). [`body_summary`] — now the `analyze_apply` Known-callee path, replacing
+//! `induction::instance_body_summary` — bounds recursion by the **§4a shape-repeat cutoff**
+//! ([`ACTIVE`]) and checks safety with [`check_recursive_body`]: the reachable region-table
+//! rows (GR-03 finite row-set lattice) × their reaching domains, each row checked once
+//! under its reaching domain, recursive calls summarized. A growing concrete domain folds
+//! into a fixed row → the analysis converges (no widening, no hang). Verified over the full
+//! suite: the domain-changing trap rejects, the two growing-domain tests terminate, RT-14
+//! holds. **Owed:** multi-parameter region tables (§5 arg-tuple projection — currently a
+//! whole-body fallback); deleting the superseded `instance_body_summary` / `domain_admitted`
+//! / `kind_abstraction` (now dead).
 
 use std::cell::RefCell;
 
 use crate::analyzer::grounding::collect_self_calls;
-use crate::analyzer::region::{Row, region_table, select};
+use crate::analyzer::region::{Row, region_table};
 use crate::analyzer::{Completion, Finding, Severity, TypeEnv, analyze, bind_pattern};
 use crate::ast::{Pat, PatElem};
 use crate::contract::{Contract, ContractEnv, Verdict, disjoint, subcontract};
@@ -40,18 +36,15 @@ use crate::interner::Interner;
 use crate::value::ValueRef;
 
 thread_local! {
-    /// The `(instance, domain)` nodes currently being summarized — the **cycle guard**.
-    /// A demand reaching a node **already on the current path** closes a cycle and returns
-    /// the cycle assumption instead of re-entering the body (C§13.2a / grounding GR-02a;
-    /// GR-07 pins the node grain as *"instance × row/domain under the region partition"*).
-    /// The key is `(closure, argument contracts)` — **domain-indexed**, matching the old
-    /// machine's `ACTIVE_BODIES` key. `f(0) → f("x")` are *distinct* nodes, so `f("x")` is
-    /// analyzed (not cut) and its `"x" + 1` trap is caught — domain-changing recursion is
-    /// sound. What this guard does **not** yet do is *bound* a domain that grows without
-    /// end (`f(Range(1,3)) → f(Range(2,5)) → …`, all distinct nodes): that needs the
-    /// termination bound the old machine got from widening and grounding is the specified
-    /// replacement for. See the module header.
-    static ACTIVE: RefCell<Vec<(ValueRef, Vec<Contract>)>> = const { RefCell::new(Vec::new()) };
+    /// The instances currently being summarized — the **§4a shape-repeat cutoff**. A
+    /// recursive call reaching an instance already on the stack returns the cycle assumption
+    /// instead of re-entering the body (*"target shape already in the sequence → no
+    /// admission"*). This is instance-keyed (coarse) yet **sound**: the summary body check
+    /// ([`check_recursive_body`]) already covers every reachable region-table row, so a
+    /// domain-changing trap (`f(0) → f("x")`) is caught by the row closure — the cutoff only
+    /// prevents re-unfolding. Growing domains fold into the finite row set, so the analysis
+    /// converges with **no widening**.
+    static ACTIVE: RefCell<Vec<ValueRef>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A per-instance body summary — the region-table replacement for the wrong-layer
@@ -85,11 +78,10 @@ impl BodySummary {
 /// `(instance, domain)` node → the cycle assumption (so a *wired* `body_summary`
 /// terminates on same-domain recursion; unbounded-domain growth still needs grounding).
 pub fn body_summary(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> BodySummary {
-    let key = (callee.clone(), args.to_vec());
-    if ACTIVE.with(|s| s.borrow().contains(&key)) {
+    if ACTIVE.with(|s| s.borrow().contains(callee)) {
         return BodySummary::cycle();
     }
-    ACTIVE.with(|s| s.borrow_mut().push(key));
+    ACTIVE.with(|s| s.borrow_mut().push(callee.clone()));
     let findings = body_check(callee, args, cenv, interner);
     let (produced, completion) = whole_body(callee, args, cenv, interner);
     ACTIVE.with(|s| {
@@ -119,24 +111,20 @@ pub fn body_check(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, inte
 
     match param_name(&closure.lambda.params) {
         Param::Zero => analyze(&closure.lambda.body, &base, cenv, interner).findings,
+        // The summary-over-partition check: reachable rows × their reaching domains, with
+        // recursion summarized by the §4a cutoff above.
         Param::One(name) => {
             let arg = args.first().cloned().unwrap_or(Contract::Top);
-            let table = region_table(&closure.lambda.body, &name, cenv);
-            let selected = select(&table, &arg);
-            let mut findings = Vec::new();
-            let mut all_prior_exact = true;
-            for sel in &selected {
-                let definite = sel.exact && all_prior_exact;
-                let mut env = base.clone();
-                env.insert(name.clone(), sel.region.clone());
-                for f in analyze(&sel.result, &env, cenv, interner).findings {
-                    findings.push(if definite { f } else { downgrade(f) });
-                }
-                all_prior_exact = all_prior_exact && sel.exact;
-            }
-            findings
+            check_recursive_body(callee, &name, &arg, cenv, interner)
         }
-        Param::Other => vec![], // multi/complex params — §5 argument-tuple projection owed
+        // Multi-parameter: no arg-tuple region table yet (§5 owed). Analyze the body once
+        // under the argument tuple — direct traps are caught; recursion is summarized by the
+        // cutoff, so this terminates (multi-param growing recursions have no direct trap).
+        Param::Other => {
+            let mut env = base;
+            bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+            analyze(&closure.lambda.body, &env, cenv, interner).findings
+        }
     }
 }
 
@@ -198,11 +186,9 @@ fn reachable_rows(callee: &ValueRef, param: &str, arg: &Contract, cenv: &Contrac
 ///   reaches the else row with `Equals("x")` (`x + 1` traps → rejected). Coarse rows carry
 ///   no domain-specific trap, so their over-approximation adds no false finding.
 ///
-/// Recursive calls in a row's result are *summarized*, not unfolded (they are covered by the
-/// reachable-row set). **Not yet wired** — standalone this routes nested recursion through
-/// the live `instance_body_summary`, so the findings are correct but redundant; the wire
-/// (shape cutoff at `analyze_apply`) lands next.
-#[allow(dead_code)]
+/// Recursive calls in a row's result are *summarized*, not unfolded: when analyzed they
+/// route back through `analyze_apply → body_summary`, hit the [`ACTIVE`] shape cutoff, and
+/// return the cycle assumption. Coverage comes from the reachable-row set, not unfolding.
 fn check_recursive_body(callee: &ValueRef, param: &str, arg: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
     let Some(closure) = callee.as_closure() else { return vec![] };
     let table = region_table(&closure.lambda.body, param, cenv);
@@ -234,13 +220,17 @@ fn check_recursive_body(callee: &ValueRef, param: &str, arg: &Contract, cenv: &C
         }
     }
     // Check each reachable row's result under its reaching domain (recursion summarized).
+    // RT-14 witness discipline: a **may-region** row (non-exact guard) cannot refute — its
+    // trap downgrades to a warning, since no represented input is proven to select it.
     let base = capture_env(callee);
     let mut findings = Vec::new();
     for (i, dom) in reaching.iter().enumerate() {
         let Some(dom) = dom else { continue };
         let mut env = base.clone();
         env.insert(param.to_string(), dom.clone());
-        findings.extend(analyze(&table[i].result, &env, cenv, interner).findings);
+        for finding in analyze(&table[i].result, &env, cenv, interner).findings {
+            findings.push(if table[i].exact { finding } else { downgrade(finding) });
+        }
     }
     findings
 }

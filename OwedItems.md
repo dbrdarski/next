@@ -63,7 +63,19 @@ the SCC induction stays but is **re-plumbed** onto the region-table/body-check s
 Also kept: the `segment_nullable` structural fix; fuel out of normative analysis; no
 oracle execution of user functions.
 
-### 0.1 The swap needs grounding for *termination*, not for the domain-changing example — finding 2026-07-30 (corrected + verified)
+### 0.1 The swap is DONE (2026-07-30, summary-over-partition, no widening) — history below
+
+**Status: LANDED.** `analyze_apply` Known-callee now runs `bodycheck::body_summary` (the
+summary-over-partition check: §4a shape cutoff + `check_recursive_body`'s reachable-rows ×
+reaching domains), replacing `instance_body_summary`. Full suite green, no hang; the
+domain-changing trap rejects and the two growing-domain tests terminate by folding into the
+finite region partition — **no widening, nothing foreign**. Remaining: delete the now-dead
+`instance_body_summary` / `domain_admitted` / `kind_abstraction`; multi-parameter region
+tables (§5). The multi-revision diagnosis history is kept below for provenance.
+
+---
+
+### 0.1-history The swap needs grounding for *termination* — finding 2026-07-30 (superseded)
 
 The swap (rewire `analyze_apply` Known-callee from `instance_body_summary` to
 `body_summary`, then delete the superseded machinery) was **attempted and reverted**.

@@ -602,7 +602,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                         completions.push(Completion::Produces);
                         continue;
                     }
-                    let summary = induction::instance_body_summary(cv, &arg_contracts, cenv, interner);
+                    let summary = bodycheck::body_summary(cv, &arg_contracts, cenv, interner);
                     findings.extend(summary.errors());
                     completions.push(callee_completion(cv, &summary));
                     // A recursive/mutual return needs the induction (`call_return`
@@ -625,7 +625,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
 /// The callee's completion (E10) at a call site, from its body summary: a **mutator**
 /// discards its return (always completes without a value — proven by law); a pure/effect
 /// callee inherits its body summary's completion.
-fn callee_completion(cv: &ValueRef, summary: &induction::InstanceBodySummary) -> Completion {
+fn callee_completion(cv: &ValueRef, summary: &bodycheck::BodySummary) -> Completion {
     if cv.as_closure().is_some_and(|c| matches!(c.lambda.act_kind, ActKind::Mutator)) {
         return Completion::FallsThrough; // the return is discarded — always without a value
     }

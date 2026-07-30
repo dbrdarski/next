@@ -6,6 +6,33 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Demand core step 3: THE SWAP — summary body check wired, green, no widening
+
+The recovery's goal since the drift-away finding: `analyze_apply`'s Known-callee path now
+runs the **summary-over-partition** body check instead of `induction::instance_body_summary`.
+**370 lib + 111 conformance green, no hang, clippy clean.** Done the NEXT way — nothing
+foreign.
+
+- **The wire.** `analyze_apply` Known(cv) → `bodycheck::body_summary`. `body_summary` bounds
+  recursion by the **§4a shape-repeat cutoff** (`ACTIVE` now instance-keyed — sound because
+  the row closure covers every reachable row, so the cutoff only prevents re-unfolding).
+  Safety findings from `check_recursive_body` (single-param); a whole-body fallback for
+  multi-param (§5 owed); `produced`/`completion` from `whole_body` with recursion cut; the
+  recursive `produced` still sharpened by the kept `call_return` induction.
+- **Empirical result — the swap that hung before now passes.** First run: **one** failure
+  (`rt14_a_may_region_trap_does_not_refute`) — I'd dropped the RT-14 downgrade; restored it
+  (a non-exact row's trap → warning). Second run: **all green.** Verified end-to-end: the
+  domain-changing trap `f(0)→f("x")` **rejects**; the two growing-domain tests
+  (`f(x+y,y)`, `f(b?x:0,b)`) **terminate** (folded into the finite row set — no widening);
+  factorial / even-odd / the induction battery unchanged.
+- **`instance_body_summary` is now dead** (referenced only in doc comments). The delete of
+  it + `domain_admitted` + `kind_abstraction` + `ACTIVE_BODIES` (the crude widening the
+  partition rule replaces) is the next step — deferred so the swap lands as one reviewable
+  change.
+- **`// [ask-author]`:** none. Widening-retirement is spec-grounded; the swap is verified.
+
+---
+
 ## 2026-07-30 — Demand core step 2: the summary body check (sound + terminating, no widening)
 
 The body check reworked from **unfolding** to **summary-over-partition**. `bodycheck.rs`
