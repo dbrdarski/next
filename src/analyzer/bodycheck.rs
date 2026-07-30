@@ -220,16 +220,20 @@ fn check_recursive_body(callee: &ValueRef, param: &str, arg: &Contract, cenv: &C
         }
     }
     // Check each reachable row's result under its reaching domain (recursion summarized).
-    // RT-14 witness discipline: a **may-region** row (non-exact guard) cannot refute — its
-    // trap downgrades to a warning, since no represented input is proven to select it.
+    // **RT-14 witness discipline (full):** a finding refutes (`Error`) only from a
+    // *definitely reached* row — this row exact **and every earlier reachable row exact**.
+    // An uncertain earlier row (an opaque guard) means we cannot prove *this* arm is the one
+    // taken (`n == n ? 0 : n + "x"` — the trap sits in an exact row reached only if an
+    // unprovable guard is false), so its trap downgrades to a warning.
     let base = capture_env(callee);
     let mut findings = Vec::new();
     for (i, dom) in reaching.iter().enumerate() {
         let Some(dom) = dom else { continue };
+        let definite = table[i].exact && (0..i).all(|j| reaching[j].is_none() || table[j].exact);
         let mut env = base.clone();
         env.insert(param.to_string(), dom.clone());
         for finding in analyze(&table[i].result, &env, cenv, interner).findings {
-            findings.push(if table[i].exact { finding } else { downgrade(finding) });
+            findings.push(if definite { finding } else { downgrade(finding) });
         }
     }
     findings
@@ -334,7 +338,72 @@ fn downgrade(f: Finding) -> Finding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::Kind;
     use crate::oracle::harness::run_source_in;
+
+    fn has_err(fs: &[Finding]) -> bool {
+        fs.iter().any(|x| x.severity == Severity::Error)
+    }
+
+    #[test]
+    fn rt14_exact_row_after_uncertain_prefix_does_not_refute() {
+        // Regression (blocker 1a): `n == n` is always true, but guard regionalization can't
+        // express it, so the first row is Top/non-exact. The fallback `n + "x"` sits in an
+        // exact row — but it is reached only if the (unprovable) first guard is false, which
+        // never happens. It must NOT be an Error (safe function must not be rejected).
+        let mut i = Interner::new();
+        let g = f("f = (n) => n == n ? 0 : n + \"x\"\nf", &mut i);
+        let fs = body_check(&g, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
+        assert!(!has_err(&fs), "uncertain prefix must not refute: {fs:?}");
+    }
+
+    // ── Archive-11 review: adversarial regressions still owed (the unified (instance,
+    //    row-set) SCC summary). Pinned as ignored; un-ignore when that engine lands. ──
+
+    #[test]
+    #[ignore = "blocker 1b: coarse recursive target manufactures an unreached witness (false reject)"]
+    fn rt14_inequality_recursion_does_not_manufacture_witness() {
+        // f(1) → f(0) → 0 is safe. But `x - 1` analyzed over the whole `x > 0` region is
+        // coarse `Number`, dragging in the `x < 0` branch (`x + "s"`) the call from 1 never
+        // reaches. Needs precise reaching (track {1, 0}), not the row-region over-approx.
+        let mut i = Interner::new();
+        let g = f("f = (x) => x > 0 ? f(x - 1) : (x == 0 ? 0 : x + \"s\")\nf", &mut i);
+        let s = body_summary(&g, &[Contract::Equals(i.integer(1))], &ContractEnv::new(), &mut i);
+        assert!(s.errors().is_empty(), "f(1) is safe; coarse recursion must not refute: {:?}", s.errors());
+    }
+
+    #[test]
+    #[ignore = "blocker 2a: multi-param domain-changing recursion accepted silently (false accept)"]
+    fn multiparam_domain_changing_recursion_is_caught() {
+        // f(0, n) → f("x", n) → "x" + n traps. The whole-body fallback cuts the recursion
+        // and never inspects the changed-domain re-entry, so the crash is missed.
+        let mut i = Interner::new();
+        let g = f("f = (a, b) => a == 0 ? f(\"x\", b) : a + b\nf", &mut i);
+        let s = body_summary(&g, &[Contract::Equals(i.integer(0)), Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
+        assert!(!s.errors().is_empty(), "must reject the multi-param deep trap, not accept: {:?}", s.findings);
+    }
+
+    #[test]
+    #[ignore = "blocker 2b: mutual/helper domain-changing recursion accepted silently (false accept)"]
+    fn mutual_domain_changing_recursion_is_caught() {
+        // f(0) → g("x") → f("x") → "x" + 1 traps. f's closure follows syntactic self-calls
+        // only, so the helper edge into the trapping f row is never added.
+        let mut i = Interner::new();
+        let g = f("f = (x) => x == 0 ? g(\"x\") : x + 1\ng = (y) => f(y)\nf", &mut i);
+        let s = body_summary(&g, &[Contract::Equals(i.integer(0))], &ContractEnv::new(), &mut i);
+        assert!(!s.errors().is_empty(), "must reject the mutual deep trap, not accept: {:?}", s.findings);
+    }
+
+    #[test]
+    #[ignore = "blocker 3: recursive fall-through completion lost — returns Produces (false accept)"]
+    fn recursive_fall_through_completion_is_visible() {
+        // f(0) → f(1); f(1) matches no arm → completes without a value. The one-shot
+        // completion reports Produces, so an expecting seat would accept a trapping program.
+        let mut i = Interner::new();
+        let g = f("f = (x) => x :: {\n 0 => f(1)\n }\nf", &mut i);
+        let s = body_summary(&g, &[Contract::Equals(i.integer(0))], &ContractEnv::new(), &mut i);
+        assert!(s.completion != Completion::Produces, "recursive fall-through must be visible, got Produces");
+    }
 
     fn f(src: &str, i: &mut Interner) -> ValueRef {
         run_source_in(src, i).unwrap().0

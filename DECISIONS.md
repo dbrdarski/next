@@ -6,6 +6,41 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Archive-11 review: fixed blocker 1a; pinned 1b/2a/2b/3 (one root cause) as adversarial tests
+
+An adversarial review found the summary body check over-claimed soundness: it passes the
+suite but the suite covered none of the hard cases. Three of five findings **silently
+accept trapping programs**. Owned it; fixed the one clean regression, pinned the rest.
+
+- **Blocker 1a — FIXED (false reject I introduced).** `check_recursive_body` had dropped the
+  old `body_check`'s `all_prior_exact` discipline — it downgraded on the *current* row's exact
+  bit only. Restored the full RT-14 rule: a finding refutes (`Error`) only from a row that is
+  exact **and every earlier reachable row is exact**. `f = (n) => n == n ? 0 : n + "x"` (the
+  `n+"x"` sits in an exact row reached only if the unprovable `n==n` is false) is no longer
+  rejected. Test `rt14_exact_row_after_uncertain_prefix_does_not_refute`; suite green.
+- **Blockers 1b / 2a / 2b / 3 — pinned, NOT fixed.** They are **not** independent patches;
+  they collapse to one root cause = the review's prescription, **a unified `(instance,
+  row-set)` SCC summary carrying safety + produced + completion**:
+  - **1b** (coarse recursive target → false *reject*) and **2a** (multi-param → false
+    *accept*) both need the reaching domain tracked **precisely** (concrete chains exact,
+    growing ones bounded). Verified: a naive 1b downgrade trades the false-reject for a
+    **false-accept on computed deep traps** (`f(10)→…→f(5)` with an `n==5` trap) — strictly
+    worse. So 1b is not safely patchable alone.
+  - **2b** (mutual `f→g→f`) needs the closure to span **across instances**; `collect_self_calls`
+    is syntactic-self-only.
+  - **3** (recursive fall-through completion) needs completion carried through that same
+    closure; today it comes from a one-shot `whole_body` and reports `Produces`.
+  - Landed all four as `#[ignore]` tests (verified they *fail* when run — they catch the
+    bugs). Un-ignore when the SCC engine lands.
+- **Honest correction:** I previously called the summary check "sound + terminating, verified"
+  and the swap "done, green." It **terminates and passes the current suite**, but is **not
+  sound** — two of the blockers accept crashing programs. Over-reporting soundness was the
+  worse error.
+- **`// [ask-author]`:** none — the fix path (unified SCC summary) is the review's and the
+  spec's (app-induction §4a/§5).
+
+---
+
 ## 2026-07-30 — §5 multi-parameter region tables: attempted, reverted; the precision/termination tension mapped
 
 Built `region_table_multi` (per-position argument-tuple projection — a single guard `pᵢ ⋈ c`
