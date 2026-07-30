@@ -63,6 +63,42 @@ the SCC induction stays but is **re-plumbed** onto the region-table/body-check s
 Also kept: the `segment_nullable` structural fix; fuel out of normative analysis; no
 oracle execution of user functions.
 
+### 0.1 The swap is blocked on grounding, not on `body_check` coverage — finding 2026-07-30
+
+The swap (rewire `analyze_apply` Known-callee from `instance_body_summary` to
+`body_summary`, then delete the superseded machinery) was **attempted and reverted**.
+Wiring built cleanly and cost exactly **one** failing test:
+`analyzer::tests::body_safety::a_recursive_call_over_a_new_domain_is_analyzed`. That is
+not a precision wobble — it is a **soundness regression**:
+
+```
+f = (x) => x == 0 ? f("x") : x + 1     // f(0) → f("x") → "x" + 1  TRAPS at runtime
+```
+
+The region-table body check needs a **re-entry guard** to terminate on recursion. The
+guard I built keys on the closure **instance** (cut when `f` is already on the stack).
+That guard cuts the `f("x")` edge and returns the cycle assumption (`Top`, no finding),
+so `f(0)` is **accepted** — a program that traps. The superseded `instance_body_summary`
+is sound here because it is **domain-indexed**: `"x"` is a program literal, so the
+new-domain edge (String, not admitted-from-`0`) is *analyzed*, and `"x" + 1` refutes.
+
+**Consequence for the audit §5 DELETE list:** `domain_admitted` / widening / the
+domain-indexed cutoff are **soundness-load-bearing for domain-changing recursion**, not
+just wrong-layer scaffolding. Their sound replacement is the **grounding arc (C§10)**,
+which derives the recursion's input domain (the orbit `0 → "x" → …`) so the body check
+covers `"x"`. **Grounding is not built.** Therefore:
+
+- The swap is **blocked on grounding**, not merely on `body_check`'s capture/multi-param
+  coverage (task #50's old "BLOCKED on body_check recursion" framing was too narrow).
+- The Archive9 domain-indexed machinery (`instance_body_summary`, `domain_admitted`,
+  widening, `ACTIVE_BODIES`) **stays** until grounding lands — it cannot be deleted
+  without regressing this soundness case.
+- `body_summary` + its `errors()` + the instance-keyed re-entry guard remain in
+  `bodycheck.rs` as **built-but-unwired**, correct for the non-recursive fragment and
+  ready to re-plumb once grounding supplies the recursion domain.
+
+The correct next recovery move is therefore **grounding (C§10)**, not the swap.
+
 ---
 
 ## 1. Design-closed — implementation (and §16 discharge) owed
@@ -85,9 +121,10 @@ built in code, §16 proofs owed**.
   (only a definitely-reached row refutes). Gates 14.1–14.3 (`bad()`/`f("hello")`
   rejected, `helper(0)` accepted, path-sensitive). Owed: cases (b)/(c) over captures,
   arg-tuple projection (§5, multi-param), the guards' own path demands, the
-  annotated-tuple **instance cache** (C§13.4), and the **wiring** — replace
-  `analyze_apply`'s body-safety machinery with `body_check`, then delete the superseded
-  functions (audit §5). Compound/negated guards currently read as case (d) (sound).
+  annotated-tuple **instance cache** (C§13.4), and the **wiring**. The `body_summary`
+  wrapper (`{produced, completion, findings}` + `errors()`) is built and green
+  standalone, but the **swap is blocked on grounding** — see §0.1. Compound/negated
+  guards currently read as case (d) (sound).
 - **Grounding v1** — `next-grounding-specification-v0-5.md` (0.5.1, DESIGN-CLOSED,
   compendium 1.0.18; GR-01…GR-30; Phase GR suite). Implementation + §13/§16 discharge
   owed (exact-chain bound theorem; lex joint-settlement; multigraph decomposition

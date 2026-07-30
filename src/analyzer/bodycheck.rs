@@ -13,6 +13,22 @@
 //! Scope: capture-free, zero-/single-parameter. Multi-parameter (argument-tuple
 //! projection, §5) and the guards' own path demands are owed; this is not yet wired
 //! into `analyze_apply` (the superseded machinery still runs — audit §5).
+//!
+//! **Swap blocker (finding, 2026-07-30).** Wiring `body_summary` in place of
+//! `induction::instance_body_summary` was attempted and reverted: the coarse
+//! instance-keyed [`ACTIVE`] re-entry guard is **unsound for domain-changing
+//! recursion**. `f = (x) => x==0 ? f("x") : x+1` called as `f(0)` recurses to `f("x")`,
+//! where `"x" + 1` traps at runtime; cutting the recursive edge on the *instance* (f is
+//! already active) discards that trap and accepts a trapping program. The superseded
+//! `instance_body_summary` handles it soundly via **domain-indexed** analysis (`"x"` is
+//! a program literal → the new-domain edge is analyzed, not cut). The sound replacement
+//! for that domain-indexed edge-following is the **grounding arc** (C§10), which derives
+//! the recursion's input domain — and grounding is not built. So the swap is blocked on
+//! grounding, not merely on `body_check`'s capture/multi-param coverage; the Archive9
+//! domain-indexed machinery (`domain_admitted`, widening) stays until grounding lands.
+//! The test that pins this: `body_safety::a_recursive_call_over_a_new_domain_is_analyzed`.
+
+use std::cell::RefCell;
 
 use crate::analyzer::region::{region_table, select};
 use crate::analyzer::{Completion, Finding, Severity, TypeEnv, analyze, bind_pattern};
@@ -22,12 +38,22 @@ use crate::env::Binding;
 use crate::interner::Interner;
 use crate::value::ValueRef;
 
+thread_local! {
+    /// The callees currently being summarized — the **re-entry guard**. A recursive
+    /// edge (a callee already on the stack) returns the cycle assumption instead of
+    /// re-entering its own body, so a *wired* `body_summary` terminates. Keyed on the
+    /// closure **instance** — coarser than Archive9's domain-indexed cutoff, and (finding
+    /// 2026-07-30) **unsound for domain-changing recursion**: cutting on the instance
+    /// discards a trap that lives only on a new argument domain (see the module header).
+    /// This guard is therefore inert until grounding derives the recursion domain; it
+    /// stays for the standalone `body_summary` API but is not yet the wired cutoff.
+    static ACTIVE: RefCell<Vec<ValueRef>> = const { RefCell::new(Vec::new()) };
+}
+
 /// A per-instance body summary — the region-table replacement for the wrong-layer
 /// `induction::InstanceBodySummary`. `findings` is the path-sensitive [`body_check`]
 /// safety; `produced` and `completion` come from analyzing the whole body under the
-/// argument (E10 exhaustiveness handled by `analyze_match`). Terminates on recursion:
-/// nested calls route through the existing recursion-safe apply path (the re-entry
-/// guard for a *wired* `body_summary` lands with the swap).
+/// argument (E10 exhaustiveness handled by `analyze_match`).
 #[derive(Clone, Debug)]
 pub struct BodySummary {
     pub produced: Contract,
@@ -35,10 +61,34 @@ pub struct BodySummary {
     pub findings: Vec<Finding>,
 }
 
-/// Summarize applying `callee` to arguments described by `args`.
+impl BodySummary {
+    /// The cycle assumption for a recursive re-entry (and a non-function): produces
+    /// `Top`, completes, no direct trap (the cycle adds no new *direct* trap; the
+    /// recursive return is sharpened by the induction, `call_return`).
+    fn cycle() -> BodySummary {
+        BodySummary { produced: Contract::Top, completion: Completion::Produces, findings: vec![] }
+    }
+
+    /// The **Error**-severity findings only — the proven traps to surface at a call site
+    /// (a `Warning` over a coarsened domain would be spurious; warnings staying local is
+    /// the standing diagnostic gap).
+    pub fn errors(&self) -> Vec<Finding> {
+        self.findings.iter().filter(|f| f.severity == Severity::Error).cloned().collect()
+    }
+}
+
+/// Summarize applying `callee` to arguments described by `args`. Re-entrant on the same
+/// callee → the cycle assumption (terminates when wired into `analyze_apply`).
 pub fn body_summary(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> BodySummary {
+    if ACTIVE.with(|s| s.borrow().iter().any(|c| c == callee)) {
+        return BodySummary::cycle();
+    }
+    ACTIVE.with(|s| s.borrow_mut().push(callee.clone()));
     let findings = body_check(callee, args, cenv, interner);
     let (produced, completion) = whole_body(callee, args, cenv, interner);
+    ACTIVE.with(|s| {
+        s.borrow_mut().pop();
+    });
     BodySummary { produced, completion, findings }
 }
 

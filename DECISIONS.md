@@ -6,6 +6,37 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Recovery Phase 2, step 4: swap attempted → reverted (soundness); blocked on grounding
+
+Executed the swap the step-3 entry called "unblocked," and **reverted it**. The step-3
+prediction of mere "precision test motion" was **wrong**: the swap is a **soundness
+regression**, and the real blocker is **grounding (C§10)**, not `body_check` coverage.
+Back to **339 lib** + 111 conformance, clippy clean; `body_summary` stays built-but-unwired.
+
+- **What I did.** Added an instance-keyed re-entry guard + `errors()` to `body_summary`
+  (inert standalone — 339 still green), then rewired `analyze_apply`'s `Known(cv)` branch
+  and `callee_completion` to `body_summary`. Build clean; **one** test failed:
+  `body_safety::a_recursive_call_over_a_new_domain_is_analyzed`.
+- **Why it's soundness, not precision.** `f = (x) => x==0 ? f("x") : x+1`; `f(0)` recurses
+  to `f("x")`, and `"x" + 1` **traps at runtime**. The instance-keyed guard cuts the
+  `f("x")` edge (f already active) → cycle assumption (`Top`, no finding) → `f(0)`
+  **accepted**. Accepting a trapping program is unsound. The old `instance_body_summary`
+  is sound here because it is **domain-indexed**: `"x"` is a program literal, so the
+  new-domain (String) edge is analyzed and `"x"+1` refutes.
+- **Correction to the audit §5 DELETE list.** `domain_admitted` / widening / the
+  domain-indexed cutoff are **soundness-load-bearing for domain-changing recursion** — not
+  merely wrong-layer scaffolding. Their sound replacement is the **grounding arc (C§10)**,
+  which derives the recursion's input domain (`0 → "x" → …`) so the body check covers the
+  new domain. Grounding is **not built**, so the Archive9 machinery **stays** for now.
+- **Reframe of task #50.** The swap is **blocked on grounding**, not "on `body_check`
+  recursion." Next recovery move: **implement grounding (C§10)**, then re-attempt the swap
+  with a grounding-supplied recursion domain. Recorded in `bodycheck.rs` module header,
+  the `ACTIVE` guard doc, and `OwedItems.md §0.1`.
+- **`// [ask-author]`:** none — the failing test already encodes the author's ruling that
+  domain-changing recursion must be followed.
+
+---
+
 ## 2026-07-30 — Recovery Phase 2, step 3: `body_summary` — the full region-table summary
 
 The drop-in candidate for the wrong-layer `induction::InstanceBodySummary`. Extended
