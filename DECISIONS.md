@@ -6,6 +6,40 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — §5 multi-parameter region tables: attempted, reverted; the precision/termination tension mapped
+
+Built `region_table_multi` (per-position argument-tuple projection — a single guard `pᵢ ⋈ c`
+constrains position i, `Top` elsewhere; §5) and `check_recursive_body_multi` (the tuple lift
+of the summary check). The projection is correct and **catches multi-parameter
+domain-changing traps** (`(a,b) => a==0 ? f("x", b) : a+b` at `(0, _)` → rejected — a real
+precision win the whole-body fallback misses). But the two *accept* cases produced **false
+Errors**, so it is not sound to wire; reverted to the whole-body fallback (sound). Recorded
+the finding.
+
+- **The tension (the crux).** The per-row reaching-domain fixpoint needs a domain to compute
+  each recursive-call target under:
+  - Under the fixed **row region** (what single-param `check_recursive_body` does): converges
+    for concrete numeric chains (`f(5)→f(4)…` folds to `Number`), **but** coarsens a *carried*
+    position to `Top` — so an accumulator `f = (n, acc) => n<=0 ? acc : f(n-1, acc+n)` sees
+    `acc` as `Top` and `acc + n` **false-traps**. Single-param has no carried positions, so
+    this never bit before.
+  - Under the **reaching domain** (precise — `acc` stays `Number`): correct for abstract args,
+    **but** hangs on concrete numeric chains (`Equals(5) ⊔ Equals(4) ⊔ …` grows unboundedly).
+  - Neither is both sound-precise and terminating; the resolution is a **bounded abstraction
+    over the finite partition** (the classic AI precision/termination point, solved natively
+    by folding a growing position into its partition row — the single-param row-region trick,
+    but *only where the position actually grows*, not for carried positions).
+- **Also found:** the reaching-domain `⊔` fixpoint needs `union2` (collapse `Top`/`Bottom`)
+  **and** a structural `covers` check (`cur == add`, or `add` a `Union` component) — plain
+  `subcontract` is incomplete on reflexive `Intersection`s and loops.
+- **Deferred.** Multi-param stays on the whole-body fallback (sound; catches direct traps,
+  recursion cut). Next attempt: track reaching domains precisely per position, and fold a
+  position into its row region **only when it grows** (a per-position growth detector), giving
+  precision for carried positions and termination for genuinely-growing ones. `// [ask-author]`:
+  none — this is an implementation-strategy choice within the specified partition mechanism.
+
+---
+
 ## 2026-07-30 — Demand core step 4: delete the widening machinery (−288 lines, suite green)
 
 With the summary body check wired and `instance_body_summary` dead, deleted the old

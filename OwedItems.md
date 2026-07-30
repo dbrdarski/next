@@ -72,8 +72,13 @@ domain-changing trap rejects and the two growing-domain tests terminate by foldi
 finite region partition — **no widening, nothing foreign**. The dead widening machinery is
 **deleted** (−288 lines: `instance_body_summary`, `domain_admitted`, `downgrade`,
 `ACTIVE_BODIES`, `literal_values`/`collect_consts`); `kind_abstraction` stays only for
-`subcontract`'s kind fallback. Remaining: multi-parameter region tables (§5 — whole-body
-fallback now). The multi-revision diagnosis history is kept below for provenance.
+`subcontract`'s kind fallback. **Remaining: multi-parameter region tables (§5).** Attempted 2026-07-30 —
+`region_table_multi` (per-position projection) is correct and catches multi-param
+domain-changing traps, but the summary check hit a precision/termination tension
+(row-region targets coarsen *carried* positions to `Top` → false Errors on accumulators;
+reaching-domain targets are precise but hang on concrete numeric chains). Reverted to the
+sound whole-body fallback; the resolution (fold a position into its row region only when it
+grows) is in `DECISIONS.md`. The multi-revision diagnosis history is kept below.
 
 ---
 
