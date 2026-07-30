@@ -6,6 +6,39 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-30 — Record rebaseline against the grounding landing (no code)
+
+Author feedback: my maintainer files (`PROGRESS`/`OwedItems`/`DECISIONS`) are dev
+progress, **not spec** — the manifest'd canonical library is truth, and my files were
+stale. A deep spec re-read (verified against the 07-30 / compendium-1.0.18 manifest,
+19 files) corrected the record. **No code changed.**
+
+- **Manifest**: 19/19 verify; landed files carry their patches (compendium **1.0.18**,
+  app-induction **0.8.2**, test-suite **Phase GR**). My prior response wrongly leaned on
+  PROGRESS's stale "14 files / 07-24" line and the 07-26 audit's "owed" claims.
+- **`InferredAcceptedDomain` — DISSOLVED [errata E-6 (C§12.1), E-7 (E3), E-8 (E11),
+  2026-07-24].** No materialized accepted-domain object; `where` is `BodySafe(instance,
+  DeclaredInput) = proven` (run the ordinary body check under the declared input).
+  **Q4 (eager vs lazy) is therefore moot**; eager preimage is *an optimization*
+  (C§13.1). No separate accepted-domain spec (region-table §6 folds away). My last
+  turn's "region-table procedure owed / I'll draft it" and "grounding arc owed" were
+  both wrong.
+- **Region-table** — `next-region-table-specification-v0-3.md` (0.3.2), *architecturally
+  closed; C§17 item **discharged***. **Grounding** — `next-grounding-specification-v0-5.md`
+  (0.5.1), DESIGN-CLOSED (compendium 1.0.18). Both: **implementation owed, design not**.
+- **Record fixes:** `OwedItems.md` rewritten to the spec-truth (§0 the recovery
+  Build/Delete/Keep; dissolutions off the list; region-table/grounding as
+  design-closed-impl-owed; the genuine C§17 doc-owed set; P-1 + the reframed
+  uncalled-unsafe-body policy pick). `PROGRESS` §1/§2/§3/§4/§5 rebaselined (19 files /
+  1.0.18; the four "blocking rulings" marked resolved/dissolved; the call-site
+  machinery marked superseded-by-recovery, not owed).
+- **Residual open policy pick [ask-author]:** an *uncalled* proven-unsafe body
+  (`() => 1 + "x"`) — flagged at the definition (error / goes-nowhere warning / silent),
+  or only at the call per E3/E-7? No explicit ruling found. Narrow; off the recovery's
+  critical path.
+
+---
+
 ## 2026-07-26 — Recovery Phase 1: the spec-first audit (no code)
 
 The author agreed the analyzer's body safety was built in the wrong layer and asked for

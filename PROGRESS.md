@@ -9,20 +9,29 @@
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
 
-**Snapshot:** 2026-07-26 · **recovery Phase 1 complete** — spec-first audit
-(`NEXT-spec-audit-accepted-domains-phase1.md`); the missing mechanism is the demand core
-+ template/instance/region-table split. Build & delete gated on four author rulings (§3).
+**Snapshot:** 2026-07-30 · **recovery spec-unblocked.** The Phase-1 audit's four
+"blocking rulings" are resolved by the 07-30 landing (region-table + grounding
+specs; `InferredAcceptedDomain`/eager-vs-lazy **dissolved** by errata E-6/E-7/E-8 —
+§3). Next: build the demand core → region table → call-site body check; delete the
+superseded call-site machinery (audit §5). This maintainer file was rebaselined to
+the specs 07-30 — the intervening tail/Archive `✅` rows below are development
+history the recovery supersedes, not the target architecture.
 
 ---
 
 ## 1. Scoreboard (machine-checked)
+
+All rows verified by `cargo test` / `cargo clippy` / `shasum -c` on **2026-07-30**
+(not inherited). **Caveat:** many of the 323 lib tests exercise the superseded
+call-site machinery (§4 recovery note); they pass but count wrong-layer code the
+recovery deletes.
 
 | Suite | Result |
 |---|---|
 | Unit tests (`cargo test --lib`) | **323 passed, 0 failed, 0 ignored** |
 | Conformance suite (`tests/conformance.rs`, stable IDs) | **111 passed, 0 failed, 13 ignored** |
 | Clippy (`--all-targets`) | **0 warnings** |
-| Manifest (`MANIFEST.sha256.txt`) | **all 14 files verify** |
+| Manifest (`MANIFEST.sha256.txt`) | **all 19 files verify** (07-30 grounding landing) |
 
 Conformance by phase: **Phase 0** N-01…05, I-01…04, FE-01…07 green ·
 **Phase 1** P-01…30 green (P-27b ignored) · **Phase 2** D-01…16 all green ·
@@ -46,54 +55,56 @@ Which normative document state this implementation is currently reconciled
 against. If the design side updates a doc, this table says whether the change has
 been absorbed.
 
-All 14 canonical files verified against `MANIFEST.sha256.txt` (2026-07-24). Every
-row below is the manifest-canonical version.
+All **19** canonical files verified against `MANIFEST.sha256.txt` (**2026-07-30 —
+grounding landing; compendium 1.0.18**). Every row below is the manifest-canonical
+version. `⬜` = design absorbed, implementation is the recovery Phase-2 build.
 
 | Document | Version/patch | Reconciled | Notes |
 |---|---|---|---|
-| Design compendium | v1.0 patch **1.0.8** (frozen) | ✅ | C§17 owed list in OwedItems |
+| Design compendium | v1.0 patch **1.0.18** (frozen) | ✅ | C§17 owed list in OwedItems; region-table + grounding flipped owed→specified |
 | Grammar | v0.1 | ✅ | L1/L2 enforced in the parser |
-| Kernel AST | v0.1 + **§4 tested-seat amendment (author, 07-24)** | ✅ | canonical now carries the guard-based rows `[RULED 2026-07-22]`, matching `tested_match` |
-| Semantics companion | v0.1 + **review round (07-21) + §7 RULED** | ✅ | 13 classes; total interpolation; open-value obs = Option A (`unbound-evaluation`); actKind in the closure key (FE-07) |
+| Kernel AST | v0.1 + **§4 tested-seat amendment (author, 07-24)** | ✅ | canonical carries the guard-based rows `[RULED 2026-07-22]`, matching `tested_match` |
+| Semantics companion | v0.1 + **review round (07-21) + §7 RULED** | ✅ | 13 classes; total interpolation; open-value obs = Option A; actKind in the closure key (FE-07) |
 | μ-canonicalization | v0.5 | ✅ | §6 universal interning: registered drift, PENDING-§5 (OwedItems) |
 | Recursive contracts | v0.2 patch **0.2.2** | ✅ | Concat guardedness + sourceProgress |
-| Tuple-length family | v0.3 patch **0.3.1** | ✅ | §1–§5 built; contract-level string-length lift owed |
-| Application & induction | v0.8 patch **0.8.1** | ⬜ | not yet implemented (the analyzer-core rebuild) |
-| Test suite | v0.1 + **07-24 additions** | ✅ | PR-06…09, FE-07, MU-18/19 implemented; A-WRK grids recovered |
+| Tuple-length family | v0.3 patch **0.3.1** | ✅ | §1–§5 built; string-length contract lift owed; §16 proofs owed |
+| **Region-table computation** | **v0.3 patch 0.3.2** | ⬜ | **design-closed** (C§17 item discharged); the recovery builds it first |
+| **Grounding v1** | **v0.5 patch 0.5.1** | ⬜ | **design-closed** (compendium 1.0.18); GR-01…30, Phase GR; implementation + §16 owed |
+| Late-resolution / termination-decisions | v0.5 / v4 | ✅ | method + pre-spec source for grounding (design record) |
+| Application & induction | v0.8 patch **0.8.2** | ⬜ | design-closed; **call-site build superseded by the region-table recovery** (audit §5 — §4 map below) |
+| Test suite | v0.1 + **07-30 (Phase GR added)** | 🟡 | PR/FE/MU implemented; Phase GR + A-WRK grids stubbed |
 | Phase-A worked examples (recovered) | 2026-07-21 | 📄 | RECOVER discharged; verification needs the analyzer |
 
 ## 3. Needs design-side action
 
-**BLOCKING — four rulings gate the recovery.** The author agreed the analyzer's body
-safety was built in the wrong layer (`NEXT-architecture-review-accepted-domains-vs-call-site-body-safety.md`).
-Recovery Phase 1 (spec-first audit) is **done**:
-`NEXT-spec-audit-accepted-domains-phase1.md`. It finds the missing mechanism is the
-**demand core + template/instance split** — symbolic summary per shape → instantiated
-**region table** per instance → call-site input obligation (C§13.1/C§12.3/C§13.2/C§13.4)
-— i.e. Part I's `demand core` build step, skipped. Phase 2 (build) and Phase 3 (delete
-the subsumed call-site machinery) are gated on §4 of that audit:
+**The Phase-1 audit's four "blocking rulings" are RESOLVED by the 2026-07-30
+landing** — the audit (2026-07-26) predated the region-table + grounding specs:
 
-1. **Region-table computation steps** — already in C§17's owed list. The concept is
-   normative; the body→rows *procedure* is unwritten. Most load-bearing. App spec §3
-   (*Template instantiation*) is the same gap from the other side — it names the
-   ingredients without stating the procedure; C§12.3 likewise invokes *"the
-   regionalization law"* without stating it.
-2. **Eager or lazy?** Is `InferredAcceptedDomain` materialized once per instance as a
-   contract, or the subscription set — C§13.1 calls preimage an *"optimization"*, but
-   E11's `DeclaredInput ⊑ InferredAcceptedDomain` needs a comparable contract.
-3. **Empty accepted domain** at a definition — error, goes-nowhere-style lint, or silent
-   (rejecting only at call sites)? Unspecified anywhere.
-4. **Grounding arc (C§10)** — the *second* source of a recursive function's domain
-   (factorial's `GE(0) ∧ Mod(1,0)`, per the Phase-A grids), needed for A-NEG.
+1. **Region-table computation procedure — SPECIFIED.** `next-region-table-specification-v0-3.md`
+   (0.3.1–0.3.2, *architecturally closed*; C§17 records the item **discharged**, erratum
+   2026-07-24). Not owed.
+2. **Eager-vs-lazy / `InferredAcceptedDomain` — DISSOLVED.** Errata E-6 (C§12.1), E-7
+   (E3), E-8 (E11), all 2026-07-24: **no materialized accepted-domain object.** `where`
+   is `BodySafe(instance, DeclaredInput) = proven`. The mechanism is region-table
+   reachability × ordinary C§7 body demands (C§13.1 subscriptions; eager preimage an
+   *optimization*). No separate accepted-domain spec. Not a question anymore.
+3. **Grounding arc (C§10) — SPECIFIED.** `next-grounding-specification-v0-5.md` (0.5.1,
+   DESIGN-CLOSED; compendium 1.0.18). Implementation + §16 discharge owed, not design.
+4. **Empty accepted domain (reframed)** — the only residual, and narrow: no
+   "empty-domain" object exists, so the question is whether an *uncalled* proven-unsafe
+   body (`() => 1 + "x"`) is flagged at the **definition** (E3/E-7 checks the body *at
+   the call*, so it's otherwise unflagged). Not explicitly ruled; off the recovery's
+   critical path. E10's goes-nowhere lint tier is the natural home. **[ask-author]**
 
-*(A draft fifth ask — "app spec v0.2 is missing" — was **withdrawn**: the manifest lists
-only v0.8, and "As v0.2" is a changelog idiom meaning "unchanged since v0.2", restated in
-place where it matters. Nothing is missing from the repo.)*
+So the recovery is **spec-unblocked**: build the demand core → region table →
+call-site body check (region-table §3's 14.1–14.3 as the gate), deleting the
+superseded call-site machinery per audit §5 (nothing deleted until the replacement
+passes `bad()`-rejected / `f("hello")`-rejected / `helper(0)`-accepted / divergence
+-terminates / no-user-fn-executed). Full owed picture in `OwedItems.md`.
 
-Otherwise:
-**Nothing else is blocking.** Earlier asks were resolved: T-10 ruled
-(guard-based, implemented + now in the canonical §4); open-value observation ruled
-Option A (implemented incidentally); A-WRK RECOVER discharged (grids recovered).
+**Open policy pick (author's, not blocking the build):** P-1 / Principle 9 —
+warn-and-compile vs reject for unproven grounding (blocker (4) now SATISFIED [1.0.18];
+(2)(3) open). No action until stamped.
 
 Low-stakes / for-info only:
 1. **E8 `String.units`/`points` element representation** — docs don't pin it;
@@ -105,6 +116,15 @@ Low-stakes / for-info only:
 ## 4. Subsystem status map
 
 **Legend:** ✅ built & tested · 🟡 partial (honest scope note) · ⬜ not started.
+
+> **Recovery note.** The `Application & induction` rows and the tail/Archive rows
+> below (`body_safety`, `InstanceBodySummary`, `domain_admitted`, the induction-tail
+> steps, `accepted_domain`) are `✅` as *built call-site machinery* — but the
+> architecture review + Phase-1 audit found that layer is the wrong one, and the
+> region-table recovery (§3) **supersedes most of it**. Read those rows as
+> development history, not the target architecture. The *keep* set (return-fact SCC
+> induction, instance+domain identity, correlated alternatives, dead-arm narrowing)
+> survives; the rest is Phase-3 delete. `OwedItems.md §0` has the Build/Delete/Keep split.
 
 | Subsystem | Spec | State |
 |---|---|---|
@@ -148,12 +168,13 @@ Low-stakes / for-info only:
 
 ## 5. Known deviations & doc gaps (summary)
 
-Full detail in `OwedItems.md`. Currently registered: the C§16 **OperationOutcome**
-interface rebuild (with app-induction) · **`Record(Exact|Open)`** precision ·
-**universal interning** mechanism (PENDING-§5) · `restrict_len`'s recursive
-certified-unfolding rule and the §4 `ElementRefutation` *structured* witness (the
-complete-inhabitant witness is stronger) · C§17's still-owed doc items (per-pair
-tables, remaining `analyzeOperation` tables, error templates, …).
+Full detail in `OwedItems.md` (rebaselined 2026-07-30). Headlines: **`InferredAcceptedDomain`
+/ eager-vs-lazy DISSOLVED** (errata E-6/E-7/E-8); **region-table + grounding
+design-closed, implementation owed**; the **call-site body-safety machinery
+superseded** (Phase-3 delete); the C§16 **OperationOutcome** interface rebuild ·
+**universal interning** (PENDING-§5) · **`Record(Exact|Open)`** · tuple-family §16
+proofs + string-length contract lift · C§17's doc-owed set (per-pair tables,
+boolean-DNF, remaining `analyzeOperation` tables, error templates, …).
 
 ## 6. Next increments (planned order)
 
