@@ -3653,3 +3653,32 @@ choices above, all of which the specs already sanction.
 non-terminating / integer / negative / round-trip), interning pointer-equality
 (leaves, nested tuples, record order-independence, later-wins). `cargo clippy`
 clean.
+
+## 2026-07-31 — Completion routing through the settled fact (step 1 of the critical path)
+
+**Chosen (mine, within the ruled boundaries).** `analyze_apply` now takes a call's completion
+from the settled completion fact rather than from the coarse body pass. `Produces` is
+reachable *only* from a proven fact. When the fact does not prove completion, the honest
+third voice `MayFallThrough` is reported — except that a **proven** fall-through survives:
+`classify_remainder` mints one only with a sampled witness and no guard muddying the
+remainder, and a witness is a refutation, not a shrug.
+
+**Bug found and fixed (mine, introduced with the graph unification).** `safety::settle`'s
+not-settled fallback re-verified the seed through the *safety* check regardless of the
+claim. A `Completes` claim therefore reported `Proven` whenever the body merely raised no
+safety finding — a different question with a wrong answer, and a live false accept.
+A `Completes`/`Return` claim that does not settle is now `Unproven`, full stop.
+
+**Blocker 3 — half released, re-pinned to its real root.** The cycle assumption no longer
+asserts `Produces`. The remaining half is not a local patch: `analyze_match` derives its
+completion from scrutinee coverage alone and discards the arm result's, because it demands
+every arm result unconditionally. Compendium §309 makes arm-results *expecting* seats only
+when the match is itself at one, and `analyze` carries no seat. That is compendium 1.0.8
+verbatim — an AnalysisContract alone cannot separate equal `produced` from differing
+completion behaviour — so the fix is the completion tri-state riding on the outcome and
+demanded by the **consumer**, i.e. gated on F1 `OperationOutcome` (T1.2). Propagating arm
+completion unconditionally is explicitly rejected: it over-reports at statement seats
+(it broke `countDown` when tried, and was backed out).
+
+No widening, no reaching fixpoint, no candidate synthesis, no grounding cutoff was added.
+384 lib + 111 conformance green, clippy clean.
