@@ -396,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "blocker 3: recursive fall-through completion lost — returns Produces (false accept) — PARKED. Blocker: completion carried on the fact (the cycle assumption must not ASSERT Produces). NOT a canonicalization issue"]
+    #[ignore = "blocker 3, HALF FIXED 2026-07-31. Fixed half: the cycle assumption no longer ASSERTS Produces (it reads the settled completion fact), and analyze_apply now routes completion through that fact while preserving a PROVEN fall-through. Remaining half is NOT a local patch: analyze_match takes its completion from scrutinee coverage alone and discards the arm result's, because it demands every arm result unconditionally. Compendium 309 makes arm-results *expecting* seats only when the match is itself at one, and `analyze` carries no seat. Root = compendium 1.0.8: the completion tri-state must ride on the outcome and be demanded by the CONSUMER (EvaluationCore/ApplicationCore) — i.e. gated on F1 OperationOutcome (T1.2). Do NOT fix by making analyze_match propagate arm completion unconditionally: that over-reports at statement seats (it broke countDown when tried)."]
     fn recursive_fall_through_completion_is_visible() {
         // f(0) → f(1); f(1) matches no arm → completes without a value. The one-shot
         // completion reports Produces, so an expecting seat would accept a trapping program.

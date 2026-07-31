@@ -604,7 +604,13 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                     // accumulates across depths. Only the return still needs the induction.
                     if !has_spread && induction::safety_assumed(cv, &arg_contracts, interner) {
                         produced.push(call_return(cv, &arg_contracts, has_spread, cenv, interner));
-                        completions.push(Completion::Produces);
+                        // Completion is settled, never asserted: `Produces` only when a
+                        // completion fact covers *this* call's domain.
+                        completions.push(if induction::completes_assumed(cv, &arg_contracts, interner) {
+                            Completion::Produces
+                        } else {
+                            Completion::MayFallThrough
+                        });
                         continue;
                     }
                     if has_spread {
@@ -614,7 +620,10 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                     }
                     let summary = bodycheck::body_summary(cv, &arg_contracts, cenv, interner);
                     findings.extend(summary.errors());
-                    completions.push(callee_completion(cv, &summary));
+                    // Completion comes from the **fact** (settled over the candidate
+                    // graph), not from a coarse whole-body pass.
+                    let completes = safety::completes(cv, &arg_contracts, cenv, interner);
+                    completions.push(callee_completion(cv, completes, summary.completion));
                     // A recursive/mutual return needs the induction (`call_return`
                     // sharpens the coarse cycle assumption); a non-recursive return is its
                     // body's **exact** contract, so `always() → Equals(true)` and the
@@ -632,14 +641,26 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
     Analysis { contract, findings, completion }
 }
 
-/// The callee's completion (E10) at a call site, from its body summary: a **mutator**
-/// discards its return (always completes without a value — proven by law); a pure/effect
-/// callee inherits its body summary's completion.
-fn callee_completion(cv: &ValueRef, summary: &bodycheck::BodySummary) -> Completion {
+/// The callee's completion (E10) at a call site. A **mutator** discards its return, so it
+/// always completes without a value (proven by law, B5). Otherwise the verdict is the
+/// settled completion fact: `Produces` when proven, else the honest third voice —
+/// `MayFallThrough`, never an assertion that it does fall through (that needs AP-30's
+/// witness).
+fn callee_completion(cv: &ValueRef, completes: bool, observed: Completion) -> Completion {
     if cv.as_closure().is_some_and(|c| matches!(c.lambda.act_kind, ActKind::Mutator)) {
         return Completion::FallsThrough; // the return is discarded — always without a value
     }
-    summary.completion
+    if completes {
+        return Completion::Produces;
+    }
+    // The fact did not prove completion. A **proven** fall-through still refutes (it
+    // carries a sampled witness); anything else is the third voice. `Produces` is
+    // deliberately unreachable here — it may only come from the settled fact, never from
+    // a coarse body pass.
+    match observed {
+        Completion::FallsThrough => Completion::FallsThrough,
+        Completion::Produces | Completion::MayFallThrough => Completion::MayFallThrough,
+    }
 }
 
 /// One live alternative of a callee contract (Archive9 §9–§11). The enumeration is

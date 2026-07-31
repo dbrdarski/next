@@ -35,6 +35,8 @@
 //! exact-singleton chain — none of which this module invents.
 
 
+use std::cell::Cell;
+
 use crate::analyzer::induction::{self, Candidate, Claim};
 use crate::analyzer::region::{region_table, select};
 use crate::analyzer::{Finding, Severity, TypeEnv, analyze, bind_pattern};
@@ -86,6 +88,15 @@ pub fn prove(
     settle(nodes, &edges, Claim::Safety, cenv, interner)
 }
 
+thread_local! {
+    /// Set while a completion settlement is running — the **re-entrancy guard**. A
+    /// settlement analyzes bodies, whose calls reach `analyze_apply` again; without this
+    /// each such call would launch a *nested* settlement. Inside one, a call resolves
+    /// through the assumed facts instead (the same discipline as
+    /// `induction::without_inference` for return facts).
+    static SETTLING: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Whether **every path** through `callee`'s body over `args` produces a value — settled
 /// through the same graph, with [`Claim::Completes`]. `false` is the honest third voice
 /// (unproven), never a claim that it falls through.
@@ -98,8 +109,15 @@ pub fn completes(
     if callee.as_closure().is_none() {
         return false;
     }
+    // Already settling: resolve through the assumed facts, never nest.
+    if SETTLING.with(Cell::get) {
+        return induction::completes_assumed(callee, args, interner);
+    }
+    SETTLING.with(|f| f.set(true));
     let (nodes, edges) = discover(callee, args, cenv, interner);
-    matches!(settle(nodes, &edges, Claim::Completes, cenv, interner), BodySafety::Proven)
+    let out = matches!(settle(nodes, &edges, Claim::Completes, cenv, interner), BodySafety::Proven);
+    SETTLING.with(|f| f.set(false));
+    out
 }
 
 /// Verify the fact **per region-table row** (§5's partition rule). `region::select`
@@ -341,8 +359,13 @@ fn settle(
     if settled {
         return BodySafety::Proven;
     }
-    // Not settled: re-verify the seed once, unassumed, to report *why*.
-    classify(verify(&seed.callee, &seed.input, cenv, interner))
+    // Not settled. Only a **safety** claim re-verifies to report *why*; re-verifying a
+    // completion claim through the safety check would report `Proven` whenever the body
+    // merely raises no safety finding — a different question, and a wrong answer.
+    match claim {
+        Claim::Safety => classify(verify(&seed.callee, &seed.input, cenv, interner)),
+        Claim::Completes | Claim::Return(_) => BodySafety::Unproven(Vec::new()),
+    }
 }
 
 /// Every call a candidate's body makes, with the callee resolved to a concrete instance
