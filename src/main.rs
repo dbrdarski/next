@@ -1,8 +1,9 @@
 //! The `next` CLI — run a NEXT program and print its result.
 //!
 //! Usage:
-//!   next <file.next>     run a program file
-//!   next                 read a program from stdin
+//!   next <file.next>            run a program file
+//!   next --check <file.next>    analyze a program without running it
+//!   next                        read a program from stdin
 //!
 //! `println`/`exit`/`readFile` host-effect doubles are available (the harness).
 //! The value rendering below is a **debug/tooling** rendering, deliberately kept
@@ -11,11 +12,20 @@
 
 use std::io::Read;
 
-use next::oracle::run_source;
+use next::analyzer::Severity;
+use next::oracle::{check_source, run_source};
 use next::value::{ValueData, ValueRef};
 
 fn main() {
-    let src = match std::env::args().nth(1) {
+    let mut args = std::env::args().skip(1);
+    let mut check = false;
+    let mut path = args.next();
+    if path.as_deref() == Some("--check") {
+        check = true;
+        path = args.next();
+    }
+
+    let src = match path {
         Some(path) => match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -33,6 +43,10 @@ fn main() {
         }
     };
 
+    if check {
+        return run_check(&src);
+    }
+
     match run_source(&src) {
         Ok((value, io)) => {
             for line in io.output {
@@ -47,6 +61,36 @@ fn main() {
             eprintln!("{e}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Analyze without running: report every finding, and exit non-zero if the module is
+/// rejected. A rejected module is a **compile error** — safety-unproven included, which
+/// late-resolution §5 makes un-suppressible.
+fn run_check(src: &str) {
+    let verdict = match check_source(src) {
+        Ok((v, _)) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+
+    for f in &verdict.findings {
+        let tier = match f.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        eprintln!("{tier}: [{:?}] {}", f.class, f.message);
+    }
+    for (name, c) in &verdict.owed_return_checks {
+        eprintln!("note: return contract of `{name}` ({c:?}) is not yet checked — demand core owed");
+    }
+
+    if verdict.accepted() {
+        println!("ok");
+    } else {
+        std::process::exit(1);
     }
 }
 

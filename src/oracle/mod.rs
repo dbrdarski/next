@@ -36,6 +36,8 @@ mod poly;
 mod tests;
 
 pub use equal::values_equal;
+pub use harness::{check_source, check_source_in};
+pub(crate) use eval::make_closure_in;
 pub use eval::{BoundedOutcome, eval_expr, eval_expr_bounded, eval_prim, run_program_commits, run_program_value};
 pub use harness::{HostIo, RunError, run_source, run_source_in, run_with_io};
 

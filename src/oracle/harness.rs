@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::analyzer::program::{ProgramVerdict, analyze_program};
 use crate::desugar::Desugarer;
 use crate::env::{Binding, Env, Scope};
 use crate::interner::Interner;
@@ -210,6 +211,25 @@ pub fn run_source(src: &str) -> Result<(ValueRef, HostIo), RunError> {
 /// As [`run_source`], but into a **caller-supplied interner** — so the produced value
 /// (e.g. a closure) shares its interner with subsequent work. This matters whenever the
 /// value is later *evaluated* (interned `==` is pointer identity, so cross-interner
+/// **Analyze** a program without running it — the compile-time counterpart of
+/// [`run_source`], sharing its front end so the two can never drift on what parses.
+///
+/// Nothing is evaluated: the module is lexed, parsed and desugared, then handed to
+/// [`analyze_program`], which builds closures but forces no binding.
+pub fn check_source(src: &str) -> Result<(ProgramVerdict, Interner), RunError> {
+    let mut interner = Interner::new();
+    let verdict = check_source_in(src, &mut interner)?;
+    Ok((verdict, interner))
+}
+
+/// As [`check_source`], but into a caller-supplied interner.
+pub fn check_source_in(src: &str, interner: &mut Interner) -> Result<ProgramVerdict, RunError> {
+    let toks = lex(src).map_err(RunError::Lex)?;
+    let sprogram = parse_program(toks).map_err(RunError::Parse)?;
+    let module = Desugarer::new(interner).program(&sprogram).map_err(RunError::Desugar)?;
+    Ok(analyze_program(&module, interner))
+}
+
 /// numbers compare unequal); analysis alone is cross-interner-safe (structural).
 pub fn run_source_in(src: &str, interner: &mut Interner) -> Result<(ValueRef, HostIo), RunError> {
     let toks = lex(src).map_err(RunError::Lex)?;

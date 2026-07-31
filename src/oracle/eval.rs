@@ -233,12 +233,7 @@ impl<'a> Oracle<'a> {
     }
 
     fn make_closure(&mut self, lambda: &Lambda, env: &Env) -> ValueRef {
-        // Compute the canonical shape (α + capture slots + polynomial NF);
-        // captures are resolved lazily at comparison time (algorithm B). Closures
-        // are plain allocations.
-        let shape = canon::canonicalize(lambda, self.interner);
-        let closure = Closure { lambda: lambda.clone(), env: env.clone() };
-        self.interner.function(FnValue::new(shape.code, shape.free_vars, closure))
+        make_closure_in(lambda, env, self.interner)
     }
 
     // ── Primitive operations (§3) ────────────────────────────────────────────
@@ -895,4 +890,21 @@ fn push_escaped(out: &mut String, c: char) {
         '\t' => out.push_str("\\t"),
         c => out.push(c),
     }
+}
+
+/// Build a closure value from a lambda and its defining environment.
+///
+/// Compute the canonical shape (α + capture slots + polynomial NF); captures are resolved
+/// lazily at comparison time (algorithm B). Closures are plain allocations, never
+/// hash-consed.
+///
+/// Free-standing (rather than an `Oracle` method) because the **analyzer** needs closures
+/// too — `analyze_program` must reach a top-level function's value to verify its `where`
+/// — and it must do so *without evaluating the module*, which would run the program at
+/// compile time. Building a closure evaluates nothing: the body is untouched and the
+/// environment is captured by reference under late binding.
+pub(crate) fn make_closure_in(lambda: &Lambda, env: &Env, interner: &mut Interner) -> ValueRef {
+    let shape = canon::canonicalize(lambda, interner);
+    let closure = Closure { lambda: lambda.clone(), env: env.clone() };
+    interner.function(FnValue::new(shape.code, shape.free_vars, closure))
 }

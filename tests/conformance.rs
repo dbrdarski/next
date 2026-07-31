@@ -1065,7 +1065,7 @@ mod phase4 {
 
 mod phase_a {
     #[test]
-    #[ignore = "Phase A: program-level analyzer verdicts pending (expression analyzer exists; A-NEG needs the recursion arc)"]
+    #[ignore = "Phase A: program-level entry NOW EXISTS (analyzer::program::analyze_program, 2026-08-01) — this row is no longer blocked on it. Remaining: the battery body is an unreachable!() stub, and its verdicts need (a) a GRAY/third-voice verdict representation at program level, (b) drift for the recursion arc. Write it after the demand core (T1.2)."]
     fn a_neg_negative_battery() {
         // Recorded verdicts (Part D§6 — the anti-regression tripwire; these must
         // never change under any future families/analysis work):
@@ -1084,7 +1084,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "Phase A: acceptance battery pending — runtime-trace layer runnable now, contract-claim layer needs the analyzer"]
+    #[ignore = "Phase A: program-level entry NOW EXISTS (2026-08-01). Remaining: body is an unreachable!() stub; the runtime-trace layer is runnable against the oracle today, but the contract-claim layer needs return-contract checking (demand core, T1.2) and the family machinery."]
     fn a_acc_acceptance_battery() {
         // Two layers per case: the runtime trace (oracle-checkable — e.g.
         // makeLinkedList(1,2,3,4): x.next.next.next.value == 4; …next.next == null;
@@ -1098,7 +1098,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "Phase A: the C§16 soundness harness runs when program-level ACCEPT exists"]
+    #[ignore = "Phase A: program-level ACCEPT now exists (ProgramVerdict::accepted, 2026-08-01), so the stated precondition is met. Remaining: the C§16 harness body itself is unwritten, and a meaningful soundness claim needs the analyzer to cover more than where-safety."]
     fn a_snd_soundness_harness() {
         // (1) accepted programs → oracle runs → zero traps, per trap class;
         // (2) sampled op inputs → results within claimed output contracts;
@@ -1107,7 +1107,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "Phase A: verdict cases pending program-level analysis (chain hint, exhaustiveness, unions at boundaries)"]
+    #[ignore = "Phase A: program-level analysis NOW EXISTS (2026-08-01). Remaining: body is an unreachable!() stub; the listed cases need per-case seat diagnostics (chain hint), exhaustiveness at program level, and union-at-boundary narrowing — none of which T1.1 supplied."]
     fn a_ver_verdict_cases() {
         // a < b < c → REJECT with the chain hint · (a == b) == c legal iff c
         // Boolean · exhaustiveness over the E9 remainder · computed keys: finite
