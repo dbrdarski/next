@@ -141,6 +141,29 @@ Conformance additionally holds 13 `#[ignore]`s (6 Phase A · 5 module system · 
 
 ---
 
+
+### Mechanical enforcement — `tests/machinery_gate.rs` (added 2026-07-31)
+
+The five boundaries above were prose only, and prose did not hold them: a forward-reaching
+/widening engine was built on 2026-07-31, passed all four blockers, and was reverted whole.
+Four checks now enforce the part a machine can see. **Each was verified to fail on an
+injected violation before landing** — a gate that cannot fire is not a gate.
+
+1. `src/analyzer/summary.rs` (the reverted engine) and sibling names must not exist.
+2. The quarantined reaching core — `check_recursive_body`, `reachable_rows`, `grow` — appears
+   only inside `src/analyzer/bodycheck.rs`.
+3. The fact machinery (`safety`, `induction`, `refute`, `obligation`, `grounding`) carries no
+   *code* reference to `bodycheck`; doc comments are stripped first, since documenting the
+   quarantine is expected.
+4. `callee_completion` still consults the settled completion fact — `Produces` at a call site
+   may not be asserted by a coarse body pass (a false **accept**, the dangerous direction).
+
+**Scope, stated rather than glossed:** the gate catches a literal repeat and the spread of the
+quarantined engine. It does **not** catch a renamed reimplementation. That stays a review
+obligation, under the standing rule that when a pinned blocker goes green the **mechanism** is
+reported, not merely the outcome. If a check fires, the fix is never to relax it — imprecision
+yields `unproven`, never another prerequisite and never a growth loop.
+
 ## 6a. In progress — `BodySafe(instance, I)` (authorized once §6 completed)
 
 **Landed:** the safety fact keyed `(instance, I)`, `I` taken from the call site (never synthesized),
