@@ -99,43 +99,20 @@ pub fn discharged(callee: &ValueRef, args: &[Contract], interner: &mut Interner)
     })
 }
 
-/// Run `body` with `fact` additionally assumed, restoring the previous table after (so
-/// nested proofs compose).
-fn with_assumed<R>(fact: SafetyFact, body: impl FnOnce() -> R) -> R {
-    ASSUMED.with(|a| a.borrow_mut().push(fact));
-    let out = body();
-    ASSUMED.with(|a| {
-        a.borrow_mut().pop();
-    });
-    out
-}
-
-/// Prove `BodySafe(callee, args)` by assume-and-check induction (see the module note).
-/// The body is analyzed exactly **once**, under `args`.
+/// Prove `BodySafe(callee, args)` (§6): discover the candidate graph, then settle it by
+/// SCC in reverse topological order with one joint vector pass per cyclic component.
+/// Recursion resolves through facts and the body is never unfolded.
 pub fn prove(
     callee: &ValueRef,
     args: &[Contract],
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> BodySafety {
-    let Some(closure) = callee.as_closure() else {
-        return BodySafety::Unproven(vec![]); // not a known function — nothing to prove over
-    };
-    let fact = SafetyFact { callee: callee.clone(), input: args.to_vec() };
-    let findings = with_assumed(fact, || match (single_param(&closure.lambda.params), args) {
-        // **The partition rule (§5).** Verify row by row, each under `I ∩ row.region` —
-        // not the whole body under `I`. This is what lets `countDown` close: the `n != 0`
-        // row intersected with the declared `n >= 0` gives `n >= 1`, so `n - 1 >= 0` lands
-        // back inside `I` and the recursive call is discharged by the assumption.
-        (Some(param), [domain]) => verify_by_partition(callee, &closure, &param, domain, cenv, interner),
-        // Multi-parameter (region-table §5 owed): one whole-body pass, sound but coarse.
-        _ => {
-            let mut env = capture_env(callee);
-            bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
-            analyze(&closure.lambda.body, &env, cenv, interner).findings
-        }
-    });
-    classify(findings)
+    if callee.as_closure().is_none() {
+        return BodySafety::Unproven(Vec::new()); // not a known function — nothing to prove over
+    }
+    let (nodes, edges) = discover(callee, args, cenv, interner);
+    settle(&nodes, &edges, cenv, interner)
 }
 
 /// Verify the fact **per region-table row** (§5's partition rule). `region::select`
@@ -265,7 +242,7 @@ mod tests {
         let five = Contract::Equals(i.integer(5));
         let four = Contract::Equals(i.integer(4));
         let fact = SafetyFact { callee: cd.clone(), input: vec![five] };
-        let covered = with_assumed(fact, || discharged(&cd, std::slice::from_ref(&four), &mut i));
+        let covered = with_assumed_all(vec![fact], || discharged(&cd, std::slice::from_ref(&four), &mut i));
         assert!(!covered, "a narrower-but-different domain must not be discharged");
     }
 
@@ -277,7 +254,366 @@ mod tests {
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
         let fact = SafetyFact { callee: cd.clone(), input: vec![nonneg_ints()] };
-        let covered = with_assumed(fact, || discharged(&cd, std::slice::from_ref(&five), &mut i));
+        let covered = with_assumed_all(vec![fact], || discharged(&cd, std::slice::from_ref(&five), &mut i));
         assert!(covered, "Equals(5) is inside the non-negative integers");
+    }
+}
+
+// ── The candidate graph (app-induction §6 / C§13.2a) ─────────────────────────
+//
+// §6 gives the procedure outright, and it is followed here rather than reinvented:
+//
+//   seed with the candidates the program's safety obligations demand
+//     → discovery closure: for each new candidate, find its referenced candidates and
+//       **intern every candidate and edge** — *no verification occurs during discovery*
+//       (a premature unproven result is non-conforming)
+//     → collapse SCCs, process in **reverse topological order** (dependencies first)
+//     → per cyclic component, **one joint vector pass**: assume every member's fact
+//       jointly, verify each member; all must hold, and a vector failure leaves the
+//       whole component unproven.
+//
+// The joint pass is what mutual recursion needs: proving `f` alone cannot discharge its
+// call to `g`, because only `f`'s own fact would be assumed.
+//
+// **Finiteness** is C§13.3(2)'s instance-chain cutoff, not a budget: a target whose
+// *shape* already appears on the discovery path is not instantiated further; it is
+// admitted as a `cutoff` node whose verdict is `Unproven` (the ladder's (c) rung). An
+// existing candidate whose domain **covers** the target is reused instead of creating a
+// node — that reuse is what closes `countDown`'s self-loop into one component.
+
+/// A node of the safety-fact graph: `BodySafe(callee, input)`.
+struct Node {
+    callee: ValueRef,
+    input: Vec<Contract>,
+    /// Shape already on the discovery path — not expanded; resolves as `Unproven`.
+    cutoff: bool,
+}
+
+/// Discovery closure (§6). Interns candidates and edges; **verifies nothing**.
+fn discover(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> (Vec<Node>, Vec<Vec<usize>>) {
+    let mut nodes = vec![Node { callee: callee.clone(), input: args.to_vec(), cutoff: false }];
+    let mut edges: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut work = vec![(0usize, vec![shape_of(callee)])];
+
+    while let Some((i, path)) = work.pop() {
+        for (target, targs) in calls_of(&nodes[i], cenv, interner) {
+            // Reuse: an existing candidate whose domain covers the target. This is the
+            // fact-reuse rung, and it is what turns self-recursion into a self-loop
+            // rather than an unbounded chain of nodes.
+            if let Some(j) = covering_node(&nodes, &target, &targs, interner) {
+                edges[i].push(j);
+                continue;
+            }
+            let shape = shape_of(&target);
+            let cutoff = path.contains(&shape);
+            nodes.push(Node { callee: target, input: targs, cutoff });
+            edges.push(Vec::new());
+            let j = nodes.len() - 1;
+            edges[i].push(j);
+            if !cutoff {
+                let mut next = path.clone();
+                next.push(shape);
+                work.push((j, next));
+            }
+        }
+    }
+    (nodes, edges)
+}
+
+/// Settlement (§6): SCC collapse, **reverse topological** order, one **joint vector
+/// pass** per component. Returns the seed's verdict (node 0).
+fn settle(
+    nodes: &[Node],
+    edges: &[Vec<usize>],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> BodySafety {
+    let mut proven: Vec<SafetyFact> = Vec::new(); // facts settled by earlier components
+    let mut seed = BodySafety::Unproven(Vec::new());
+
+    for component in crate::analyzer::induction::scc_reverse_topo(edges) {
+        // A cutoff member is the ladder's (c) rung — unproven, and it poisons its
+        // component (the vector pass needs every member to hold).
+        let has_cutoff = component.iter().any(|&i| nodes[i].cutoff);
+        let assumed: Vec<SafetyFact> = component
+            .iter()
+            .map(|&i| SafetyFact { callee: nodes[i].callee.clone(), input: nodes[i].input.clone() })
+            .collect();
+
+        let mut findings = Vec::new();
+        let mut ok = !has_cutoff;
+        if ok {
+            // One joint pass: every member's fact assumed, every member verified.
+            let mut table = proven.clone();
+            table.extend(assumed.iter().cloned());
+            for &i in &component {
+                let fs = with_assumed_all(table.clone(), || {
+                    verify(&nodes[i].callee, &nodes[i].input, cenv, interner)
+                });
+                if !fs.is_empty() {
+                    ok = false;
+                }
+                findings.extend(fs);
+            }
+        }
+        if ok {
+            proven.extend(assumed); // carry to dependants (reverse topological order)
+        }
+        if component.contains(&0) {
+            seed = if ok { BodySafety::Proven } else { classify(findings) };
+        }
+    }
+    seed
+}
+
+/// Every call a candidate's body makes, with the callee resolved to a concrete instance
+/// and the argument domains evaluated **per region-table row** (so each call is
+/// discovered under the domain that actually reaches it).
+fn calls_of(node: &Node, cenv: &ContractEnv, interner: &mut Interner) -> Vec<(ValueRef, Vec<Contract>)> {
+    let Some(closure) = node.callee.as_closure() else { return Vec::new() };
+    let base = capture_env(&node.callee);
+    let mut out = Vec::new();
+    // Per-row walk (single parameter), else one whole-body walk.
+    match (single_param(&closure.lambda.params), node.input.as_slice()) {
+        (Some(param), [domain]) => {
+            let table = region_table(&closure.lambda.body, &param, cenv);
+            for sel in select(&table, domain) {
+                let mut env = base.clone();
+                env.insert(param.clone(), sel.region.clone());
+                collect_calls(&sel.result, &closure, &env, cenv, interner, &mut out);
+            }
+        }
+        _ => {
+            let mut env = base.clone();
+            bind_pattern(&closure.lambda.params, &Contract::Tuple(node.input.clone()), &mut env);
+            collect_calls(&closure.lambda.body, &closure, &env, cenv, interner, &mut out);
+        }
+    }
+    out
+}
+
+/// An existing candidate for the same instance whose domain **covers** the target.
+fn covering_node(
+    nodes: &[Node],
+    target: &ValueRef,
+    targs: &[Contract],
+    interner: &mut Interner,
+) -> Option<usize> {
+    let cands: Vec<(usize, Vec<Contract>)> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.callee == *target)
+        .map(|(i, n)| (i, n.input.clone()))
+        .collect();
+    cands.into_iter().find(|(_, input)| {
+        let call = Contract::Tuple(targs.to_vec());
+        let dom = Contract::Tuple(input.clone());
+        matches!(subcontract(&call, &dom, interner), Verdict::Proven)
+    })
+    .map(|(i, _)| i)
+}
+
+fn shape_of(v: &ValueRef) -> crate::ast::Lambda {
+    v.as_fn().map(|f| f.shape().clone()).unwrap_or_else(|| {
+        crate::ast::Lambda {
+            params: crate::ast::Pat::Wild,
+            body: Box::new(crate::ast::Expr::Const(v.clone())),
+            act_kind: crate::ast::ActKind::Pure,
+        }
+    })
+}
+
+/// Install a whole fact table for the duration of `body` (the joint pass's assumption).
+fn with_assumed_all<R>(facts: Vec<SafetyFact>, body: impl FnOnce() -> R) -> R {
+    let saved = ASSUMED.with(|a| std::mem::replace(&mut *a.borrow_mut(), facts));
+    let out = body();
+    ASSUMED.with(|a| *a.borrow_mut() = saved);
+    out
+}
+
+/// Verify one member under the currently-assumed facts (the partition rule).
+fn verify(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
+    let Some(closure) = callee.as_closure() else { return Vec::new() };
+    match (single_param(&closure.lambda.params), args) {
+        (Some(param), [domain]) => verify_by_partition(callee, &closure, &param, domain, cenv, interner),
+        _ => {
+            let mut env = capture_env(callee);
+            bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+            analyze(&closure.lambda.body, &env, cenv, interner).findings
+        }
+    }
+}
+
+/// Collect every application in `e` whose callee resolves through the closure's captured
+/// environment to a concrete function, paired with its argument domains under `env`.
+/// Nested lambdas are not descended (a distinct instance); a spread argument declines
+/// (no positional mapping).
+fn collect_calls(
+    e: &crate::ast::Expr,
+    closure: &crate::value::Closure,
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+    out: &mut Vec<(ValueRef, Vec<Contract>)>,
+) {
+    use crate::ast::{AccessForm, Arg, Bind, Element, Expr, Field, MatchItem, TemplatePart};
+    match e {
+        Expr::Const(_) | Expr::Ref(_) | Expr::Lambda(_) => {}
+        Expr::Apply { callee, args } => {
+            if let Some(target) = resolve_callee(callee, closure) {
+                let mut domains = Vec::new();
+                let mut clean = true;
+                for a in args {
+                    match a {
+                        Arg::Expr(x) => domains.push(analyze(x, env, cenv, interner).contract),
+                        Arg::Spread(_) => clean = false,
+                    }
+                }
+                if clean {
+                    out.push((target, domains));
+                }
+            }
+            collect_calls(callee, closure, env, cenv, interner, out);
+            for a in args {
+                let (Arg::Expr(x) | Arg::Spread(x)) = a;
+                collect_calls(x, closure, env, cenv, interner, out);
+            }
+        }
+        Expr::PrimOp { args, .. } => {
+            for a in args {
+                collect_calls(a, closure, env, cenv, interner, out);
+            }
+        }
+        Expr::Match(m) => {
+            if let Some(s) = &m.scrutinee {
+                collect_calls(s, closure, env, cenv, interner, out);
+            }
+            for item in &m.items {
+                match item {
+                    MatchItem::Bind(Bind { value, .. }) => collect_calls(value, closure, env, cenv, interner, out),
+                    MatchItem::Stmt(x) => collect_calls(x, closure, env, cenv, interner, out),
+                    MatchItem::Arm(arm) => {
+                        if let Some(g) = &arm.guard {
+                            collect_calls(g, closure, env, cenv, interner, out);
+                        }
+                        collect_calls(&arm.result, closure, env, cenv, interner, out);
+                    }
+                }
+            }
+        }
+        Expr::TupleCons(els) => {
+            for el in els {
+                let (Element::Expr(x) | Element::Spread(x)) = el;
+                collect_calls(x, closure, env, cenv, interner, out);
+            }
+        }
+        Expr::RecordCons(fs) => {
+            for f in fs {
+                match f {
+                    Field::Field { value, .. } | Field::Spread(value) => {
+                        collect_calls(value, closure, env, cenv, interner, out)
+                    }
+                    Field::Computed { key, value } => {
+                        collect_calls(key, closure, env, cenv, interner, out);
+                        collect_calls(value, closure, env, cenv, interner, out);
+                    }
+                }
+            }
+        }
+        Expr::Access { target, form, .. } => {
+            collect_calls(target, closure, env, cenv, interner, out);
+            match form {
+                AccessForm::Field(_) => {}
+                AccessForm::Index(x) => collect_calls(x, closure, env, cenv, interner, out),
+                AccessForm::Slice { lo, hi } => {
+                    for x in [lo, hi].into_iter().flatten() {
+                        collect_calls(x, closure, env, cenv, interner, out);
+                    }
+                }
+            }
+        }
+        Expr::Template(parts) => {
+            for p in parts {
+                if let TemplatePart::Interp(x) = p {
+                    collect_calls(x, closure, env, cenv, interner, out);
+                }
+            }
+        }
+        Expr::Write { value, .. } => collect_calls(value, closure, env, cenv, interner, out),
+    }
+}
+
+/// The concrete function a callee expression names, via the closure's captures.
+fn resolve_callee(callee: &crate::ast::Expr, closure: &crate::value::Closure) -> Option<ValueRef> {
+    let crate::ast::Expr::Ref(crate::ast::Ref::Immutable(crate::ast::BindingRef::Name(n))) = callee else {
+        return None;
+    };
+    match closure.env.lookup(n) {
+        Some(Binding::Value(v)) if v.is_function() => Some(v),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod graph_tests {
+    use super::*;
+    use crate::oracle::harness::run_source_in;
+
+    fn f(src: &str, i: &mut Interner) -> ValueRef {
+        run_source_in(src, i).unwrap().0
+    }
+
+    #[test]
+    fn mutual_recursion_closes_via_the_joint_vector_pass() {
+        // f -> g -> f, and the String reaches f's `x + 1`. Proving `f` ALONE cannot
+        // discharge its call to `g` — only `f`'s own fact would be assumed. The joint
+        // pass assumes every member of the component, which is what makes the mutual
+        // edge resolvable and the deep trap visible.
+        let mut i = Interner::new();
+        let m = f("f = (x) => x == 0 ? g(\"x\") : x + 1\ng = (y) => f(y)\nf", &mut i);
+        let zero = Contract::Equals(i.integer(0));
+        let v = prove(&m, std::slice::from_ref(&zero), &ContractEnv::new(), &mut i);
+        assert!(matches!(v, BodySafety::Refuted(_)), "the mutual deep trap must refute: {v:?}");
+    }
+
+    #[test]
+    fn a_self_loop_settles_as_one_component() {
+        // countDown's recursive call is *covered* by the seed's domain, so discovery
+        // reuses that candidate rather than minting a new one — the component is a
+        // self-loop and the joint pass proves it.
+        let mut i = Interner::new();
+        let d = Contract::Intersection(
+            Box::new(Contract::GreaterEq(crate::rational::Rational::from(0))),
+            Box::new(Contract::Mod { n: num_bigint::BigInt::from(1), r: num_bigint::BigInt::from(0) }),
+        );
+        let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        assert!(prove(&cd, &[d], &ContractEnv::new(), &mut i).is_proven());
+    }
+
+    #[test]
+    fn discovery_terminates_on_a_divergent_body() {
+        // Safety is not termination: `f(n) = f(n)` is safe, and the graph must close
+        // rather than expand forever — the target is covered by the seed.
+        let mut i = Interner::new();
+        let lp = f("f = (n) => f(n)\nf", &mut i);
+        let num = Contract::Kind(crate::contract::Kind::Number);
+        assert!(prove(&lp, std::slice::from_ref(&num), &ContractEnv::new(), &mut i).is_proven());
+    }
+
+    #[test]
+    fn an_uncovered_recursive_chain_is_cut_off_not_expanded() {
+        // A concrete chain (5 -> 4 -> ...) is never covered by its predecessor, so the
+        // shape-repeat cutoff (C§13.3(2)) stops discovery and the verdict is the ladder's
+        // (c) rung — unproven, never an invented covering domain.
+        let mut i = Interner::new();
+        let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        let five = Contract::Equals(i.integer(5));
+        let v = prove(&cd, std::slice::from_ref(&five), &ContractEnv::new(), &mut i);
+        assert!(!v.is_proven(), "an uncovered chain must not be proven by expansion: {v:?}");
     }
 }

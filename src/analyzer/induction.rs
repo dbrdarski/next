@@ -344,7 +344,7 @@ fn call_edges(candidates: &[Candidate]) -> Vec<Vec<usize>> {
 /// it (dependencies first), exactly the driver's processing order. The emission order
 /// is a property of the graph, not of the traversal, so the driver is
 /// order-independent.
-fn scc_reverse_topo(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+pub(crate) fn scc_reverse_topo(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     struct Tarjan<'a> {
         adj: &'a [Vec<usize>],
         index: Vec<Option<usize>>,

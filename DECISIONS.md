@@ -11,6 +11,42 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-31 — The candidate graph (app-induction §6 / C§13.2a) — built, mutual recursion closes
+
+The feature, not a fix. **383 lib passed / 9 ignored, 111 conformance, clippy 0.** No reaching
+fixpoint, no widening, no candidate synthesis.
+
+- **Followed §6 rather than reinventing it:** seed from the call's safety obligation → **discovery
+  closure** interning every referenced candidate *and edge*, with **no verification during
+  discovery** → **SCC collapse** → **reverse topological** order → **one joint vector pass** per
+  cyclic component (assume every member's fact jointly; all must hold; a vector failure leaves the
+  whole component unproven). `induction::scc_reverse_topo` reused — the SCC utility is
+  independently valid, and reusing it is explicitly permitted; nothing else was rebuilt.
+- **The joint pass is what mutual recursion needed.** Proving `f` alone cannot discharge its call
+  to `g`, because only `f`'s own fact is assumed — which is exactly why `safety::prove`'s
+  single-fact form could not have closed 2b however it was wired. Verified: `f → g → f` with a
+  String reaching `f`'s `x + 1` now **Refuted**.
+- **Finiteness is C§13.3(2)'s instance-chain cutoff, not a budget.** A target whose *shape* already
+  appears on the discovery path is not instantiated; it is admitted as a `cutoff` node resolving to
+  the ladder's **(c) rung — unproven**. An existing candidate whose domain **covers** the target is
+  reused instead of minting a node, which is what collapses `countDown` into a self-loop component.
+  Tested: `f(5)` (a concrete chain, never covered) is **cut off, not expanded**, and stays unproven
+  rather than acquiring an invented covering domain.
+- **Measured:** mutual `f→g→f` Refuted · `countDown` over its declared domain Proven · a divergent
+  body (`f(n) = f(n)`) Proven **and terminating** (safety ≠ termination). Four graph tests pin these.
+- **One entry point.** `prove` *is* the graph now; the single-fact form is gone rather than left
+  beside it (`with_assumed` deleted — the joint pass installs a whole table).
+- **Correction that produced this.** I had proposed "next is the wiring." The author challenged it,
+  and the challenge was right: I had built a single-fact verifier and was about to wire a *fragment*
+  into `analyze_apply`. The graph is what the plan actually named, and 2b proves the difference is
+  not cosmetic.
+- **Still not wired** — `analyze_apply` calls `bodycheck::body_summary`, so the nine pins are
+  unmoved. That replacement (and deleting `check_recursive_body`/`reachable_rows`/`grow`) is the
+  next step, and *now* it is genuinely wiring.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-31 — The partition rule lands: `countDown` proves by induction, natively
 
 First working piece of the fact-graph build. **379 lib passed / 9 ignored (was 10), 111
