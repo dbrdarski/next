@@ -361,7 +361,7 @@ mod tests {
     //    row-set) SCC summary). Pinned as ignored; un-ignore when that engine lands. ──
 
     #[test]
-    #[ignore = "blocker 1b: coarse recursive target manufactures an unreached witness (false reject) — PARKED. Blocker: the finite row-set bound for a recursive call no fact covers (C§13.2/GR-03); `safety.rs` already discharges the covered case. Root: bodycheck.rs:213 binds the param to the ROW REGION, not the reaching domain. NOT a canonicalization issue. Do NOT import a reaching/widening engine to pass this"]
+    #[ignore = "blocker 1b: coarse recursive target manufactures an unreached witness (false reject) — PARKED. Blocker RE-FILED 2026-07-31 after an oracle check: grounding §4 EXACT-SINGLETON FACT CHAINS (owed). NOT the row-set fact graph. Reason: f(0.5) TRAPS (verified) and 0.5 is in the SAME ROW as 1, so BodySafe(f, {row x>0}) is genuinely FALSE — no row-set-keyed fact can prove f(1) safe. Proving it needs the exact chain 1 -> 0, i.e. a domain finer than a row. NOT a canonicalization issue, and NOT fixable by the fact graph alone. Do NOT import a reaching/widening engine to pass this"]
     fn rt14_inequality_recursion_does_not_manufacture_witness() {
         // f(1) → f(0) → 0 is safe. But `x - 1` analyzed over the whole `x > 0` region is
         // coarse `Number`, dragging in the `x < 0` branch (`x + "s"`) the call from 1 never

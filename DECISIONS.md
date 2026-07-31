@@ -11,6 +11,71 @@ Status tags mirror the compendium's vocabulary. Newest entries first.
 
 ---
 
+## 2026-07-31 — The partition rule lands: `countDown` proves by induction, natively
+
+First working piece of the fact-graph build. **379 lib passed / 9 ignored (was 10), 111
+conformance, clippy 0.** No reaching fixpoint, no widening, no synthesis.
+
+- **`safety::prove` now verifies per region-table row (§5's partition rule)** rather than the
+  whole body under `I`. `region::select` — until now **dead code** — is exactly the rule: it
+  returns each selected row already narrowed to `remaining ∩ row.region`. So the `n != 0` row of
+  `countDown`, intersected with the declared `n >= 0`, gives `n >= 1`.
+- **Two specified-but-unimplemented F0 entries completed** to make that land. Both were in the
+  author-reviewed F0 draft; I had skipped them:
+  1. **Singleton exclusion tightens an endpoint** — draft Part 3: *"`Difference(A,B)` → use A;
+     additionally, when B is a singleton at an endpoint of A's interval, tighten that endpoint to
+     strict."* `[0,∞) ∖ {0}` is now `(0,∞)`. Handles **both** point spellings, `Equals(v)` and
+     `Range(v,v)` — the region table emits the latter, and the spec's `Range(v,v) → Equals(v)`
+     normalization is still unenforced (recorded in `IMPLEMENTATION-STATUS` §1).
+  2. **Grid alignment** (`snap_to_lattice`) — an exclusive bound on an integer lattice snaps to the
+     next lattice point: over the integers `> -1` *is* `≥ 0`. Without it the two facets disagree
+     (interval says "above −1", congruence says "an integer") and their conjunction cannot be
+     recognised as `≥ 0`. Same idea as grounding's landing/grid step, applied to the abstraction.
+- **Measured result:** `row1 - 1` goes from `GreaterEq(-1)` (escaping the domain, `⊑ nonneg`
+  **Refuted** with witness `-1`) to `GreaterEq(0) ∧ Mod(1,0)`, `⊑ nonneg` **Proven** — so the
+  recursive call is discharged by the assumed fact and the body is never re-entered.
+  `declared_domain_recursion_proves_by_induction` **un-ignored**.
+- **The other nine pins are unmoved, and why:** they exercise `bodycheck::body_summary` — the
+  quarantined path — not `safety::prove`. Releasing them is the wiring step (T1.4), where
+  `body_summary` is replaced and `check_recursive_body` / `reachable_rows` / `grow` are deleted.
+  The mechanism now exists to replace it with.
+- **`// [ask-author]`:** none — both additions were already in the reviewed F0 draft.
+
+---
+
+## 2026-07-31 — Fact-graph design pass: scope fixed, and blocker 1b RE-FILED (oracle-verified)
+
+Started the C§13.2a fact-graph design by **reading** the normative text (app-induction §5/§6,
+C§13.2a/13.3) rather than inventing a mechanism. Two results, one of which corrects the plan.
+
+- **The spec already answers what `I` ranges over.** C§13.2a: fact nodes are `(analysis instance,
+  **row-set I**, demanded C)`; C§13.3(2) repeats it. I had proposed "step 1: a design pass to decide
+  what `I` ranges over" — that was about to design something already ruled. §6 likewise gives the
+  algorithm outright: seed from the program's safety obligations → discovery closure interning every
+  referenced candidate **and edge**, with *no verification during discovery* (premature unproven is
+  non-conforming) → SCC collapse → reverse-topological processing → **one joint vector pass** per
+  cyclic component. Failure kinds are given too (vector failure ⇒ all members per-compilation
+  unproven; individual refutation needs a **realized completing witness** `(e, x, v)`).
+- **BLOCKER 1b RE-FILED — it is NOT the fact graph.** Verified against the oracle, not reasoned:
+  for `f = (x) => x > 0 ? f(x-1) : (x == 0 ? 0 : x + "s")`, **`f(0.5)` traps** (`+ requires two
+  Numbers or two Strings`) while `f(1)` returns `0`. **`0.5` and `1` are in the same region-table
+  row.** Therefore `BodySafe(f, {row x>0})` is **genuinely false**, and *no* row-set-keyed fact can
+  prove `f(1)` safe however well the graph is built. Proving it needs a domain **finer than a row** —
+  the exact chain `1 → 0`, i.e. grounding **§4's exact-singleton fact chains under the native
+  exact-chain finiteness license**, a listed owed item. This is the third re-filing of 1b (after
+  "SCC summary", then "finite row-set bound"); the first two were reasoned, this one is measured.
+- **What the fact graph WILL release, on the same analysis:** `factorial` over `Number` (the
+  recursive `n-1 : Number ⊑ Number = I`, so the fact discharges directly); `countDown` over its
+  declared domain (needs §5's **partition rule** — verify per row, so `n≠0 ∧ n≥0 ⇒ n-1 ≥ 0`);
+  blocker 2b (mutual recursion resolves by ordinary proving — no canonicalization needed); blocker 3
+  (completion carried on the fact); and the remaining false positives. **Not** 1b; **not** 2a
+  (region-table §5 first).
+- **Method note.** The design pass paid for itself before any code: it caught a plan that would have
+  built the right feature while expecting it to release a test it cannot. Cost: two oracle runs.
+- **`// [ask-author]`:** none.
+
+---
+
 ## 2026-07-31 — RULING [user]: safety-unproven is an **Error**, not a Warning — landed
 
 **[user, 2026-07-31]:** *"Warning was an early wording and since then I'm leaning towards Error."*

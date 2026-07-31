@@ -264,10 +264,73 @@ pub(crate) fn num_abs(c: &Contract) -> Option<NumAbs> {
             };
             NumAbs { iv: hull(x.iv, y.iv), cong }
         }
-        // Dropping the exclusion only widens — sound for an image.
-        Contract::Difference(a, _) => num_abs(a)?,
+        // Dropping the exclusion only widens (sound) — but a **singleton exclusion sitting
+        // on an endpoint** tightens that endpoint instead of being lost: `[0,∞) ∖ {0}` is
+        // `(0,∞)`. This is what makes a guarded recursive step land back inside its domain
+        // (`n ≥ 0 ∧ n ≠ 0 ⇒ n ≥ 1 ⇒ n-1 ≥ 0`).
+        Contract::Difference(a, b) => {
+            let mut x = num_abs(a)?;
+            if let Some(q) = as_point(b) {
+                if matches!(&x.iv.low, Bound::Incl(l) if *l == q) {
+                    x.iv.low = Bound::Excl(q.clone());
+                }
+                if matches!(&x.iv.high, Bound::Incl(h) if *h == q) {
+                    x.iv.high = Bound::Excl(q);
+                }
+            }
+            snap_to_lattice(x)
+        }
         _ => return None,
     })
+}
+
+/// A numeric contract denoting exactly one value — `Equals(v)` or the `Range(v, v)` the
+/// spec says normalizes to it (that normalization is not enforced at construction, so both
+/// spellings reach here).
+fn as_point(c: &Contract) -> Option<Rational> {
+    match c {
+        Contract::Equals(v) => v.as_number().cloned(),
+        Contract::Range(l, h) if l == h => Some(l.clone()),
+        _ => None,
+    }
+}
+
+/// **Grid alignment.** An exclusive bound on an integer lattice snaps to the next lattice
+/// point and becomes inclusive: over the integers, `> -1` *is* `≥ 0`. Without this the
+/// interval and congruence facets disagree — the interval says "above −1", the lattice says
+/// "an integer" — and their conjunction cannot be recognised as `≥ 0`. (Same idea as
+/// grounding's landing/grid step, applied to the abstraction rather than to a descent.)
+fn snap_to_lattice(mut a: NumAbs) -> NumAbs {
+    let Some(c) = a.cong.clone().filter(|c| !c.n.is_zero()) else { return a };
+    if let Bound::Excl(q) = &a.iv.low
+        && let Some(next) = next_on_lattice(q, &c, true)
+    {
+        a.iv.low = Bound::Incl(next);
+    }
+    if let Bound::Excl(q) = &a.iv.high
+        && let Some(prev) = next_on_lattice(q, &c, false)
+    {
+        a.iv.high = Bound::Incl(prev);
+    }
+    a
+}
+
+/// The nearest lattice member strictly above (`up`) or below `q`, when `q` is an integer.
+fn next_on_lattice(q: &Rational, c: &Congruence, up: bool) -> Option<Rational> {
+    if !q.is_integer() {
+        return None;
+    }
+    let qi = q.as_ratio().numer().clone();
+    let step = if up { BigInt::from(1) } else { BigInt::from(-1) };
+    let mut v = &qi + &step;
+    // At most `n` steps to the next residue-matching integer.
+    for _ in 0..c.n.to_u32_digits().1.first().copied().unwrap_or(1).max(1) {
+        if (&v - &c.r).mod_floor(&c.n).is_zero() {
+            return Some(Rational::from_integer(v));
+        }
+        v += &step;
+    }
+    None
 }
 
 /// The hull (union) of two intervals: lowest low, highest high.

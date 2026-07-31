@@ -36,6 +36,7 @@
 
 use std::cell::RefCell;
 
+use crate::analyzer::region::{region_table, select};
 use crate::analyzer::{Finding, Severity, TypeEnv, analyze, bind_pattern};
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::env::Binding;
@@ -121,12 +122,69 @@ pub fn prove(
         return BodySafety::Unproven(vec![]); // not a known function — nothing to prove over
     };
     let fact = SafetyFact { callee: callee.clone(), input: args.to_vec() };
-    let findings = with_assumed(fact, || {
-        let mut env = capture_env(callee);
-        bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
-        analyze(&closure.lambda.body, &env, cenv, interner).findings
+    let findings = with_assumed(fact, || match (single_param(&closure.lambda.params), args) {
+        // **The partition rule (§5).** Verify row by row, each under `I ∩ row.region` —
+        // not the whole body under `I`. This is what lets `countDown` close: the `n != 0`
+        // row intersected with the declared `n >= 0` gives `n >= 1`, so `n - 1 >= 0` lands
+        // back inside `I` and the recursive call is discharged by the assumption.
+        (Some(param), [domain]) => verify_by_partition(callee, &closure, &param, domain, cenv, interner),
+        // Multi-parameter (region-table §5 owed): one whole-body pass, sound but coarse.
+        _ => {
+            let mut env = capture_env(callee);
+            bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+            analyze(&closure.lambda.body, &env, cenv, interner).findings
+        }
     });
     classify(findings)
+}
+
+/// Verify the fact **per region-table row** (§5's partition rule). `region::select`
+/// already narrows each selected row to `remaining ∩ row.region`, so each row is checked
+/// under exactly the part of `I` that reaches it.
+///
+/// **RT-14 witness discipline** is preserved: a finding from a non-exact (may-region) row
+/// is downgraded, because an over-approximate candidate authorizes no refutation. *(With
+/// only two severities that also makes it non-blocking; carrying "blocks but claims no
+/// witness" needs the third voice as a severity — recorded, not invented here.)*
+fn verify_by_partition(
+    callee: &ValueRef,
+    closure: &crate::value::Closure,
+    param: &str,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<Finding> {
+    let table = region_table(&closure.lambda.body, param, cenv);
+    let base = capture_env(callee);
+    let mut out = Vec::new();
+    for sel in select(&table, domain) {
+        let mut env = base.clone();
+        env.insert(param.to_string(), sel.region.clone());
+        for f in analyze(&sel.result, &env, cenv, interner).findings {
+            out.push(if sel.exact { f } else { downgrade(f) });
+        }
+    }
+    out
+}
+
+/// A may-region row cannot refute (RT-14): an `Error` becomes advisory.
+fn downgrade(f: Finding) -> Finding {
+    match f.severity {
+        Severity::Error => Finding { severity: Severity::Warning, ..f },
+        Severity::Warning => f,
+    }
+}
+
+/// The single bound parameter name, when the pattern is one plain binding.
+fn single_param(params: &crate::ast::Pat) -> Option<String> {
+    use crate::ast::{Pat, PatElem};
+    match params {
+        Pat::Tuple(elems) => match elems.as_slice() {
+            [PatElem::Pat(Pat::Bind(n))] => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Three-voiced from the body's findings: any refutation refutes; else any unproven
@@ -173,7 +231,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "FALSE POSITIVE exposed by the 2026-07-31 ruling (safety-unproven -> Error). These were green only because the finding was a Warning that analyze_apply's errors() filter discarded. Root: bodycheck.rs:213 computes the recursive target under the ROW REGION, which grows the reaching domain back up to Top, so `n - 1` can no longer be proven a Number. SAME ROOT AS BLOCKER 1b (parked). The programs are safe; the analyzer cannot currently prove it. Un-ignore when 1b's root is fixed. Do NOT fix by reverting the severity or by widening/reaching machinery."]
     fn declared_domain_recursion_proves_by_induction() {
         // The clean inductive case, and the point of the whole mechanism: with `I` the
         // declared domain, the recursive argument `n - 1` stays inside it, so the call is
