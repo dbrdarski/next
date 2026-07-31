@@ -3,10 +3,16 @@
 //! only the unproven-*consequence* (P-1, warn-vs-reject) is an open policy pick).
 //!
 //! Grounding proves a recursive call over an input domain is **well-founded** — it
-//! descends toward a base and lands there (GR-05) — so the domain-indexed body check may
-//! stop unfolding a recursion instead of chasing a domain that grows without end. This is
-//! the specified replacement for the old machine's widening as the analysis's termination
-//! bound. It is a *termination* judgment, **not** a safe-input-domain deriver.
+//! descends toward a base and lands there (GR-05). It is a **behavioural judgment about the
+//! program's recursion**, and a *termination* judgment, **not** a safe-input-domain deriver.
+//!
+//! **It does NOT bound or terminate the analyzer's own unfolding** [corrected 2026-07-31 —
+//! the previous claim that grounding "lets the body check stop unfolding" and "replaces
+//! widening as the analysis's termination bound" was superseded and is removed]. C§13.3
+//! bounds the symbolic procedure independently of whether any runtime recursion is grounded;
+//! a non-terminating program is simply *Unproven* here, so grounding could not serve as an
+//! analysis cutoff even in principle. Using it as one is forbidden
+//! (`IMPLEMENTATION-STATUS.md` §5).
 //!
 //! **Scope of this increment (G-1) — the numeric constant-drift descent certificate**
 //! (GR-05), for a single-parameter self-recursive numeric function whose every recursive
@@ -79,15 +85,31 @@ use crate::interner::Interner;
 use crate::rational::Rational;
 use crate::value::{Closure, ValueRef};
 
+/// The **persistent evidence a refutation must carry** (§7 / GR-23): the admitted
+/// represented-exact **root witness** the forced orbit starts from, plus the certificate
+/// that the orbit misses every base. A refutation without this cannot be diagnosed or
+/// re-checked, so the verdict carries it rather than recomputing or discarding it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Refutation {
+    /// The admitted represented-exact start, taken from the call's own written argument
+    /// domain — never synthesized (the constructed-witness inventory is ruled empty).
+    pub witness: Rational,
+    /// The forced constant drift of the single admitted recursive transition.
+    pub drift: Rational,
+    /// The base regions the forward orbit `{witness + drift·k : k ≥ 0}` provably misses.
+    pub missed_bases: Vec<Contract>,
+}
+
 /// A grounding verdict (GR-04 / GR-28).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Verdict {
-    /// Well-founded descent **and** landing proven — the recursion terminates on this
-    /// domain, so the analysis may stop unfolding it.
+    /// Well-founded descent **and** landing proven — the recursion terminates on this domain.
+    /// (This is a statement about the *program*; it does not license any analyzer cutoff.)
     Grounded,
-    /// A represented-exact witness forces nontermination (§7) — minted by the constant-drift
-    /// certificate (GR-23a drift-away, its ascending mirror, and the period-1 closed orbit).
-    Refuted,
+    /// A represented-exact witness forces nontermination (§7), carrying its [`Refutation`]
+    /// certificate — minted by the constant-drift certificate (GR-23a drift-away, its
+    /// ascending mirror, and the period-1 closed orbit).
+    Refuted(Refutation),
     /// No candidate proved and no witness refuted (GR-04) — the sound default.
     Unproven,
 }
@@ -108,9 +130,9 @@ pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner
         return Verdict::Grounded;
     }
     if let Some(start) = point_value(domain)
-        && drift_away(callee, &start, cenv)
+        && let Some(refutation) = drift_away(callee, &start, cenv)
     {
-        return Verdict::Refuted;
+        return Verdict::Refuted(refutation);
     }
     Verdict::Unproven
 }
@@ -182,38 +204,157 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
 /// orbit** (GR-11's degenerate case — `f(n)` recurring on itself). Because the orbit
 /// includes the start (`k = 0`), a start already in a base is correctly rejected. Sound:
 /// `true` only when the miss is certain.
-fn drift_away(callee: &ValueRef, start: &Rational, cenv: &ContractEnv) -> bool {
-    let Some(closure) = callee.as_closure() else { return false };
-    let Some(param) = single_param(&closure.lambda.params) else { return false };
+fn drift_away(callee: &ValueRef, start: &Rational, cenv: &ContractEnv) -> Option<Refutation> {
+    let closure = callee.as_closure()?;
+    let param = single_param(&closure.lambda.params)?;
     let rows = region_table(&closure.lambda.body, &param, cenv);
 
     let mut bases = Vec::new();
     let mut drift = None;
     let mut rec_rows = 0;
     for row in &rows {
+        // **Forced-path selection (GR-23).** A recursive transition may be admitted only
+        // when the path to it is *forced*; syntactic presence of a self-call is not
+        // sufficient. `forced_self_calls` collects only calls reached under no unproven
+        // selection, and reports when one was found *behind* a nested conditional — in
+        // which case this candidate declines outright rather than treating a conditional
+        // edge as taken (which produced a **false refutation** of a terminating program).
         let mut calls = Vec::new();
-        collect_self_calls(&row.result, &closure, callee, &mut calls);
+        if !forced_self_calls(&row.result, &closure, callee, &mut calls) {
+            return None; // a self-call behind an unproven selection — transition not forced
+        }
         if calls.is_empty() {
             bases.push(row.region.clone());
         } else {
             rec_rows += 1;
             if calls.len() != 1 {
-                return false; // branching recursion — not a single forced path
+                return None; // branching recursion — not a single forced path
             }
-            let Some(arg) = calls[0].first() else { return false };
-            match position_drift(arg, &param) {
-                Some(d) => drift = Some(d),
-                None => return false,
-            }
+            let arg = calls[0].first()?;
+            drift = Some(position_drift(arg, &param)?);
         }
     }
-    let Some(d) = drift else { return false };
+    let d = drift?;
     if rec_rows != 1 {
-        return false; // not a single forced path
+        return None; // not a single forced path
     }
     // A forced orbit that misses every base ⇒ never lands ⇒ diverges. `!reaches` over the
     // whole orbit is both base-disjointness (v) and transition closure (vi).
-    bases.iter().all(|b| !reaches(start, &d, b))
+    if !bases.iter().all(|b| !reaches(start, &d, b)) {
+        return None;
+    }
+    Some(Refutation { witness: start.clone(), drift: d, missed_bases: bases })
+}
+
+/// Collect the self-calls in `e` that lie on the **forced path** — those reached under no
+/// unproven selection — returning `false` when a self-call was found *off* it.
+///
+/// GR-23 admits a recursive transition only under exact selection (or another applicable
+/// must-condition) at **every** step. A call inside a nested `Match`'s items is taken only
+/// if that arm is selected, which this layer does not prove, so its presence makes the
+/// transition unforced. A `Match` **scrutinee** is always evaluated and stays on the forced
+/// path. Everything else evaluates unconditionally and recurses normally.
+///
+/// Note this discipline is required only for **refutation** (which must exhibit a forced
+/// divergent path). The descent side is unaffected: a merely *conditional* recursive call
+/// still has to descend when taken, so `numeric_descent` continues to read every
+/// syntactically present self-call.
+fn forced_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) -> bool {
+    let mut forced = true;
+    match e {
+        Expr::Const(_) | Expr::Ref(_) => {}
+        Expr::Lambda(_) => {} // a distinct instance — not this body's recursion
+        Expr::Apply { callee, args } => {
+            if resolves_to_target(callee, closure, std::slice::from_ref(cv)) {
+                let mut positional = Vec::new();
+                for a in args {
+                    match a {
+                        Arg::Expr(x) => positional.push(x.clone()),
+                        Arg::Spread(_) => return false, // no positional mapping — decline
+                    }
+                }
+                out.push(positional);
+            }
+            forced &= forced_self_calls(callee, closure, cv, out);
+            for a in args {
+                let (Arg::Expr(x) | Arg::Spread(x)) = a;
+                forced &= forced_self_calls(x, closure, cv, out);
+            }
+        }
+        Expr::PrimOp { args, .. } => {
+            for a in args {
+                forced &= forced_self_calls(a, closure, cv, out);
+            }
+        }
+        Expr::Match(m) => {
+            // The scrutinee always evaluates — still forced.
+            if let Some(s) = &m.scrutinee {
+                forced &= forced_self_calls(s, closure, cv, out);
+            }
+            // The items are selection-dependent: any self-call inside is NOT forced.
+            for item in &m.items {
+                let mut probe = Vec::new();
+                for sub in item_exprs(item) {
+                    collect_self_calls(sub, closure, cv, &mut probe);
+                }
+                if !probe.is_empty() {
+                    forced = false;
+                }
+            }
+        }
+        Expr::TupleCons(els) => {
+            for el in els {
+                let (Element::Expr(x) | Element::Spread(x)) = el;
+                forced &= forced_self_calls(x, closure, cv, out);
+            }
+        }
+        Expr::RecordCons(fs) => {
+            for f in fs {
+                match f {
+                    Field::Field { value, .. } | Field::Spread(value) => {
+                        forced &= forced_self_calls(value, closure, cv, out);
+                    }
+                    Field::Computed { key, value } => {
+                        forced &= forced_self_calls(key, closure, cv, out);
+                        forced &= forced_self_calls(value, closure, cv, out);
+                    }
+                }
+            }
+        }
+        Expr::Access { target, form, .. } => {
+            forced &= forced_self_calls(target, closure, cv, out);
+            match form {
+                AccessForm::Field(_) => {}
+                AccessForm::Index(x) => forced &= forced_self_calls(x, closure, cv, out),
+                AccessForm::Slice { lo, hi } => {
+                    for x in [lo, hi].into_iter().flatten() {
+                        forced &= forced_self_calls(x, closure, cv, out);
+                    }
+                }
+            }
+        }
+        Expr::Template(parts) => {
+            for p in parts {
+                if let TemplatePart::Interp(x) = p {
+                    forced &= forced_self_calls(x, closure, cv, out);
+                }
+            }
+        }
+        Expr::Write { value, .. } => forced &= forced_self_calls(value, closure, cv, out),
+    }
+    forced
+}
+
+/// The sub-expressions of a `Match` item (all selection-dependent).
+fn item_exprs(item: &MatchItem) -> Vec<&Expr> {
+    match item {
+        MatchItem::Bind(b) => vec![&b.value],
+        MatchItem::Stmt(x) => vec![x],
+        MatchItem::Arm(a) => match &a.guard {
+            Some(g) => vec![g, &a.result],
+            None => vec![&a.result],
+        },
+    }
 }
 
 /// Whether the arithmetic progression `{ start + d·k : k ≥ 0 }` reaches `base` — the forward
@@ -868,14 +1009,14 @@ mod tests {
     use crate::oracle::harness::run_source_in;
 
     /// `GE(0) ∧ Mod(1,0)` — the non-negative integers, factorial's / countDown's domain.
-    fn nonneg_ints() -> Contract {
+    pub(super) fn nonneg_ints() -> Contract {
         Contract::Intersection(
             Box::new(Contract::GreaterEq(Rational::from(0))),
             Box::new(Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }),
         )
     }
 
-    fn f(src: &str, i: &mut Interner) -> ValueRef {
+    pub(super) fn f(src: &str, i: &mut Interner) -> ValueRef {
         run_source_in(src, i).unwrap().0
     }
 
@@ -938,7 +1079,7 @@ mod tests {
         let mut i = Interner::new();
         let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
         let one = Contract::Equals(i.integer(1));
-        assert_eq!(ground(&step2, &one, &ContractEnv::new(), &mut i), Verdict::Refuted);
+        assert!(matches!(ground(&step2, &one, &ContractEnv::new(), &mut i), Verdict::Refuted(_)));
     }
 
     #[test]
@@ -959,7 +1100,7 @@ mod tests {
         let mut i = Interner::new();
         let s = f("f = (n) => n == 0 ? 0 : f(n)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        assert_eq!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted);
+        assert!(matches!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted(_)));
     }
 
     #[test]
@@ -969,7 +1110,7 @@ mod tests {
         let mut i = Interner::new();
         let s = f("f = (n) => n == 0 ? 0 : f(n + 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        assert_eq!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted);
+        assert!(matches!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted(_)));
     }
 
     #[test]
@@ -1124,5 +1265,67 @@ mod tests {
         let mut i = Interner::new();
         let s = f("f = (n, acc) => acc <= 0 ? n : f(n, acc)\nf", &mut i);
         assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+    }
+}
+
+#[cfg(test)]
+mod review_gates {
+    use super::tests::{f, nonneg_ints};
+    use super::*;
+
+    #[test]
+    fn forced_path_discipline_is_narrow_not_blanket() {
+        // The forced-path rule must not simply refuse every recursion. A self-call that IS
+        // the row result is on the forced path, so the legitimate refutations still stand
+        // (checked by the G-2 tests above) — and grounding a descent is unaffected, because
+        // the descent side reads every syntactically present call (a conditional call must
+        // still descend when taken).
+        let mut i = Interner::new();
+        let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        assert_eq!(
+            ground(&cd, &nonneg_ints(), &ContractEnv::new(), &mut i),
+            Verdict::Grounded,
+            "descent is unaffected by the refutation-side forced-path rule"
+        );
+        // And a *conditionally* recursive body still grounds when it descends.
+        let g = f("flag = true\ng = (n) => n <= 0 ? 0 : (flag ? g(n - 1) : 0)\ng", &mut i);
+        assert_ne!(
+            ground(&g, &nonneg_ints(), &ContractEnv::new(), &mut i),
+            Verdict::Unproven,
+            "a descending conditional recursion is still judged, not abandoned"
+        );
+    }
+
+    #[test]
+    fn refutation_carries_its_witness_and_certificate() {
+        // §7: a refutation must persist its admitted represented-exact root witness and the
+        // certificate (drift + the bases the orbit misses), not recompute or discard them.
+        let mut i = Interner::new();
+        let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
+        let one = Contract::Equals(i.integer(1));
+        match ground(&step2, &one, &ContractEnv::new(), &mut i) {
+            Verdict::Refuted(r) => {
+                assert_eq!(r.witness, Rational::from(1), "the admitted written start");
+                assert_eq!(r.drift, Rational::from(-2), "the forced constant drift");
+                assert!(!r.missed_bases.is_empty(), "the bases the orbit provably misses");
+            }
+            other => panic!("expected a witness-bearing refutation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn captured_false_guard_must_not_refute() {
+        // `flag` is false, so at f(1) the recursive edge is NEVER taken:
+        // n != 0 -> flag false -> 0. The program TERMINATES.
+        // The walker still sees one self-call in the recursive row; drift -2 from the
+        // witness 1 walks 1, -1, -3, ... missing the point base 0 -> refutes.
+        let mut i = Interner::new();
+        let src = "flag = false\nf = (n) => n == 0 ? 0 : (flag ? f(n - 2) : 0)\nf";
+        let fv = f(src, &mut i);
+        let one = Contract::Equals(i.integer(1));
+        assert!(
+            !matches!(ground(&fv, &one, &ContractEnv::new(), &mut i), Verdict::Refuted(_)),
+            "FALSE REFUTATION: f(1) terminates because the guard `flag` is false"
+        );
     }
 }

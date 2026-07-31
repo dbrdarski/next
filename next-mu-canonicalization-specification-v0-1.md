@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT — μ-Canonicalization Specification v0.1
 
 **Date: 2026-07-17. Status:** the owed C§17 item, now fully specifiable — its one user input landed (open-value identity = shape, via strict openness [user, 2026-07-17]; the two-steps-of-y principle; bisimulation collapse embraced; locations nominal per the split rule). Normative for build step 4 (the canonicalizer). One algorithm, three clients: canonical code (function shape, layer 2, cache keys), function value equality (layer 1), and recursive contracts (C§9). Flips the suite's PENDING-§5 register when implemented.

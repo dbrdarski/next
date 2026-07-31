@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # Implementation finding — body safety is built in the wrong layer
 
 **From:** the implementation side (Claude Code), 2026-07-26

@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT Implementation Review — Archive(9)
 
 **Review focus:** verification of the `InstanceBodySummary` unification, `(instance, input-domain)` recursion identity, multi-callee enumeration, recursive-domain generalization, termination guarantees, and readiness to proceed to AP-30.

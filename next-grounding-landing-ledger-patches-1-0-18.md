@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT — Grounding Landing: Ledger Patch Bundle (compendium 1.0.18 + satellites)
 
 **Date:** 2026-07-30 · **Trigger:** the author's stamp on Grounding Specification v0.5 (patch 0.5.1, hash `195dd2b92cdbae1ebe5d1fb001bccd5adadfe280d0574d9529e688e7249bfc94`) — four hostile rounds (10 → 9 → 4 → 2 findings), final ACCEPTED with two remarks applied. This bundle contains the four flagged LEDGER CHANGES exactly as registered in the spec's §16; apply each to its file, then re-hash the four files into `MANIFEST_sha256.txt` alongside the spec's hash above. No rule content changes anywhere — status, pointers, one seat row, and one test phase.

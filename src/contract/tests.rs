@@ -454,6 +454,167 @@ fn operation_comparison_and_neg() {
     assert!(matches!(bad.safety, OpSafety::Refuted(_)));
 }
 
+// ── The rulebook's precision claims (C§7 / C§17 per-pair tables) ─────────────
+//
+// The sweep below proves the table **sound**; these prove it **useful**. Returning
+// `Kind(Number)` everywhere would pass the sweep and fail every row here.
+
+fn out(op: PrimOp, ins: &[Contract], i: &mut Interner) -> Contract {
+    analyze_operation(op, ins, i).output
+}
+
+fn nonneg_ints() -> Contract {
+    Contract::Intersection(
+        Box::new(Contract::GreaterEq(r(0))),
+        Box::new(Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }),
+    )
+}
+
+#[test]
+fn rulebook_additive_bounds_compose() {
+    let mut i = Interner::new();
+    // Half-lines compose — the gap that motivated F0 (the algebra has no infinity,
+    // so half-lines *are* the unbounded form).
+    assert_eq!(
+        out(PrimOp::Add, &[Contract::GreaterEq(r(8)), Contract::GreaterEq(r(10))], &mut i),
+        Contract::GreaterEq(r(18))
+    );
+    // Strictness rides along: inclusive only when both are.
+    assert_eq!(
+        out(PrimOp::Add, &[Contract::Greater(r(0)), Contract::GreaterEq(r(5))], &mut i),
+        Contract::Greater(r(5))
+    );
+    // Subtraction pairs each bound with the subtrahend's *opposite* bound.
+    assert_eq!(
+        out(PrimOp::Sub, &[Contract::Range(r(0), r(10)), Contract::Greater(r(0))], &mut i),
+        Contract::Less(r(10))
+    );
+    // Negation flips a half-line.
+    assert_eq!(out(PrimOp::Neg, &[Contract::GreaterEq(r(3))], &mut i), Contract::LessEq(r(-3)));
+}
+
+#[test]
+fn rulebook_congruence_survives_additive_ops() {
+    let mut i = Interner::new();
+    let one = Contract::Equals(i.integer(1));
+    // The non-negative integers minus 1 are still **integers** ≥ −1 — integrality
+    // survives `−` because an exact operand is a congruence with modulus 0.
+    let got = out(PrimOp::Sub, &[nonneg_ints(), one.clone()], &mut i);
+    let want = Contract::Intersection(
+        Box::new(Contract::GreaterEq(r(-1))),
+        Box::new(Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }),
+    );
+    assert_eq!(got, want, "integrality must survive `- 1`");
+    // even + 2 is even.
+    let evens = Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) };
+    let two = Contract::Equals(i.integer(2));
+    assert_eq!(out(PrimOp::Add, &[evens.clone(), two], &mut i), evens);
+    // Scaling (C§7): even × 3 lands on multiples of 6.
+    let three = Contract::Equals(i.integer(3));
+    assert_eq!(
+        out(PrimOp::Mul, &[evens, three], &mut i),
+        Contract::Mod { n: BigInt::from(6), r: BigInt::from(0) }
+    );
+}
+
+#[test]
+fn rulebook_multiplicative_signs_and_form_preservation() {
+    let mut i = Interner::new();
+    // Corner products under extended arithmetic — no sign-class special-casing.
+    assert_eq!(
+        out(PrimOp::Mul, &[Contract::Range(r(-5), r(2)), Contract::Range(r(3), r(4))], &mut i),
+        Contract::Range(r(-20), r(8))
+    );
+    // `0 · ∞ = 0` keeps a non-negative half-line non-negative rather than unbounded.
+    assert_eq!(
+        out(PrimOp::Mul, &[Contract::GreaterEq(r(0)), Contract::GreaterEq(r(0))], &mut i),
+        Contract::GreaterEq(r(0))
+    );
+    // Table C — form preservation: scaling a geometric sequence stays geometric.
+    let geo = Contract::Geo { b: r(2), r: r(3) };
+    let four = Contract::Equals(i.integer(4));
+    assert_eq!(
+        out(PrimOp::Mul, &[geo, four], &mut i),
+        Contract::Geo { b: r(8), r: r(3) }
+    );
+}
+
+#[test]
+fn rulebook_comparisons_decide_when_bounds_decide() {
+    let mut i = Interner::new();
+    let (t, f) = (Contract::Equals(i.boolean(true)), Contract::Equals(i.boolean(false)));
+    // Disjoint ranges settle the comparison — this is what lets a guard resolve.
+    assert_eq!(
+        out(PrimOp::Lt, &[Contract::Range(r(0), r(5)), Contract::GreaterEq(r(10))], &mut i),
+        t
+    );
+    assert_eq!(
+        out(PrimOp::Ge, &[Contract::Range(r(0), r(5)), Contract::GreaterEq(r(10))], &mut i),
+        f
+    );
+    // Touching at an included point: `≤` holds everywhere, `<` does not.
+    assert_eq!(
+        out(PrimOp::Le, &[Contract::LessEq(r(3)), Contract::GreaterEq(r(3))], &mut i),
+        t
+    );
+    assert_eq!(
+        out(PrimOp::Lt, &[Contract::LessEq(r(3)), Contract::GreaterEq(r(3))], &mut i),
+        Contract::Kind(Kind::Boolean)
+    );
+    // Overlapping ranges stay honestly undecided.
+    assert_eq!(
+        out(PrimOp::Lt, &[Contract::Range(r(0), r(10)), Contract::Range(r(5), r(20))], &mut i),
+        Contract::Kind(Kind::Boolean)
+    );
+}
+
+#[test]
+fn rulebook_division_is_total_and_remainder_is_bounded() {
+    let mut i = Interner::new();
+    // Total division: a possibly-zero divisor adds the Indeterminate forms rather
+    // than trapping.
+    let res = analyze_operation(PrimOp::Div, &[Contract::Range(r(1), r(4)), Contract::Range(r(0), r(2))], &mut i);
+    assert!(matches!(res.safety, OpSafety::Proven), "division never traps");
+    let div0 = i.indeterminate(crate::value::IndetForm::DivByZero);
+    assert!(res.output.contains(&div0), "the image must carry `_/0`");
+    // `%` is bounded by the divisor's magnitude, with the sign following the dividend.
+    let rem = out(PrimOp::Rem, &[Contract::GreaterEq(r(0)), Contract::Range(r(3), r(5))], &mut i);
+    for v in [0, 1, 4] {
+        let x = i.integer(v);
+        assert!(rem.contains(&x), "{v} is a possible non-negative remainder: {rem:?}");
+    }
+    let neg = i.integer(-1);
+    assert!(!rem.contains(&neg), "a non-negative dividend cannot give a negative remainder: {rem:?}");
+}
+
+#[test]
+fn rulebook_safety_admits_indeterminate_in_arithmetic_but_not_comparisons() {
+    let mut i = Interner::new();
+    let indet = Contract::Indeterminate(crate::value::IndetForm::DivByZero);
+    let num = Contract::Kind(Kind::Number);
+
+    // Arithmetic *propagates* an Indeterminate (the oracle checks for it first and
+    // returns it unchanged), so this is provably SAFE — it used to read `Unproven`.
+    for op in [PrimOp::Add, PrimOp::Sub, PrimOp::Mul, PrimOp::Div, PrimOp::Rem, PrimOp::Pow] {
+        let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
+        assert!(matches!(res.safety, OpSafety::Proven), "{op:?} on Indeterminate must be Proven");
+    }
+    let res = analyze_operation(PrimOp::Neg, std::slice::from_ref(&indet), &mut i);
+    assert!(matches!(res.safety, OpSafety::Proven), "unary `-` on Indeterminate must be Proven");
+
+    // An ordering comparison traps `UndischargedIndeterminate` instead — never Proven.
+    for op in [PrimOp::Lt, PrimOp::Le, PrimOp::Gt, PrimOp::Ge] {
+        let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
+        assert!(!matches!(res.safety, OpSafety::Proven), "{op:?} on Indeterminate must not be Proven");
+    }
+
+    // `==`/`!=` are total on every value, Indeterminate included.
+    for op in [PrimOp::Eq, PrimOp::Ne] {
+        let res = analyze_operation(op, &[indet.clone(), Contract::Top], &mut i);
+        assert!(matches!(res.safety, OpSafety::Proven), "{op:?} is total");
+    }
+}
+
 #[test]
 fn operation_soundness_sweep() {
     // Brute-force every operation over a grid of input contracts against the
@@ -461,23 +622,55 @@ fn operation_soundness_sweep() {
     // `Proven` safety must never trap, and a `Refuted` witness must trap.
     let mut i = Interner::new();
 
+    // The **coverage matrix**: every numeric leaf form the rulebook claims to read,
+    // with sign variants (a single all-positive representative hides sign bugs in
+    // `*`, `/`, `%`), plus the composites and the non-numeric forms.
+    let ints = |n: i64, rr: i64| Contract::Mod { n: BigInt::from(n), r: BigInt::from(rr) };
     let inputs = vec![
+        // non-numeric / catch-all
         Contract::Top,
+        Contract::Bottom,
         Contract::Kind(Kind::Number),
         Contract::Kind(Kind::String),
         Contract::Kind(Kind::Boolean),
+        // Range — the three sign positions
         Contract::Range(r(0), r(10)),
         Contract::Range(r(-5), r(5)),
+        Contract::Range(r(-8), r(-2)),
+        // half-lines — both directions, both signs, both strictnesses
         Contract::Greater(r(0)),
+        Contract::GreaterEq(r(2)),
+        Contract::GreaterEq(r(-3)),
+        Contract::Less(r(0)),
+        Contract::LessEq(r(-1)),
+        Contract::LessEq(r(4)),
+        // exact points, including a non-integer (no congruence) and negatives
         Contract::Equals(i.integer(0)),
+        Contract::Equals(i.integer(2)),
+        Contract::Equals(i.integer(-3)),
+        Contract::Equals(i.number(rat(1, 2))),
+        // the integer lattice
+        ints(1, 0), // all integers
+        ints(2, 0), // evens
+        ints(3, 1),
+        // geometric, both signs
+        Contract::Geo { b: r(2), r: r(3) },
+        Contract::Geo { b: r(-2), r: r(3) },
+        // composites
+        Contract::Intersection(Box::new(Contract::GreaterEq(r(0))), Box::new(ints(1, 0))),
+        Contract::Union(Box::new(Contract::Equals(i.integer(2))), Box::new(Contract::Equals(i.integer(6)))),
+        Contract::Difference(Box::new(Contract::Range(r(0), r(10))), Box::new(Contract::Equals(i.integer(5)))),
+        // Indeterminate — both forms
         Contract::Indeterminate(crate::value::IndetForm::DivByZero),
+        Contract::Indeterminate(crate::value::IndetForm::ZeroOverZero),
     ];
 
     let mut pool: Vec<ValueRef> = Vec::new();
-    for v in [-5, -2, 0, 1, 2, 3, 7, 10, 100] {
+    for v in [-8, -5, -3, -2, -1, 0, 1, 2, 3, 4, 6, 7, 10, 100] {
         pool.push(i.integer(v));
     }
     pool.push(i.number(rat(1, 2)));
+    pool.push(i.number(rat(-1, 2)));
     pool.push(i.string("a"));
     pool.push(i.boolean(true));
     pool.push(i.null());

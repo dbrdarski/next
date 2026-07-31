@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT Implementation Review — Archive(8)
 
 **Review focus:** verification of the Archive(7 body-safety corrections, the new edge-following safety mechanism, recursion cutoff identity, multi-callee safety, and whether body safety is ready to proceed to AP-30.

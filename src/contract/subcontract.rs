@@ -17,6 +17,7 @@
 use num_bigint::BigInt;
 use num_traits::Zero;
 
+use super::numeric::{interval_exact, interval_subset, intervals_disjoint};
 use super::{Contract, Kind as VKind};
 use crate::interner::Interner;
 use crate::rational::Rational;
@@ -103,7 +104,7 @@ fn atom_provable(a: &Contract, b: &Contract) -> bool {
         (Record(fa), Record(fb)) => record_subset(fa, fb),
         (Tuple(ea), Tuple(eb)) => ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| provable(x, y)),
         (Indeterminate(f1), Indeterminate(f2)) => f1 == f2,
-        _ => match (interval_of(a), interval_of(b)) {
+        _ => match (interval_exact(a), interval_exact(b)) {
             (Some(ia), Some(ib)) => interval_subset(&ia, &ib),
             _ => false,
         },
@@ -124,82 +125,6 @@ fn record_subset(fa: &[(String, Contract)], fb: &[(String, Contract)]) -> bool {
 /// — i.e. `n2 | n1` and `r1 ≡ r2 (mod n2)`.
 fn mod_subset(n1: &BigInt, r1: &BigInt, n2: &BigInt, r2: &BigInt) -> bool {
     !n2.is_zero() && (n1 % n2).is_zero() && ((r1 - r2) % n2).is_zero()
-}
-
-// ── Intervals ────────────────────────────────────────────────────────────────
-
-/// A numeric interval as `(low, high)` bounds; `None` = unbounded.
-struct Interval {
-    low: Bound,
-    high: Bound,
-}
-enum Bound {
-    Unbounded,
-    /// inclusive
-    Incl(Rational),
-    /// exclusive
-    Excl(Rational),
-}
-
-fn interval_of(c: &Contract) -> Option<Interval> {
-    Some(match c {
-        Contract::Range(lo, hi) => Interval { low: Bound::Incl(lo.clone()), high: Bound::Incl(hi.clone()) },
-        Contract::Greater(m) => Interval { low: Bound::Excl(m.clone()), high: Bound::Unbounded },
-        Contract::GreaterEq(m) => Interval { low: Bound::Incl(m.clone()), high: Bound::Unbounded },
-        Contract::Less(m) => Interval { low: Bound::Unbounded, high: Bound::Excl(m.clone()) },
-        Contract::LessEq(m) => Interval { low: Bound::Unbounded, high: Bound::Incl(m.clone()) },
-        // Landing zones: an intersection of intervals is their meet (C§4).
-        Contract::Intersection(a, b) => meet(interval_of(a)?, interval_of(b)?),
-        _ => return None,
-    })
-}
-
-/// The meet (intersection) of two intervals: highest low, lowest high.
-fn meet(a: Interval, b: Interval) -> Interval {
-    let low = if low_ge(&a.low, &b.low) { a.low } else { b.low };
-    let high = if high_le(&a.high, &b.high) { a.high } else { b.high };
-    Interval { low, high }
-}
-
-/// `A ⊆ B` for intervals: A's low is no lower than B's, and A's high no higher.
-fn interval_subset(a: &Interval, b: &Interval) -> bool {
-    low_ge(&a.low, &b.low) && high_le(&a.high, &b.high)
-}
-
-/// A's lower bound starts at or above B's lower bound.
-fn low_ge(a: &Bound, b: &Bound) -> bool {
-    match (a, b) {
-        (_, Bound::Unbounded) => true,        // B extends infinitely down
-        (Bound::Unbounded, _) => false,       // A extends below B
-        (a, b) => {
-            let (va, sa) = bound_parts(a);
-            let (vb, sb) = bound_parts(b);
-            // ok iff A's lowest allowed value ≥ B's lowest allowed value.
-            va > vb || (va == vb && (sa || !sb)) // equal: bad only if A inclusive & B exclusive
-        }
-    }
-}
-
-/// A's upper bound ends at or below B's upper bound.
-fn high_le(a: &Bound, b: &Bound) -> bool {
-    match (a, b) {
-        (_, Bound::Unbounded) => true,
-        (Bound::Unbounded, _) => false,
-        (a, b) => {
-            let (va, sa) = bound_parts(a);
-            let (vb, sb) = bound_parts(b);
-            va < vb || (va == vb && (sa || !sb))
-        }
-    }
-}
-
-/// `(value, strict)` for a finite bound.
-fn bound_parts(b: &Bound) -> (&Rational, bool) {
-    match b {
-        Bound::Incl(v) => (v, false),
-        Bound::Excl(v) => (v, true),
-        Bound::Unbounded => unreachable!(),
-    }
 }
 
 // ── Disjointness and emptiness (sound; `true` only when provable) ─────────────
@@ -226,27 +151,10 @@ pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
         (Intersection(a1, a2), other) | (other, Intersection(a1, a2)) => {
             disjoint(a1, other) || disjoint(a2, other)
         }
-        _ => match (interval_of(a), interval_of(b)) {
+        _ => match (interval_exact(a), interval_exact(b)) {
             (Some(ia), Some(ib)) => intervals_disjoint(&ia, &ib),
             _ => false,
         },
-    }
-}
-
-fn intervals_disjoint(a: &Interval, b: &Interval) -> bool {
-    // Disjoint iff a is entirely below b, or entirely above b.
-    below(&a.high, &b.low) || below(&b.high, &a.low)
-}
-
-/// `high` bound is strictly below `low` bound (no overlap point).
-fn below(high: &Bound, low: &Bound) -> bool {
-    match (high, low) {
-        (Bound::Unbounded, _) | (_, Bound::Unbounded) => false,
-        (h, l) => {
-            let (vh, sh) = bound_parts(h);
-            let (vl, sl) = bound_parts(l);
-            vh < vl || (vh == vl && (sh || sl)) // touching point excluded by either side
-        }
     }
 }
 

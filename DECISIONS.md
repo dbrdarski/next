@@ -1,8 +1,271 @@
+> ## 📒 STATUS: **CURRENT as an append-only provenance log**
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Newest dated entry
+> wins per topic; **individual older entries are HISTORICAL** and must not be read as present-tense
+> guidance. Entries are never edited after the fact.
+
 # DECISIONS.md — NEXT implementation changelog
 
 Provenance discipline (CLAUDE.md § Process): what the specs **mandated**, what I
 **chose** where a representation was left open, and what I'm **asking** the author.
 Status tags mirror the compendium's vocabulary. Newest entries first.
+
+---
+
+## 2026-07-31 — RULING [user]: safety-unproven is an **Error**, not a Warning — landed
+
+**[user, 2026-07-31]:** *"Warning was an early wording and since then I'm leaning towards Error."*
+This aligns the implementation with late-resolution §5 (*"Safety-unproven → compile error.
+Un-suppressible; the Mutators-cannot-fail theorem stands on exactly this"*). **378 lib passed /
+10 ignored (was 4), 111 conformance, clippy 0.**
+
+- **The change.** Ten safety-unproven emission sites in `analyzer/mod.rs` flipped `Warning → Error`:
+  operation safety, field/index/slice access, unknown callee, not-a-function (uninhabited),
+  argument obligation, spread kind, destructuring irrefutability, guard Boolean.
+  **Deliberately NOT changed:** `demand()`'s `MayFallThrough` (line 127) — *completion* is a
+  different judgment class (application §1.6: a merely-possible fall-through is the third voice,
+  never a rejection). Flagged rather than assumed.
+- **Seven tests moved. They split into exactly two kinds — the author's framing, and it was right.**
+  - **(a) The test encoded the old policy → updated (1).** `open_field_access_reasoning` asserted
+    verbatim *"r.b on an unknown receiver — a warning, not a rejection."* You cannot prove field
+    `b` present on an unknown receiver, so under the ruling it blocks. Test now asserts rejection.
+  - **(b) Pre-existing FALSE POSITIVES, previously invisible → pinned (6).** All recursion cases
+    (factorial, countDown, the induction/summary tests, and `safety.rs`'s own
+    `declared_domain_recursion_proves_by_induction`).
+- **Root cause isolated, not guessed.** `bodycheck.rs:213` computes the recursive call's target
+  under the **row region**, then grows the reaching domain with it — widening `Number` back up to
+  `Top`, after which `n - 1` is no longer provably a Number. Verified the contract algebra is
+  innocent: `Difference(Number, {0}) ⊑ Number` is **Proven**; only `Difference(Top, {0}) ⊑ Number`
+  is not, and that `Top` is manufactured by line 213. **Same root as blocker 1b.**
+- **What this actually reveals.** Those six tests were green *only because* the finding was a
+  `Warning` that `analyze_apply`'s `errors()` filter discarded. So the honest state is: **the
+  analyzer cannot currently prove `factorial` or `countDown` safe** — and never could. The evidence
+  was being filtered out. The ignored count going 4 → 10 is previously-hidden failure becoming
+  visible, **not** a regression.
+- **Correction to my own prior reasoning.** I had reported this change as "breaks 7 tests, don't
+  land it." That was backwards: a failing test after a policy correction is either a false positive
+  (fix the analyzer) or the correct new behaviour (fix the test) — never a reason to keep the wrong
+  policy. The author made that point; it is recorded here because I got it wrong twice in one day
+  (see also the `errors()` filter over-billed as a false acceptance).
+- **Consequence for the parked work:** blocker **1b is now much more valuable** — it gates six
+  further tests, all ordinary safe programs. Still parked; each pinned test names the root and
+  states explicitly: do **not** fix by reverting the severity or by adding widening/reaching
+  machinery.
+- **`// [ask-author]`:** none — the policy was ruled; the completion-class exclusion is flagged
+  above for review.
+
+---
+
+## 2026-07-31 — `BodySafe(instance, I)`: the fact + assume-and-check discharge (partial; blockers NOT closed)
+
+First increment of the safety fact. **384 lib (4 ignored) + 111 conformance green, clippy 0.**
+`analyzer/safety.rs` (new) + one surgical hook in `analyze_apply`.
+
+- **`I` comes from the call site**, never synthesized — the argument-tuple contract (E-7) or a
+  `where`'s declared input (E-8). Settled by the `numId(5)` example: the call already carries its
+  own domain, so nothing needs to derive one. `I` (input domain) and `C` (a demanded contract) are
+  kept as separate things throughout.
+- **Assume-and-check, not unfolding.** `prove(callee, I)` installs `SafetyFact { callee, input }`,
+  analyzes the body **once** under `I`, and a recursive reference whose argument domain is contained
+  in `I` **resolves through the assumption** (C§13.2). Keyed `(instance, I)` — the same key shape as
+  the existing return-fact `Hypothesis`, whose `args ⊑ input` guard I reused rather than reinvented.
+- **The clean case works, natively.** `countDown` over a declared `GE(0) ∧ Mod(1,0)` **proves by
+  induction**: `n-1` stays inside the domain, so the call discharges and the body is never re-entered.
+  Worth noting *what decides `n-1 ∈ D`* — F0's interval **and congruence** transfer (integrality
+  surviving `−`). That is F0 paying off, and it is the one place the earlier ordering argument was
+  accidentally right for the wrong reason.
+- **Honest limit, deliberately not papered over.** A recursive call whose domain is *not* contained
+  in `I` is covered by no fact, and this module **does not widen `I` until it closes, nor accumulate
+  reaching domains** — both forbidden. It currently falls back to the quarantined `body_summary`.
+- **The four blockers are NOT closed — verified, not assumed.** A probe through `prove` gave the
+  right answer on all four, which looked like a win; running the **pinned tests** showed they still
+  **fail**. The probe's results were a *composite*: `prove` does not push the `ACTIVE` cutoff, so a
+  non-discharged call gets one extra level of analysis from the quarantined checker. That is an
+  artifact of two cutoffs composing, **not a mechanism**, and I am not reporting it as progress.
+  Closing the blockers needs the non-discharged case to have a principled bound — C§13.2's `I` over
+  the **finite row-set lattice** — which is not built.
+- **Tests isolate what is actually new** (4): induction over a declared domain; safety ≠ termination
+  (a diverging body is *safe*, and the proof still closes — proving it does not unfold); a call
+  outside the fact is **not** discharged; a fact discharges any call inside it.
+- **`// [ask-author]`:** none. Scope was authorized; the remaining gap is named, not filled.
+
+---
+
+## 2026-07-31 — Tier-0 rebaseline + the grounding correction (external review acted on)
+
+Two author-directed slices, both bounded. **380 lib (0 failed, 4 ignored) + 111 conformance, clippy
+0, manifest 19/19.**
+
+**Tier 0 — strictly mechanical; no semantic rulings, no history rewritten.**
+- **`IMPLEMENTATION-STATUS.md` created** as the single implementation-status authority: normative
+  specs, the document status register, quarantined non-authoritative code, failing gates, the
+  forbidden-machinery boundaries, the authorized slice, and the measured baseline.
+- **19 maintainer docs bannered** CURRENT / HISTORICAL / SUPERSEDED. **No manifest-protected file
+  touched** (the 19 canonical specs, `CLAUDE.md` among them) — staleness *inside* them
+  (region-table's dissolved accepted-domain text and patch header; C§7 vs the later `Numeric`
+  ruling; grounding's stamp status) is **recorded as author-owned**, not corrected here.
+- Two of my own prior claims marked **SUPERSEDED** by author instruction: the foundation map's
+  **F0-before-demand-core ordering** (imprecision yields *unproven*, so a coarse rule is never a
+  prerequisite) and the **"replace-and-rebuild"** framing for the induction pipeline (it is
+  *non-authoritative*; its independently valid SCC utilities may be reused; no sweeping rewrite is
+  authorized).
+
+**The grounding correction — done while it stays UNWIRED (verified: zero call sites).**
+- **Forced-path selection (the G-BUG fix).** `drift_away` admitted a recursive transition on the
+  *syntactic presence* of a self-call. GR-23 requires selection to be **forced** at every step. New
+  `forced_self_calls` collects only calls reached under no unproven selection — a `Match`
+  **scrutinee** stays on the forced path, anything inside a `Match`'s **items** does not — and any
+  self-call found behind a conditional makes the candidate **decline outright** (declining is always
+  sound). Verified against the review's counterexample: `flag = false; f = (n) => n == 0 ? 0 :
+  (flag ? f(n-2) : 0)` at `f(1)` no longer refutes a **terminating** program.
+  *Scope note:* this discipline binds **refutation only**. The descent side is untouched — a
+  conditional call still must descend when taken, so `numeric_descent` keeps reading every
+  syntactically present call. A gate asserts the rule is narrow, not blanket.
+- **Witness-bearing refutation.** `Verdict::Refuted` was payload-free, so the admitted witness was
+  computed and discarded. Now `Refuted(Refutation { witness, drift, missed_bases })` — the admitted
+  represented-exact root witness plus the certificate, persistent and diagnosable. (Representation
+  chosen here; the spec does not fix one.) `Verdict` loses `Copy`; blast radius was contained to
+  `grounding.rs` (`contract::Verdict` is a different enum).
+- **Superseded header claim removed.** The module no longer says grounding "lets the body check stop
+  unfolding" / "replaces widening as the analysis's termination bound" — a claim **this session had
+  already disproved** (see the 2026-07-30 entry) and which contradicts C§13.3. Replaced with the
+  correction and a pointer to the forbidden-machinery boundary.
+- **Gates:** G-BUG **un-ignored and passing on the built mechanism** (not routed around), plus two
+  companions — `refutation_carries_its_witness_and_certificate` and
+  `forced_path_discipline_is_narrow_not_blanket`. Four blockers remain pinned; the quarantined
+  `bodycheck` reaching engine is deliberately still present (its removal is the un-authorized T1.4).
+- **`// [ask-author]`:** none. Everything here was directed; the one free choice (the `Refutation`
+  representation) was explicitly delegated.
+
+---
+
+## 2026-07-31 — F0: the C§7 operation rulebook, built whole (design reviewed first)
+
+The complete operation transfer table — **safety and image, all 13 operations, every contract
+form** — replacing the closed-`Range`-only arithmetic. Designed on paper and author-reviewed
+**before** any code (`NEXT-F0-operation-rulebook-draft.md`), then built in the reviewed order.
+**377 lib + 111 conformance green, clippy 0, no new doc warnings.**
+
+- **Structure — three layers, not a 13×N×N grid.** The literal "per-pair table" reading gives ~78
+  identical arms per operation, because the numeric forms are **projections onto two facets**. So:
+  (1) algebraic plumbing uniform across ops (Indeterminate propagation, total-division forms);
+  (2) exact fold for all-singleton operands (the oracle itself); (3) **leaf rules ordered
+  specific → general** — a form-preserving rule gets first refusal, the numeric abstraction is the
+  total fallback. Three tables of 9 / 26 / ~3 rows instead of 13 arrays of 81 cells.
+- **`contract/numeric.rs` (new).** `Interval`/`Bound` **extracted from `subcontract.rs`** (they
+  already existed — the earlier reverted patch had written a parallel encoding without looking),
+  plus `Congruence` and `NumAbs = interval × congruence`. **Two conversions, deliberately
+  separate**, with the asymmetry as a normative module note: `interval_exact` (denotes ⟦c⟧ — needed
+  for subset/disjointness, returns `None` for `Mod`) vs `num_abs` (contains ⟦c⟧ — for images, may
+  read `Mod`/`Geo` as unbounded). Getting these backwards would make `GreaterEq(0) ⊑ Mod(1,0)` come
+  out Proven, which is false.
+- **`n = 0` encodes an exact integer in `Congruence`.** That single choice makes the `gcd`
+  composition rules uniform (`gcd(0,m) = m`), so an exact operand composes with a lattice operand
+  correctly: even + 2 stays even, and **integrality survives `−`** (the non-negative integers minus
+  1 are still integers — which matters for `Pow`'s integer-exponent demand and for grounding's grid).
+- **`×` / `/` use extended (±∞) arithmetic**, not sign-case analysis: four corner products with
+  `0 · ∞ = 0`, min/max under `NegInf < Fin < PosInf`. The signs fall out; no special cases.
+- **Safety table completed.** The gap the draft exposed: `apply_prim` checks Indeterminate **first**
+  — arithmetic *propagates* it (never traps) while ordering comparisons *trap*
+  `UndischargedIndeterminate`. So arithmetic's operand demand is `Number ∪ Indeterminate`, and
+  `Indeterminate + 1` is now provably **Proven** where it previously read `Unproven`.
+- **The audit is the matrix.** `operation_soundness_sweep`'s grid went from 9 forms to **27** —
+  every leaf form with **sign variants** (a single all-positive representative hides sign bugs in
+  `×`/`/`/`%`), plus `Mod`, `Geo`, `Intersection`, `Union`, `Difference`, both Indeterminate forms.
+  It **immediately caught a real bug**: dividing by a zero *endpoint* (`Greater(0)` excludes 0 as a
+  value but has it as an endpoint) panicked. Fixed. Five `rulebook_*` precision tests assert the
+  table's claims separately, because returning `Kind(Number)` everywhere would pass soundness alone.
+- **Deliberate incompleteness is documented in the module doc** (Geo beyond scaling; Mod through
+  `×`-by-non-constant, `/`, `%`, `**`; `**` with both operands non-singleton; zero divisor endpoint;
+  strictness through `×`/`/`; string *length* through `+` — owed to the tuple family's §5 lift;
+  `Difference` with non-singleton exclusion; `Union` read as hull rather than distributed).
+- **`// [ask-author]`:** the four draft questions were answered by my stated defaults and are
+  recorded there; the one still genuinely open is **Q1 — per-alternative `Union` distribution vs the
+  hull** (hull is implemented; sound, and the congruence join recovers much of the precision).
+- **Not in F0, deliberately:** the analyzer-level `analyzeOperation` + `OperationOutcome` (F1), the
+  demand core (F2). Nothing in `analyzer/` was touched.
+
+---
+
+## 2026-07-31 — Two more patch-shaped attempts, both REVERTED; the operation rulebook is itself foundation
+
+After the SCC revert (entry below) I did the same thing twice more in miniature. Both reverted; the
+tree is back at **371 lib / 4 ignored, 111 conformance / 13 ignored, clippy clean** — baseline. No
+code from today's session survives; only the debt markers and the foundation map.
+
+- **Attempt A — `analyzer/opoutcome.rs` (`OperationOutcome`), reverted.** I extracted C§7's
+  **return type** and wired a pass-through in `analyze_primop` (`from_primitive(...)` then
+  immediately `.produced.erase()`), calling it "F1." But C§7's `analyzeOperation` takes
+  `Correlated<AnalysisContract>` **and** a `seatContext` — the inputs are analyzer-level too, so the
+  real F1 is a *function*, and I built a **noun without its verb**: a type with no genuine consumer,
+  ahead of the thing that gives it meaning. Also misplaced — C§16 says `ApplicationOutcome` **is**
+  "obligation 3's application instance," so it belongs beside it, not in a third outcome module.
+- **Attempt B — additive interval arithmetic in `contract/operation.rs`, reverted.** Real verified
+  gap (`GreaterEq(8) + GreaterEq(10)` → `Kind(Number)`, losing the bound; fixed it, +4 tests, green,
+  confirmed end-to-end `n ≥ 0 ⊢ n − 1 : GreaterEq(−1)`). **Still wrong to keep**, for two reasons:
+  (1) it **duplicated existing machinery** — `subcontract.rs:129-162` already has
+  `Interval`/`Bound{Unbounded,Incl,Excl}`/`interval_of`/`meet`, a better encoding than the parallel
+  one I wrote without looking; (2) more importantly it was a **patch, not the feature** — `+`/`−`/
+  unary `−` fixed while `*`, `/`, `**`, `Mod`, `Geo` were left, i.e. the same edge-case-driven
+  shape as the reverted SCC engine.
+- **The finding that matters: the C§7 operation rulebook is FOUNDATION, not polish.** C§13.1 says
+  resolution runs *"forward through the operation rules"* — so the demand core (F2) **executes** the
+  operation table. An incomplete table means the analyzer loses information at exactly the moment a
+  demand is resolved, and something downstream gets invented to compensate. That is this session's
+  thesis applied one layer down: **F2 built on a half-built rulebook would import for the same
+  reason the body check did.** So the complete per-pair table (C§17's owed item) is not a nice-to-have
+  to slot in later — it is a **prerequisite**, and it must be built *whole* (every operation × every
+  contract form), not per-failing-case.
+- **Process lesson, third instance today.** The pattern is: find failing case → add mechanism → green.
+  The correction is: **build the complete specified feature set, then see what passes.** Recorded here
+  because it recurred *after* being named — naming it was not sufficient.
+- **A soundness fact worth keeping from Attempt B** (costs nothing, prevents a future bug): the
+  contract→interval conversion is **direction-asymmetric**. For *image over-approximation* a wider
+  interval is safe, so `Mod`/`Geo` may read as unbounded; for *subset testing* widening the RHS makes
+  `⊑` wrongly true (`GreaterEq(0) ⊑ Mod(1,0)` would come out Proven — false). Any future shared
+  interval module needs two conversions, not one.
+- **`// [ask-author]`:** none. Both reverts are the author's standing instruction, not a judgment call.
+
+---
+
+## 2026-07-31 — REVERTED the SCC body summary as an imported mechanism; owed-breadth foundation map produced
+
+An SCC body-summary engine (`analyzer/summary.rs` + multi-position region tables + a `body_summary`
+rewire) was built this session and **passed all four Archive-11 blockers + the full suite** — then
+**reverted whole** on the author's instruction, because it was an **imported** mechanism: a forward
+reaching-domain fixpoint + Kind-collapse **widening**. That is the abstract-interpretation shape NEXT
+rejects (Principle 7; late-resolution law; "widening is foreign"). Passing the tests that way
+**polluted** the implementation and let green mask a missing foundation.
+
+- **The finding (author-led).** The body-safety check is built **ahead of its foundation**. The
+  recovery order is *demand core → template → region table → body check*; the region table + body
+  check exist, but the **demand core (C§13.1) was never built**. With no demand-and-fact substrate,
+  the check cannot close recursion or hold a parameter's contract natively, so it imports a
+  forward-solve (accumulate reaching contracts, widen to terminate). The "swap"/widening is a
+  *symptom* of the forward shape, not a needed mechanism — in a demand+contract system `total + n`
+  *demands* `total : Number`, checked against providers by induction, never by watching values.
+- **Code audit (evidence).** (1) No demand core: `analyze` is forward-only; the only `demand` is the
+  local expecting-seat helper. (2) `analyze_operation` still returns `OpResult { safety, output }`,
+  not `OperationOutcome { safety, produced, completion }` (C§7/1.0.7 drift). (3) Return facts exist
+  (`infer_return_fact`, `Hypothesis`) but **no `BodySafe(instance, I)` safety fact** — so recursive
+  safety has nothing to close on by induction. Details + build order:
+  **`NEXT-owed-breadth-foundation-map.md`** (new).
+- **Revert.** `git checkout` of `region.rs`/`mod.rs`/`bodycheck.rs`/`tests.rs` to HEAD; `summary.rs`
+  removed. **Back to 371 lib / 4 ignored, 111 conformance / 13 ignored, clippy clean** — the honest
+  pre-session state. The four blockers are **re-pinned `#[ignore]`** with a note naming the
+  foundational blocker (domain-indexed safety facts + demand core) and an explicit "do NOT import a
+  forward reaching/widening engine to pass this."
+- **The plan (b + a, author-chosen).** (b) revert + re-pin so the debt is visible; (a) build the
+  foundation in dependency order — **F1 `OperationOutcome` → F2 demand core → F3 domain-indexed
+  safety facts** (reusing the kept `joint_vector_pass` induction) → rewrite the body check native,
+  **deleting** the forward reaching engine (both `summary.rs` and the single-param
+  `check_recursive_body` accumulation). Keep the region table (branch reachability is a single-domain
+  contract question, not an import). Full map + open questions in the foundation-map doc.
+- **Process correction.** Per CLAUDE.md hard rule #3, a gap is an owed item / a question for the
+  author — **not** something to fill silently with an imported mechanism. This session did the latter
+  (documented, but still filled). The re-pinned tests + the foundation map are the correction.
+- **`// [ask-author]`:** build order F1-vs-F2-first; staging (full-native vs minimal-F3-first);
+  whether to wire grounding's A-NEG basin as the safety-fact domain now; whether `where` (E-8) is the
+  first demand-origin consumer. All in the map §7.
 
 ---
 

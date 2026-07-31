@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # Spec-first audit — accepted domains, the region table, and the skipped build step
 
 **Phase 1 deliverable.** No code was written for this document. It answers the

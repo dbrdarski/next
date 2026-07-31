@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT Implementation Progress Review — Archive(4)
 
 **Review focus:** application/induction tail progress, analyzer soundness boundaries, oracle separation, and remaining implementation risks.

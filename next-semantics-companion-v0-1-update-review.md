@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # Review — Updated NEXT Semantics Companion v0.1
 
 **Compared against:** the prior repository copy of `next-semantics-companion-v0-1.md`  

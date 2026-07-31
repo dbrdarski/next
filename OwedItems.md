@@ -1,3 +1,9 @@
+> ## ⚠️ STATUS: **SUPERSEDED as guidance · CURRENT as an owed catalogue**
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. The item lists
+> here remain useful; **ordering and priority claims in this file do not bind.** Within it, §0.1 is
+> the later framing, while §0.1-history and any "the swap is DONE / LANDED" passages are
+> **HISTORICAL**. Historical content is deliberately left unedited.
+
 # OwedItems.md — open gaps, reconciled to the specs
 
 **Maintainer file (not spec).** This is Claude Code's development registry. The
@@ -63,7 +69,36 @@ the SCC induction stays but is **re-plumbed** onto the region-table/body-check s
 Also kept: the `segment_nullable` structural fix; fuel out of normative analysis; no
 oracle execution of user functions.
 
-### 0.1 The swap is DONE (2026-07-30, summary-over-partition, no widening) — history below
+### 0.1 [2026-07-31 — SUPERSEDES the “swap is DONE” framing below] The body check imports because a foundation is OWED
+
+**The reaching-domain body check is the imported (abstract-interpretation) shape, not the native
+one.** An SCC extension of it (`analyzer/summary.rs` + multi-position region tables) closed all four
+Archive-11 blockers this session, then was **reverted whole** — it added a forward reaching-domain
+fixpoint + Kind-collapse **widening**, which is foreign (Principle 7; late-resolution; "widening is
+foreign"). The root cause: the body check stands on a **skipped foundation**. Recovery order is
+*demand core → template → region table → body check*; the region table + body check exist but the
+**demand core (C§13.1) was never built**, so recursion can't close natively and gets a forward-solve
+prosthetic. **The single-param `check_recursive_body` reaching accumulation (07-30) is the same
+imported shape** — less egregious (no widening) but still forward reaching; it is on the *delete*
+list too, replaced by domain-indexed safety facts + induction.
+
+**Owed foundation (dependency order), full map in `NEXT-owed-breadth-foundation-map.md`:**
+- **F1 `OperationOutcome`** (C§7/C§16 obl.3) — reshape `analyze_operation` from `OpResult{safety,
+  output}` to `OperationOutcome{safety, produced, completion}`. (Also §2 below.)
+- **F2 demand core** (C§13.1) — backward subscription + forward resolution + three-valued origin
+  adjudication. The skipped Part-I step. Not built.
+- **F3 domain-indexed safety facts** (C§13.2a) — `BodySafe(instance, I)` settled by the **kept**
+  `joint_vector_pass` induction (today wired only to return facts). Closes recursive/mutual safety on
+  a fact, no reaching, no widening; domain lattice = region partition (+ grounding A-NEG later).
+
+**Acceptance:** the four blockers un-ignore only when they pass with the region table + safety-fact
+induction and **no forward reaching fixpoint / no widening exist in the tree** (grep gate:
+`summary.rs`, `check_recursive_body`, `reachable_rows`, `grow_pos` all absent). The re-pinned
+`#[ignore]` notes name this. **Do not import to make them green.**
+
+---
+
+### 0.1-history The swap is DONE (2026-07-30, summary-over-partition, no widening) — reframed above
 
 **Status: LANDED.** `analyze_apply` Known-callee now runs `bodycheck::body_summary` (the
 summary-over-partition check: §4a shape cutoff + `check_recursive_body`'s reachable-rows ×
@@ -254,6 +289,23 @@ built in code, §16 proofs owed**.
   unsound. (Rides the app-induction rebuild; the AC domain is in the *keep* set.)
 
 ## 3. Still owed in the docs (Compendium C§17 "Owed", patch 1.0.18)
+
+> **F0 BUILT (2026-07-31) — the operation rulebook, whole.** Design drafted and author-reviewed
+> first (`NEXT-F0-operation-rulebook-draft.md`), then built: safety **and** image for all 13
+> operations over every contract form. `contract/numeric.rs` (new) holds the shared numeric
+> abstraction (`Interval`/`Bound` extracted from `subcontract.rs` + `Congruence` + `NumAbs`), with
+> the **two conversions kept separate** and the direction asymmetry as a normative module note.
+> Half-lines now compose; congruence (hence **integrality**) survives `±` and scaling; `×`/`/` use
+> extended ±∞ arithmetic; `Geo × exact` stays `Geo`; comparisons decide when the bounds decide;
+> the safety table now admits Indeterminate in arithmetic (propagates) but not in comparisons
+> (traps). The audit is the **matrix**: the sweep grid went 9 → 27 forms with sign variants and
+> caught a real zero-divisor-endpoint panic; five `rulebook_*` tests assert precision separately.
+> **Deliberate incompleteness is listed in `operation.rs`'s module doc** (Geo beyond scaling; Mod
+> through `×`-non-constant/`/`/`%`/`**`; `**` both-non-singleton; zero divisor endpoint; strictness
+> through `×`/`/`; `Difference` non-singleton exclusion; `Union` as hull not distributed — the one
+> open precision question). **Still owed here:** the **string-length lift** through `+` (needs the
+> tuple family's §5 string-contract form, owed there); **compound-scrutinee regionalization** is
+> *not* a gap — region-table §2 case (d) specifies a compound tested expression as opaque.
 
 Per-pair contract tables (`Geo`, `Difference`/emptiness, finite-interval coverage) —
 no-flattening rule · boolean-DNF procedure · certified-procedure inventory ·

@@ -1,3 +1,10 @@
+> ## ⛔ STATUS: **SUPERSEDED** — retained as history, not guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. This file's
+> snapshot, doc-sync rows, "§6 next increments", and increment-ledger detail are stale (they
+> describe the retired app-induction-tail plan, cite `SAFETY_STACK` which does not exist, and list
+> 10 analyzer modules where there are 13). **Do not take direction from this file.** Its historical
+> content is deliberately left unedited.
+
 # PROGRESS.md — implementation state
 
 > **How to read this file (for the design/review chat).** This is the *state
@@ -8,6 +15,14 @@
 > entries). **Doc-side gaps, active asks, and registered drift live in
 > `OwedItems.md`.** The three files are maintained in the same commit as the work
 > they describe.
+
+> **[2026-07-31 reframe — read this first].** The reaching-domain body check described below is
+> the **imported** (abstract-interpretation) shape, not the native one. An SCC extension of it was
+> built and reverted this session (see `DECISIONS.md` 2026-07-31). The body check is built **ahead
+> of its foundation** (the demand core, C§13.1, was never built). Build order and spec anchors:
+> **`NEXT-owed-breadth-foundation-map.md`** (F1 `OperationOutcome` → F2 demand core → F3 safety
+> facts). The four blockers stay `#[ignore]` until they pass with facts + demand, **not** a reaching
+> fixpoint. The snapshot below is the 07-30 state, retained for continuity.
 
 **Snapshot:** 2026-07-30 · **the swap landed; the demand core is wired but not yet sound.**
 `analyze_apply` now runs the **summary-over-partition** body check

@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT Analyzer Core Checkpoint Review — 8.1a through 8.1c
 
 **Review basis:** current repository snapshot in `Archive(2).zip`  

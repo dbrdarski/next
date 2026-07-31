@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT Implementation Review — Archive(10)
 
 **Review focus:** Archive(9 follow-up fixes now present in Archive(10): total callee-alternative enumeration, widened-domain refutation discipline, the finite admitted-domain basis, and readiness to proceed toward AP-30.

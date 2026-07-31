@@ -22,6 +22,7 @@ use crate::value::{ValueData, ValueRef};
 mod expr;
 pub mod grapheme;
 pub mod length;
+mod numeric;
 mod operation;
 pub mod recursive;
 mod subcontract;

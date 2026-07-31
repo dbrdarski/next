@@ -1,3 +1,6 @@
+> ## 📗 STATUS: **HISTORICAL** — record of a past review/audit; not current guidance
+> The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**. Left unedited.
+
 # NEXT Implementation Review — Archive(7)
 
 **Review focus:** verification of the Archive(6) body-safety increment, removal of closed-call oracle execution, and soundness of the new interprocedural safety propagation.

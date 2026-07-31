@@ -49,6 +49,7 @@ pub mod obligation;
 pub mod outcome;
 pub mod refute;
 pub mod region;
+pub mod safety;
 
 #[cfg(test)]
 mod tests;
@@ -223,7 +224,7 @@ fn analyze_primop(op: PrimOp, args: &[Expr], env: &TypeEnv, cenv: &ContractEnv, 
                 }
                 OpSafety::Unproven => findings.push(Finding {
                     class: TrapClass::OperationSafety,
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     message: format!("cannot prove `{op:?}` safe for these operands"),
                 }),
             }
@@ -455,7 +456,7 @@ fn analyze_field(tc: &Contract, name: &str, total: bool, findings: &mut Vec<Find
     }
     findings.push(Finding {
         class: TrapClass::AbsentField,
-        severity: Severity::Warning,
+        severity: Severity::Error,
         message: format!("cannot prove field `{name}` present and receiver non-null"),
     });
     output
@@ -492,7 +493,7 @@ fn analyze_index(tc: &Contract, total: bool, findings: &mut Vec<Finding>, intern
     // Bounds require tuple-length reasoning (C§17 owed).
     findings.push(Finding {
         class: TrapClass::IndexBounds,
-        severity: Severity::Warning,
+        severity: Severity::Error,
         message: "cannot prove index in bounds (tuple-length rules owed, C§17)".into(),
     });
     Contract::Top
@@ -511,7 +512,7 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
     }
     findings.push(Finding {
         class: TrapClass::OperationSafety,
-        severity: Severity::Warning,
+        severity: Severity::Error,
         message: "cannot prove receiver sliceable / bounds integer (C§17 owed)".into(),
     });
     Contract::Top
@@ -578,7 +579,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                     let (severity, message) = if *inhabited {
                         (Severity::Error, "callee is not a function")
                     } else {
-                        (Severity::Warning, "callee may not be a function (no represented inhabitant to confirm)")
+                        (Severity::Error, "callee may not be a function (no represented inhabitant to confirm)")
                     };
                     findings.push(Finding { class: TrapClass::OperationSafety, severity, message: message.into() });
                     produced.push(Contract::Bottom);
@@ -590,7 +591,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                 CalleeAlt::UnknownFunction => {
                     findings.push(Finding {
                         class: TrapClass::OperationSafety,
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         message: "cannot prove this callee's body safe (callee not resolved to a known function)".into(),
                     });
                     produced.push(Contract::Top);
@@ -598,6 +599,14 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                 }
                 CalleeAlt::Known(cv) => {
                     analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
+                    // A recursive reference covered by an **assumed safety fact** resolves
+                    // through that fact (C§13.2) — the body is not re-entered, so nothing
+                    // accumulates across depths. Only the return still needs the induction.
+                    if !has_spread && safety::discharged(cv, &arg_contracts, interner) {
+                        produced.push(call_return(cv, &arg_contracts, has_spread, cenv, interner));
+                        completions.push(Completion::Produces);
+                        continue;
+                    }
                     if has_spread {
                         produced.push(Contract::Top);
                         completions.push(Completion::Produces);
@@ -748,7 +757,7 @@ fn analyze_known_callee(
             } else {
                 findings.push(Finding {
                     class: TrapClass::ArgumentObligation,
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     message: "cannot prove the arguments match the parameter pattern".into(),
                 });
             }
@@ -782,7 +791,7 @@ fn check_spread_kind(
     } else {
         findings.push(Finding {
             class: TrapClass::SpreadKind,
-            severity: Severity::Warning,
+            severity: Severity::Error,
             message: format!("cannot prove this spread is a {expected:?}"),
         });
     }
@@ -1072,7 +1081,7 @@ fn analyze_bind(
             } else {
                 findings.push(Finding {
                     class: TrapClass::RefutedBinding,
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     message: "cannot prove this destructuring binding irrefutable".into(),
                 });
             }
@@ -1096,7 +1105,7 @@ fn check_tested_seat(guard: &Contract, findings: &mut Vec<Finding>, interner: &m
     } else {
         findings.push(Finding {
             class: TrapClass::TestedSeat,
-            severity: Severity::Warning,
+            severity: Severity::Error,
             message: "cannot prove this guard is a Boolean".into(),
         });
     }
