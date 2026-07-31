@@ -97,7 +97,12 @@ pub fn check_return_claim(
     if let Some(w) = realized_refutation(callee, args, claim, interner) {
         return ClaimVerdict::Refuted(w);
     }
-    let cand = Candidate { callee: callee.clone(), args: args.to_vec(), contract: claim.clone() };
+    let cand = Candidate {
+        callee: callee.clone(),
+        args: args.to_vec(),
+        claim: crate::analyzer::induction::Claim::Return(claim.clone()),
+        cutoff: false,
+    };
     if joint_vector_pass(&[cand], cenv, interner) {
         ClaimVerdict::Proven
     } else {

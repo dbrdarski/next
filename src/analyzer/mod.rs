@@ -602,7 +602,7 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                     // A recursive reference covered by an **assumed safety fact** resolves
                     // through that fact (C§13.2) — the body is not re-entered, so nothing
                     // accumulates across depths. Only the return still needs the induction.
-                    if !has_spread && safety::discharged(cv, &arg_contracts, interner) {
+                    if !has_spread && induction::safety_assumed(cv, &arg_contracts, interner) {
                         produced.push(call_return(cv, &arg_contracts, has_spread, cenv, interner));
                         completions.push(Completion::Produces);
                         continue;

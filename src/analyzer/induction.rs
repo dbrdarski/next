@@ -77,7 +77,7 @@ pub(crate) fn without_inference<R>(body: impl FnOnce() -> R) -> R {
 pub(crate) struct Hypothesis {
     pub(crate) callee: ValueRef,
     pub(crate) input: Vec<Contract>,
-    pub(crate) contract: Contract,
+    pub(crate) claim: Claim,
 }
 
 /// The assumed return contract for a call to `callee` over `args`, if a live hypothesis
@@ -88,12 +88,49 @@ pub(crate) struct Hypothesis {
 pub(crate) fn hypothesis_for(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> Option<Contract> {
     // Collect the same-instance hypotheses first (dropping the borrow before the
     // subcontract check, which may itself want the interner but never HYPOTHESES).
-    let same_instance: Vec<Hypothesis> =
-        HYPOTHESES.with(|h| h.borrow().iter().filter(|hyp| hyp.callee == *callee).cloned().collect());
-    same_instance
-        .into_iter()
-        .find(|hyp| args_within(args, &hyp.input, interner))
-        .map(|hyp| hyp.contract)
+    let same_instance: Vec<Hypothesis> = HYPOTHESES.with(|h| {
+        h.borrow()
+            .iter()
+            .filter(|hyp| hyp.callee == *callee && matches!(hyp.claim, Claim::Return(_)))
+            .cloned()
+            .collect()
+    });
+    same_instance.into_iter().find(|hyp| args_within(args, &hyp.input, interner)).and_then(|hyp| {
+        match hyp.claim {
+            Claim::Return(c) => Some(c),
+            Claim::Safety | Claim::Completes => None,
+        }
+    })
+}
+
+/// Whether an assumed **completion** fact covers a call — the same instance and
+/// `args ⊑ I`. A cycle assumption may only claim production when a fact *for that
+/// call's own domain* says so; this replaces `BodySummary::cycle()`'s unconditional
+/// `Produces`, which asserted rather than settled it.
+pub(crate) fn completes_assumed(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> bool {
+    let domains: Vec<Vec<Contract>> = HYPOTHESES.with(|h| {
+        h.borrow()
+            .iter()
+            .filter(|hyp| hyp.callee == *callee && matches!(hyp.claim, Claim::Completes))
+            .map(|hyp| hyp.input.clone())
+            .collect()
+    });
+    domains.into_iter().any(|input| args_within(args, &input, interner))
+}
+
+/// Whether an assumed **safety** fact discharges a call to `callee` over `args` — the
+/// same instance and `args ⊑ I`. This is what lets a recursive reference resolve through
+/// a fact instead of re-entering the body (C§13.2), and it reads the **same** hypothesis
+/// table the return facts use.
+pub(crate) fn safety_assumed(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> bool {
+    let domains: Vec<Vec<Contract>> = HYPOTHESES.with(|h| {
+        h.borrow()
+            .iter()
+            .filter(|hyp| hyp.callee == *callee && matches!(hyp.claim, Claim::Safety))
+            .map(|hyp| hyp.input.clone())
+            .collect()
+    });
+    domains.into_iter().any(|input| args_within(args, &input, interner))
 }
 
 /// Whether a call's argument domain `args` is contained in a fact's `domain` — the
@@ -120,7 +157,28 @@ pub(crate) fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R
 pub struct Candidate {
     pub callee: ValueRef,
     pub args: Vec<Contract>,
-    pub contract: Contract,
+    pub claim: Claim,
+    /// C§13.3(2)'s instance-chain cutoff: this candidate's shape already appeared on the
+    /// discovery path, so it was not expanded. It resolves as the ladder's **(c) rung**
+    /// — unproven — and never acquires an invented covering domain.
+    pub cutoff: bool,
+}
+
+/// What a fact node claims. C§13.2a's node is `(instance, row-set I, demanded C)`; a
+/// **safety** fact is the kind with no demanded `C`. Both kinds live in **one** graph
+/// because dependency cycles cross them — *"the graph and its SCC collapse are global."*
+#[derive(Clone)]
+pub enum Claim {
+    /// `BodySafe(instance, I)` — every operation the body reaches over `I` discharges.
+    Safety,
+    /// `ReturnFact(instance, I, C)` — the return is contained in `C`.
+    Return(Contract),
+    /// **Completion** (E10 / C§13.4's *"produced + completion evidence"*): every path
+    /// through the body over `I` produces a value. Settled inductively like the others —
+    /// a recursive call resolves through the assumed fact **for its own domain**, which
+    /// is exactly why `f = (x) => x :: { 0 => f(1) }` cannot prove it: `f(1)` is a
+    /// *different* node, and under `Equals(1)` no arm matches.
+    Completes,
 }
 
 /// One **joint vector pass** over a recursive component (§6). Installs every member's
@@ -140,11 +198,30 @@ fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, inte
     hyps.extend(member_hypotheses(members));
 
     members.iter().all(|c| {
+        if c.cutoff {
+            return false; // ladder rung (c) — not expanded, so never proven
+        }
         let hyps = hyps.clone();
-        let summary = with_hypotheses(hyps, || summarize_instance(&c.callee, &c.args, cenv, interner));
-        match summary {
-            Some(o) => matches!(subcontract(&o.produced.erase(), &c.contract, interner), Verdict::Proven),
-            None => false,
+        match &c.claim {
+            // A return claim holds when the body's produced contract is contained in it.
+            Claim::Return(want) => {
+                let summary = with_hypotheses(hyps, || summarize_instance(&c.callee, &c.args, cenv, interner));
+                match summary {
+                    Some(o) => matches!(subcontract(&o.produced.erase(), want, interner), Verdict::Proven),
+                    None => false,
+                }
+            }
+            // A safety claim holds when the body raises no finding over `I` — verified by
+            // the partition rule (each region-table row under `I ∩ row.region`).
+            Claim::Safety => {
+                with_hypotheses(hyps, || crate::analyzer::safety::verify(&c.callee, &c.args, cenv, interner))
+                    .is_empty()
+            }
+            Claim::Completes => {
+                with_hypotheses(hyps, || {
+                    crate::analyzer::safety::verify_completes(&c.callee, &c.args, cenv, interner)
+                })
+            }
         }
     })
 }
@@ -155,7 +232,7 @@ fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, inte
 fn member_hypotheses(members: &[Candidate]) -> Vec<Hypothesis> {
     members
         .iter()
-        .map(|c| Hypothesis { callee: c.callee.clone(), input: c.args.clone(), contract: c.contract.clone() })
+        .map(|c| Hypothesis { callee: c.callee.clone(), input: c.args.clone(), claim: c.claim.clone() })
         .collect()
 }
 
@@ -188,7 +265,20 @@ pub struct FactResult {
 /// on the call graph alone, not the candidate-list order.
 pub fn prove_facts(candidates: Vec<Candidate>, cenv: &ContractEnv, interner: &mut Interner) -> FactResult {
     let adj = call_edges(&candidates);
-    let components = scc_reverse_topo(&adj);
+    settle_components(candidates, &adj, cenv, interner)
+}
+
+/// The settlement half of the driver, over **caller-supplied edges** — so a discovery
+/// pass that knows its own domain-specific edges (the safety graph) reuses this one
+/// driver instead of running a second SCC of its own. C§13.2a's graph is *global*; this
+/// is the single place components are settled.
+pub fn settle_components(
+    candidates: Vec<Candidate>,
+    adj: &[Vec<usize>],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> FactResult {
+    let components = scc_reverse_topo(adj);
 
     let mut settled: Vec<Hypothesis> = Vec::new();
     let mut proven = Vec::new();
@@ -257,7 +347,7 @@ fn infer_inner(
     // proposal then yields no informative claim (sound).
     let bottoms: Vec<Hypothesis> = with_args
         .iter()
-        .map(|(g, args)| Hypothesis { callee: g.clone(), input: args.clone(), contract: Contract::Bottom })
+        .map(|(g, args)| Hypothesis { callee: g.clone(), input: args.clone(), claim: Claim::Return(Contract::Bottom) })
         .collect();
 
     let candidates: Vec<Candidate> = with_args
@@ -271,12 +361,15 @@ fn infer_inner(
             if matches!(claim, Contract::Top | Contract::Bottom) {
                 return None;
             }
-            Some(Candidate { callee: f.clone(), args: args.clone(), contract: claim })
+            Some(Candidate { callee: f.clone(), args: args.clone(), claim: Claim::Return(claim), cutoff: false })
         })
         .collect();
 
     let result = prove_facts(candidates, cenv, interner);
-    result.proven.iter().find(|c| c.callee == *callee).map(|c| c.contract.clone())
+    result.proven.iter().find(|c| c.callee == *callee).and_then(|c| match &c.claim {
+        Claim::Return(x) => Some(x.clone()),
+        Claim::Safety | Claim::Completes => None,
+    })
 }
 
 /// A callee's accepted input domain as per-position argument contracts, or `None` when

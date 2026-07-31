@@ -34,29 +34,14 @@
 //! *legitimate* wider domain — a `where`, or grounding's derived input domain / §4
 //! exact-singleton chain — none of which this module invents.
 
-use std::cell::RefCell;
 
+use crate::analyzer::induction::{self, Candidate, Claim};
 use crate::analyzer::region::{region_table, select};
 use crate::analyzer::{Finding, Severity, TypeEnv, analyze, bind_pattern};
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::env::Binding;
 use crate::interner::Interner;
 use crate::value::ValueRef;
-
-/// An **assumed** safety fact: the body of `callee` is safe for every argument tuple
-/// contained in `input`. Keyed by `(instance, I)` — instance identity (a closure value,
-/// which carries its captures) plus the input domain. Shape alone never suffices, and a
-/// fact proved over one domain is never reused on a wider one.
-#[derive(Clone)]
-pub struct SafetyFact {
-    pub callee: ValueRef,
-    pub input: Vec<Contract>,
-}
-
-thread_local! {
-    /// The facts assumed by an in-progress proof — the induction hypotheses.
-    static ASSUMED: RefCell<Vec<SafetyFact>> = const { RefCell::new(Vec::new()) };
-}
 
 /// The three-voiced verdict for `BodySafe(instance, I)`.
 #[derive(Debug)]
@@ -85,20 +70,6 @@ impl BodySafety {
     }
 }
 
-/// Whether an assumed fact **discharges** a call to `callee` over `args`: the same
-/// instance, and the call's domain contained in the fact's (`args ⊑ I`). This is what
-/// lets a recursive reference resolve through a fact instead of re-entering the body.
-pub fn discharged(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> bool {
-    let domains: Vec<Vec<Contract>> = ASSUMED.with(|a| {
-        a.borrow().iter().filter(|f| f.callee == *callee).map(|f| f.input.clone()).collect()
-    });
-    domains.into_iter().any(|input| {
-        let call = Contract::Tuple(args.to_vec());
-        let dom = Contract::Tuple(input);
-        matches!(subcontract(&call, &dom, interner), Verdict::Proven)
-    })
-}
-
 /// Prove `BodySafe(callee, args)` (§6): discover the candidate graph, then settle it by
 /// SCC in reverse topological order with one joint vector pass per cyclic component.
 /// Recursion resolves through facts and the body is never unfolded.
@@ -112,7 +83,23 @@ pub fn prove(
         return BodySafety::Unproven(Vec::new()); // not a known function — nothing to prove over
     }
     let (nodes, edges) = discover(callee, args, cenv, interner);
-    settle(&nodes, &edges, cenv, interner)
+    settle(nodes, &edges, Claim::Safety, cenv, interner)
+}
+
+/// Whether **every path** through `callee`'s body over `args` produces a value — settled
+/// through the same graph, with [`Claim::Completes`]. `false` is the honest third voice
+/// (unproven), never a claim that it falls through.
+pub fn completes(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    if callee.as_closure().is_none() {
+        return false;
+    }
+    let (nodes, edges) = discover(callee, args, cenv, interner);
+    matches!(settle(nodes, &edges, Claim::Completes, cenv, interner), BodySafety::Proven)
 }
 
 /// Verify the fact **per region-table row** (§5's partition rule). `region::select`
@@ -191,6 +178,7 @@ fn capture_env(callee: &ValueRef) -> TypeEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyzer::induction::Hypothesis;
     use crate::oracle::harness::run_source_in;
     use crate::rational::Rational;
     use num_bigint::BigInt;
@@ -241,8 +229,10 @@ mod tests {
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
         let four = Contract::Equals(i.integer(4));
-        let fact = SafetyFact { callee: cd.clone(), input: vec![five] };
-        let covered = with_assumed_all(vec![fact], || discharged(&cd, std::slice::from_ref(&four), &mut i));
+        let fact = Hypothesis { callee: cd.clone(), input: vec![five], claim: Claim::Safety };
+        let covered = induction::with_hypotheses(vec![fact], || {
+            induction::safety_assumed(&cd, std::slice::from_ref(&four), &mut i)
+        });
         assert!(!covered, "a narrower-but-different domain must not be discharged");
     }
 
@@ -253,8 +243,10 @@ mod tests {
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        let fact = SafetyFact { callee: cd.clone(), input: vec![nonneg_ints()] };
-        let covered = with_assumed_all(vec![fact], || discharged(&cd, std::slice::from_ref(&five), &mut i));
+        let fact = Hypothesis { callee: cd.clone(), input: vec![nonneg_ints()], claim: Claim::Safety };
+        let covered = induction::with_hypotheses(vec![fact], || {
+            induction::safety_assumed(&cd, std::slice::from_ref(&five), &mut i)
+        });
         assert!(covered, "Equals(5) is inside the non-negative integers");
     }
 }
@@ -282,6 +274,7 @@ mod tests {
 // node — that reuse is what closes `countDown`'s self-loop into one component.
 
 /// A node of the safety-fact graph: `BodySafe(callee, input)`.
+#[derive(Clone)]
 struct Node {
     callee: ValueRef,
     input: Vec<Contract>,
@@ -325,50 +318,31 @@ fn discover(
     (nodes, edges)
 }
 
-/// Settlement (§6): SCC collapse, **reverse topological** order, one **joint vector
-/// pass** per component. Returns the seed's verdict (node 0).
+/// Settlement (§6) — delegated to the **one** driver in `induction`, over this graph's
+/// own domain-aware edges. There is a single place components are settled; the safety
+/// fact is simply the [`Claim::Safety`] node kind travelling through it.
 fn settle(
-    nodes: &[Node],
+    nodes: Vec<Node>,
     edges: &[Vec<usize>],
+    claim: Claim,
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> BodySafety {
-    let mut proven: Vec<SafetyFact> = Vec::new(); // facts settled by earlier components
-    let mut seed = BodySafety::Unproven(Vec::new());
-
-    for component in crate::analyzer::induction::scc_reverse_topo(edges) {
-        // A cutoff member is the ladder's (c) rung — unproven, and it poisons its
-        // component (the vector pass needs every member to hold).
-        let has_cutoff = component.iter().any(|&i| nodes[i].cutoff);
-        let assumed: Vec<SafetyFact> = component
-            .iter()
-            .map(|&i| SafetyFact { callee: nodes[i].callee.clone(), input: nodes[i].input.clone() })
-            .collect();
-
-        let mut findings = Vec::new();
-        let mut ok = !has_cutoff;
-        if ok {
-            // One joint pass: every member's fact assumed, every member verified.
-            let mut table = proven.clone();
-            table.extend(assumed.iter().cloned());
-            for &i in &component {
-                let fs = with_assumed_all(table.clone(), || {
-                    verify(&nodes[i].callee, &nodes[i].input, cenv, interner)
-                });
-                if !fs.is_empty() {
-                    ok = false;
-                }
-                findings.extend(fs);
-            }
-        }
-        if ok {
-            proven.extend(assumed); // carry to dependants (reverse topological order)
-        }
-        if component.contains(&0) {
-            seed = if ok { BodySafety::Proven } else { classify(findings) };
-        }
+    let seed = nodes[0].clone();
+    let candidates: Vec<Candidate> = nodes
+        .into_iter()
+        .map(|n| Candidate { callee: n.callee, args: n.input, claim: claim.clone(), cutoff: n.cutoff })
+        .collect();
+    let result = induction::settle_components(candidates, edges, cenv, interner);
+    let settled = result
+        .proven
+        .iter()
+        .any(|c| c.callee == seed.callee && c.args == seed.input);
+    if settled {
+        return BodySafety::Proven;
     }
-    seed
+    // Not settled: re-verify the seed once, unassumed, to report *why*.
+    classify(verify(&seed.callee, &seed.input, cenv, interner))
 }
 
 /// Every call a candidate's body makes, with the callee resolved to a concrete instance
@@ -428,16 +402,27 @@ fn shape_of(v: &ValueRef) -> crate::ast::Lambda {
     })
 }
 
-/// Install a whole fact table for the duration of `body` (the joint pass's assumption).
-fn with_assumed_all<R>(facts: Vec<SafetyFact>, body: impl FnOnce() -> R) -> R {
-    let saved = ASSUMED.with(|a| std::mem::replace(&mut *a.borrow_mut(), facts));
-    let out = body();
-    ASSUMED.with(|a| *a.borrow_mut() = saved);
-    out
+/// Verify a **completion** claim: every path through the body over `I` produces a value.
+/// Completion is a property of the whole body (does the match cover `I`?), so this is one
+/// whole-body pass rather than a per-row walk — recursive calls inside resolve through the
+/// assumed completion facts.
+pub(crate) fn verify_completes(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    let Some(closure) = callee.as_closure() else { return false };
+    let mut env = capture_env(callee);
+    bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+    matches!(
+        analyze(&closure.lambda.body, &env, cenv, interner).completion,
+        crate::analyzer::Completion::Produces
+    )
 }
 
 /// Verify one member under the currently-assumed facts (the partition rule).
-fn verify(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
+pub(crate) fn verify(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
     let Some(closure) = callee.as_closure() else { return Vec::new() };
     match (single_param(&closure.lambda.params), args) {
         (Some(param), [domain]) => verify_by_partition(callee, &closure, &param, domain, cenv, interner),
@@ -615,5 +600,49 @@ mod graph_tests {
         let five = Contract::Equals(i.integer(5));
         let v = prove(&cd, std::slice::from_ref(&five), &ContractEnv::new(), &mut i);
         assert!(!v.is_proven(), "an uncovered chain must not be proven by expansion: {v:?}");
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    use crate::oracle::harness::run_source_in;
+
+    fn f(src: &str, i: &mut Interner) -> ValueRef {
+        run_source_in(src, i).unwrap().0
+    }
+
+    #[test]
+    #[ignore = "PARTIAL (2026-07-31): the completion CLAIM (Claim::Completes) and the \
+cycle-assumption fix are built, but a recursive arm's completion still does not reach the \
+enclosing Match — analyze_match derives completion from the uncovered REMAINDER only, so an \
+arm whose *result* completes without a value is not reflected. Propagating it is correct per \
+E10 (a Match exits WITH its arm's result) but needs analyze_apply's completion path routed \
+through the fact first; done naively it breaks countDown. Blocker 3 stays pinned on this."]
+    fn recursive_fall_through_is_not_claimed_to_produce() {
+        // Blocker 3's shape. `f(0)` matches the only arm and calls `f(1)`; under
+        // `Equals(1)` NO arm matches, so the body completes without a value. The old
+        // cycle assumption *asserted* `Produces`; settling completion on the fact makes
+        // `f(1)` a distinct node whose own claim fails, so `f(0)`'s cannot hold either.
+        let mut i = Interner::new();
+        let g = f("f = (x) => x :: {\n 0 => f(1)\n }\nf", &mut i);
+        let zero = Contract::Equals(i.integer(0));
+        assert!(
+            !completes(&g, std::slice::from_ref(&zero), &ContractEnv::new(), &mut i),
+            "a recursive fall-through must not be claimed to produce"
+        );
+    }
+
+    #[test]
+    fn an_exhaustive_recursion_does_complete() {
+        // The converse, so the rule is not blanket: countDown covers its domain on every
+        // path, and the recursive call is covered by the seed's own fact.
+        let mut i = Interner::new();
+        let d = Contract::Intersection(
+            Box::new(Contract::GreaterEq(crate::rational::Rational::from(0))),
+            Box::new(Contract::Mod { n: num_bigint::BigInt::from(1), r: num_bigint::BigInt::from(0) }),
+        );
+        let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        assert!(completes(&cd, &[d], &ContractEnv::new(), &mut i), "countDown produces on every path");
     }
 }

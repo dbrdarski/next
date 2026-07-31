@@ -59,13 +59,6 @@ pub struct BodySummary {
 }
 
 impl BodySummary {
-    /// The cycle assumption for a recursive re-entry (and a non-function): produces
-    /// `Top`, completes, no direct trap (the cycle adds no new *direct* trap; the
-    /// recursive return is sharpened by the induction, `call_return`).
-    fn cycle() -> BodySummary {
-        BodySummary { produced: Contract::Top, completion: Completion::Produces, findings: vec![] }
-    }
-
     /// The **Error**-severity findings only — the proven traps to surface at a call site
     /// (a `Warning` over a coarsened domain would be spurious; warnings staying local is
     /// the standing diagnostic gap).
@@ -79,7 +72,15 @@ impl BodySummary {
 /// terminates on same-domain recursion; unbounded-domain growth still needs grounding).
 pub fn body_summary(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> BodySummary {
     if ACTIVE.with(|s| s.borrow().contains(callee)) {
-        return BodySummary::cycle();
+        // A cycle **assumption** may not claim production. It may say `Produces` only
+        // when a settled completion fact covers *this call's own domain*; otherwise the
+        // honest voice is `MayFallThrough`. Asserting `Produces` here is blocker 3.
+        let completion = if crate::analyzer::induction::completes_assumed(callee, args, interner) {
+            Completion::Produces
+        } else {
+            Completion::MayFallThrough
+        };
+        return BodySummary { produced: Contract::Top, completion, findings: vec![] };
     }
     ACTIVE.with(|s| s.borrow_mut().push(callee.clone()));
     let findings = body_check(callee, args, cenv, interner);

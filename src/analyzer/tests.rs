@@ -1483,7 +1483,7 @@ mod outcome {
 
 mod induction {
     use crate::analyzer::bodywalk::callee_targets;
-    use crate::analyzer::induction::{Candidate, joint_vector_pass};
+    use crate::analyzer::induction::{Claim, Candidate, joint_vector_pass};
     use crate::contract::{Contract, ContractEnv, Kind};
     use crate::interner::Interner;
     use crate::oracle::run_source;
@@ -1499,7 +1499,7 @@ mod induction {
         Contract::Kind(Kind::Boolean)
     }
     fn cand(callee: ValueRef, contract: Contract) -> Candidate {
-        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], contract }
+        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], claim: Claim::Return(contract), cutoff: false }
     }
 
     #[test]
@@ -1546,7 +1546,7 @@ mod induction {
 
 mod driver {
     use crate::analyzer::bodywalk::callee_targets;
-    use crate::analyzer::induction::{Candidate, joint_vector_pass, prove_facts};
+    use crate::analyzer::induction::{Claim, Candidate, joint_vector_pass, prove_facts};
     use crate::contract::{Contract, ContractEnv, Kind};
     use crate::interner::Interner;
     use crate::oracle::run_source;
@@ -1562,7 +1562,7 @@ mod driver {
         Contract::Kind(Kind::Boolean)
     }
     fn cand(callee: ValueRef, contract: Contract) -> Candidate {
-        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], contract }
+        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], claim: Claim::Return(contract), cutoff: false }
     }
 
     /// `quad` calls `double`; `double` is a leaf. Returns `(double, quad)`.
@@ -1911,14 +1911,10 @@ mod fact_identity {
         // Lock the domain-indexed lookup law *directly* (Archive5 §4) — no execution,
         // recursion, or oracle. A fact `f : [Number] → Boolean` is consumable exactly
         // when the call's argument domain is `⊑ [Number]`.
-        use crate::analyzer::induction::{Hypothesis, hypothesis_for, with_hypotheses};
+        use crate::analyzer::induction::{Claim, Hypothesis, hypothesis_for, with_hypotheses};
         let mut i = Interner::new();
         let f = run_source_in("f = (n) => n\nf", &mut i).unwrap().0;
-        let hyp = Hypothesis {
-            callee: f.clone(),
-            input: vec![Contract::Kind(Kind::Number)],
-            contract: Contract::Kind(Kind::Boolean),
-        };
+        let hyp = Hypothesis { callee: f.clone(), input: vec![Contract::Kind(Kind::Number)], claim: Claim::Return(Contract::Kind(Kind::Boolean)) };
         let one = Contract::Equals(i.integer(1));
         with_hypotheses(vec![hyp], || {
             let boolean = Some(Contract::Kind(Kind::Boolean));
