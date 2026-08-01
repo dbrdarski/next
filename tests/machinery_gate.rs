@@ -235,3 +235,71 @@ fn source_application_does_not_reenter_the_erased_bridge() {
         "analyze_apply still projects annotated source operands back to ordinary contracts"
     );
 }
+
+/// Existing three-voice safety judgments must reach program policy as typed records.
+/// Findings remain diagnostics; they may not be the only representation of operation
+/// or body safety at the executable and declared-demand boundaries.
+#[test]
+fn safety_voices_reach_program_policy_without_early_erasure() {
+    let analyzer =
+        std::fs::read_to_string(root().join("src/analyzer/mod.rs")).expect("readable analyzer");
+    let program =
+        std::fs::read_to_string(root().join("src/analyzer/program.rs")).expect("readable program");
+
+    assert!(
+        analyzer.contains("pub safety_demands: Vec<SafetyDemand>"),
+        "Analysis does not carry typed safety demands; operation/body verdicts can still be \
+         reduced irreversibly to findings"
+    );
+    let safety =
+        std::fs::read_to_string(root().join("src/analyzer/safety.rs")).expect("readable safety");
+    assert!(
+        safety.contains("pub demands: Vec<SafetyDemand>"),
+        "BodySafety discarded nested operation/body evidence while retaining only diagnostics"
+    );
+    assert!(
+        program.contains("pub safety_demands: Vec<SafetyDemand>")
+            && program.contains("pub body_safety_demands: Vec<DeclaredBodySafetyDemand>"),
+        "ProgramVerdict does not retain typed executable and declared BodySafe judgments"
+    );
+    assert!(
+        !program.contains("verdict_findings(\n        &w.name,\n        safety::prove"),
+        "analyze_where still feeds safety::prove directly into diagnostic reduction instead of \
+         retaining the typed verdict first"
+    );
+}
+
+/// Fact discovery and live application analysis must read the same AP-29 operand.
+/// A direct-name-only collector misses correlated local projection calls, leaving a
+/// safe declared body Unproven and inviting policy code to hide the failed proof.
+#[test]
+fn safety_discovery_uses_the_joint_application_operand() {
+    let src =
+        std::fs::read_to_string(root().join("src/analyzer/safety.rs")).expect("readable safety");
+    let body = src
+        .split_once("fn collect_calls")
+        .expect("collect_calls exists")
+        .1
+        .split_once("\n#[cfg(test)]")
+        .map_or_else(|| src.clone(), |(body, _)| body.to_string());
+    let code: String = body
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for required in [
+        "correlated_access_operand",
+        "operand_from_annotated",
+        "live_alternatives",
+    ] {
+        assert!(
+            has_ident(&code, required),
+            "safety discovery no longer uses `{required}` from the joint AP-29 operand path"
+        );
+    }
+    assert!(
+        !has_ident(&code, "resolve_callee"),
+        "safety discovery restored the direct-captured-name-only callee resolver"
+    );
+}

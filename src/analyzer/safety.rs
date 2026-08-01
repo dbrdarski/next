@@ -41,8 +41,10 @@ use crate::analyzer::factcache;
 use crate::analyzer::induction::{self, Candidate, Claim};
 use crate::analyzer::region::{region_table, select};
 use crate::analyzer::{
-    Finding, Severity, TypeEnv, analyze_in_world, bind_pattern, world_for_act,
+    Analysis, Finding, SafetyDemand, Severity, TypeEnv, analyze_in_world, bind_pattern,
+    world_for_act,
 };
+use crate::contract::OpSafety;
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::env::Binding;
 use crate::interner::Interner;
@@ -53,12 +55,22 @@ use crate::value::ValueRef;
 pub enum BodySafety {
     /// Every operation the body reaches over `I` discharges.
     Proven,
-    /// A definitely-reached operation traps — carries the refuting findings.
-    Refuted(Vec<Finding>),
+    /// A definitely-reached operation traps — carries diagnostics and the nested
+    /// typed demands, including any primitive operation witness.
+    Refuted(BodySafetyEvidence),
     /// Neither proved nor refuted (an unproven operation, or a recursive call whose
     /// domain no assumed fact covers). **Safety-unproven blocks at a seat**
     /// (late-resolution §5) — it is not a licence to proceed.
-    Unproven(Vec<Finding>),
+    Unproven(BodySafetyEvidence),
+}
+
+/// Evidence retained by a failed body-safety judgment. The demand list is recursive
+/// through a `Vec`, so a body fact can preserve the exact operation witness or nested
+/// body voice that caused it without changing the finite value layout.
+#[derive(Debug, Clone, Default)]
+pub struct BodySafetyEvidence {
+    pub findings: Vec<Finding>,
+    pub demands: Vec<SafetyDemand>,
 }
 
 impl BodySafety {
@@ -70,7 +82,9 @@ impl BodySafety {
     pub fn findings(&self) -> &[Finding] {
         match self {
             BodySafety::Proven => &[],
-            BodySafety::Refuted(f) | BodySafety::Unproven(f) => f,
+            BodySafety::Refuted(evidence) | BodySafety::Unproven(evidence) => {
+                &evidence.findings
+            }
         }
     }
 }
@@ -103,7 +117,7 @@ pub(crate) fn prove_claim(
     interner: &mut Interner,
 ) -> BodySafety {
     if callee.as_closure().is_none() {
-        return BodySafety::Unproven(Vec::new()); // not a known function — nothing to prove over
+        return BodySafety::Unproven(BodySafetyEvidence::default()); // not a known function
     }
 
     // Keyed by the **fact node**, not by a global "am I settling?" flag. That distinction
@@ -157,7 +171,11 @@ fn assumed(callee: &ValueRef, args: &[Contract], claim: &Claim, interner: &mut I
             })
         }
     };
-    if held { BodySafety::Proven } else { BodySafety::Unproven(Vec::new()) }
+    if held {
+        BodySafety::Proven
+    } else {
+        BodySafety::Unproven(BodySafetyEvidence::default())
+    }
 }
 
 thread_local! {
@@ -208,9 +226,9 @@ pub fn completes(
 /// under exactly the part of `I` that reaches it.
 ///
 /// **RT-14 witness discipline** is preserved: a finding from a non-exact (may-region) row
-/// is downgraded, because an over-approximate candidate authorizes no refutation. *(With
-/// only two severities that also makes it non-blocking; carrying "blocks but claims no
-/// witness" needs the third voice as a severity — recorded, not invented here.)*
+/// is downgraded, because an over-approximate candidate authorizes no refutation. Its
+/// typed demand is weakened to `Unproven`, which still blocks at policy without falsely
+/// claiming a witness; diagnostic severity no longer has to encode that third voice.
 fn verify_by_partition(
     callee: &ValueRef,
     closure: &crate::value::Closure,
@@ -218,24 +236,21 @@ fn verify_by_partition(
     domain: &Contract,
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> Vec<Finding> {
+) -> SafetyReport {
     let table = region_table(&closure.lambda.body, param, cenv, interner);
     let base = capture_env(callee);
-    let mut out = Vec::new();
+    let mut out = SafetyReport::default();
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
-        for f in analyze_in_world(
+        let analysis = analyze_in_world(
             &sel.result,
             &env,
             cenv,
             world_for_act(closure.lambda.act_kind),
             interner,
-        )
-        .findings
-        {
-            out.push(if sel.exact { f } else { downgrade(f) });
-        }
+        );
+        out.extend_analysis(analysis, sel.exact);
     }
     out
 }
@@ -245,6 +260,68 @@ fn downgrade(f: Finding) -> Finding {
     match f.severity {
         Severity::Error => Finding { severity: Severity::Warning, ..f },
         Severity::Warning => f,
+    }
+}
+
+/// The evidence returned by one body verification. Diagnostics remain available for
+/// policy and reporting, while typed demands decide whether a failed safety judgment is
+/// `Refuted` or merely `Unproven`.
+#[derive(Default)]
+struct SafetyReport {
+    findings: Vec<Finding>,
+    demands: Vec<SafetyDemand>,
+}
+
+impl SafetyReport {
+    fn extend_analysis(&mut self, analysis: Analysis, exact: bool) {
+        if exact {
+            self.findings.extend(analysis.findings);
+            self.demands.extend(analysis.safety_demands);
+            return;
+        }
+        self.findings
+            .extend(analysis.findings.into_iter().map(downgrade));
+        self.demands.extend(
+            analysis
+                .safety_demands
+                .into_iter()
+                .map(weaken_may_region_demand),
+        );
+    }
+}
+
+/// RT-14: a demand observed only in an over-approximate row cannot retain refutation
+/// evidence. It becomes the honest third voice, matching the diagnostic downgrade.
+fn weaken_may_region_demand(demand: SafetyDemand) -> SafetyDemand {
+    match demand {
+        SafetyDemand::Operation(mut operation) => {
+            if matches!(operation.verdict, OpSafety::Refuted(_)) {
+                operation.verdict = OpSafety::Unproven;
+            }
+            SafetyDemand::Operation(operation)
+        }
+        SafetyDemand::Body(mut body) => {
+            body.verdict = match body.verdict {
+                BodySafety::Refuted(evidence) => {
+                    BodySafety::Unproven(weaken_refutation_evidence(evidence))
+                }
+                other => other,
+            };
+            SafetyDemand::Body(body)
+        }
+    }
+}
+
+pub(crate) fn weaken_refutation_evidence(
+    evidence: BodySafetyEvidence,
+) -> BodySafetyEvidence {
+    BodySafetyEvidence {
+        findings: evidence.findings.into_iter().map(downgrade).collect(),
+        demands: evidence
+            .demands
+            .into_iter()
+            .map(weaken_may_region_demand)
+            .collect(),
     }
 }
 
@@ -260,16 +337,54 @@ fn single_param(params: &crate::ast::Pat) -> Option<String> {
     }
 }
 
-/// Three-voiced from the body's findings: any refutation refutes; else any unproven
-/// operation leaves the fact unproven; else proven.
-fn classify(findings: Vec<Finding>) -> BodySafety {
-    if findings.iter().any(|f| f.severity == Severity::Error) {
-        return BodySafety::Refuted(findings);
+/// Three-voiced from the body's typed judgments first, with findings as the fallback
+/// for safety checks that do not yet expose a dedicated verdict type. Rejecting policy
+/// severity must never relabel `Unproven` as `Refuted`.
+fn classify(report: SafetyReport) -> BodySafety {
+    let refuted = report.demands.iter().any(|demand| match demand {
+        SafetyDemand::Operation(operation) => {
+            matches!(operation.verdict, OpSafety::Refuted(_))
+        }
+        SafetyDemand::Body(body) => matches!(body.verdict, BodySafety::Refuted(_)),
+    });
+    if refuted {
+        return BodySafety::Refuted(BodySafetyEvidence {
+            findings: report.findings,
+            demands: report.demands,
+        });
     }
-    if findings.is_empty() {
+
+    // Any still-untyped definite trap remains a refutation, even when a different
+    // typed demand in the same body is merely Unproven. Typed Unproven diagnostics are
+    // advisory until policy, so they cannot be mistaken for this fallback.
+    if report
+        .findings
+        .iter()
+        .any(|finding| finding.severity == Severity::Error)
+    {
+        return BodySafety::Refuted(BodySafetyEvidence {
+            findings: report.findings,
+            demands: report.demands,
+        });
+    }
+
+    let unproven = report.demands.iter().any(|demand| match demand {
+        SafetyDemand::Operation(operation) => matches!(operation.verdict, OpSafety::Unproven),
+        SafetyDemand::Body(body) => matches!(body.verdict, BodySafety::Unproven(_)),
+    });
+    if unproven {
+        return BodySafety::Unproven(BodySafetyEvidence {
+            findings: report.findings,
+            demands: report.demands,
+        });
+    }
+    if report.findings.is_empty() {
         return BodySafety::Proven;
     }
-    BodySafety::Unproven(findings)
+    BodySafety::Unproven(BodySafetyEvidence {
+        findings: report.findings,
+        demands: report.demands,
+    })
 }
 
 /// The captured environment as contracts — each free variable bound to `Equals(value)`.
@@ -479,12 +594,14 @@ fn settle(
     // `Proven` (notably when a shape-cutoff dependency remains unresolved).
     // Completion/return likewise retain the graph verdict.
     let verdict = match claim {
-        Claim::Safety => match classify(verify(&seed.callee, &seed.input, cenv, interner)) {
-            BodySafety::Refuted(findings) => BodySafety::Refuted(findings),
-            BodySafety::Unproven(findings) => BodySafety::Unproven(findings),
-            BodySafety::Proven => BodySafety::Unproven(Vec::new()),
+        Claim::Safety => match verify(&seed.callee, &seed.input, cenv, interner) {
+            BodySafety::Refuted(evidence) => BodySafety::Refuted(evidence),
+            BodySafety::Unproven(evidence) => BodySafety::Unproven(evidence),
+            BodySafety::Proven => BodySafety::Unproven(BodySafetyEvidence::default()),
         },
-        Claim::Completes | Claim::Return(_) => BodySafety::Unproven(Vec::new()),
+        Claim::Completes | Claim::Return(_) => {
+            BodySafety::Unproven(BodySafetyEvidence::default())
+        }
     };
     Settlement {
         verdict,
@@ -505,6 +622,11 @@ fn calls_of(
     };
     let base = capture_env(&node.callee);
     let mut out = Vec::new();
+    // Discovery may contract-evaluate local bindings, projections, callees, and
+    // arguments, but it may not settle a nested safety fact. Keep the existing
+    // verification guard active so any nested application contributes a coarse
+    // Unproven result and is then discovered structurally by `collect_calls` itself.
+    let saved = VERIFYING_SAFETY.with(|active| active.replace(true));
     // Per-row walk (single parameter), else one whole-body walk.
     match (single_param(&closure.lambda.params), node.input.as_slice()) {
         (Some(param), [domain]) => {
@@ -529,6 +651,7 @@ fn calls_of(
             );
         }
     }
+    VERIFYING_SAFETY.with(|active| active.set(saved));
     out
 }
 
@@ -644,11 +767,11 @@ pub(crate) fn verify(
     args: &[Contract],
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> Vec<Finding> {
+) -> BodySafety {
     let saved = VERIFYING_SAFETY.with(|active| active.replace(true));
-    let findings = verify_inner(callee, args, cenv, interner);
+    let verdict = classify(verify_inner(callee, args, cenv, interner));
     VERIFYING_SAFETY.with(|active| active.set(saved));
-    findings
+    verdict
 }
 
 fn verify_inner(
@@ -656,9 +779,9 @@ fn verify_inner(
     args: &[Contract],
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> Vec<Finding> {
+) -> SafetyReport {
     let Some(closure) = callee.as_closure() else {
-        return Vec::new();
+        return SafetyReport::default();
     };
     match (single_param(&closure.lambda.params), args) {
         (Some(param), [domain]) => {
@@ -668,14 +791,16 @@ fn verify_inner(
             let mut env = capture_env(callee);
             let arg_tuple = Contract::tuple(args.to_vec(), interner);
             bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
-            analyze_in_world(
+            let analysis = analyze_in_world(
                 &closure.lambda.body,
                 &env,
                 cenv,
                 world_for_act(closure.lambda.act_kind),
                 interner,
-            )
-            .findings
+            );
+            let mut report = SafetyReport::default();
+            report.extend_analysis(analysis, true);
+            report
         }
     }
 }
@@ -730,8 +855,11 @@ pub(crate) fn produced_by_partition(
     }
 }
 
-/// Collect every application in `e` whose callee resolves through the closure's captured
-/// environment to a concrete function, paired with its argument domains under `env`.
+/// Collect every application in `e` whose joint annotated operand resolves to concrete
+/// functions, paired with the correlated argument domains under `env`. This is the
+/// discovery face of the same AP-29 representation used by live application analysis:
+/// a local `choice = [f, x] | [g, y]` followed by `choice[0](choice[1])` contributes
+/// `(f, x)` and `(g, y)`, never an unresolved access and never synthesized cross-pairs.
 /// Nested lambdas are not descended (a distinct instance); a spread argument declines
 /// (no positional mapping).
 fn collect_calls(
@@ -742,30 +870,58 @@ fn collect_calls(
     interner: &mut Interner,
     out: &mut Vec<(ValueRef, Vec<Contract>)>,
 ) {
-    use crate::ast::{AccessForm, Arg, Bind, Element, Expr, Field, MatchItem, TemplatePart};
+    use crate::ast::{AccessForm, Arg, Element, Expr, Field, MatchItem, TemplatePart};
     match e {
         Expr::Const(_) | Expr::Ref(_) | Expr::Lambda(_) => {}
         Expr::Apply { callee, args } => {
-            if let Some(target) = resolve_callee(callee, closure) {
-                let mut domains = Vec::new();
-                let mut clean = true;
-                for a in args {
-                    match a {
-                        Arg::Expr(x) => domains.push(
-                            analyze_in_world(
-                                x,
-                                env,
-                                cenv,
-                                world_for_act(closure.lambda.act_kind),
-                                interner,
-                            )
-                            .contract,
-                        ),
-                        Arg::Spread(_) => clean = false,
-                    }
+            let callee_analysis = analyze_in_world(
+                callee,
+                env,
+                cenv,
+                world_for_act(closure.lambda.act_kind),
+                interner,
+            );
+            let mut arguments = Vec::new();
+            let clean = args.iter().all(|argument| match argument {
+                Arg::Expr(expression) => {
+                    arguments.push(
+                        analyze_in_world(
+                            expression,
+                            env,
+                            cenv,
+                            world_for_act(closure.lambda.act_kind),
+                            interner,
+                        )
+                        .annotated,
+                    );
+                    true
                 }
-                if clean {
-                    out.push((target, domains));
+                Arg::Spread(_) => false,
+            });
+            if clean {
+                let operand = super::correlated_access_operand(callee, args, env)
+                    .unwrap_or_else(|| {
+                        super::application::operand_from_annotated(
+                            &callee_analysis.annotated,
+                            &arguments,
+                        )
+                    });
+                let (alternatives, _) = super::application::live_alternatives(&operand);
+                for alternative in alternatives {
+                    let callee_contract = alternative.callee.erase(interner);
+                    let domains: Vec<Contract> = alternative
+                        .arguments
+                        .iter()
+                        .map(|argument| argument.erase(interner))
+                        .collect();
+                    for target in super::application::classify_callees(
+                        &callee_contract,
+                        interner,
+                    ) {
+                        if let super::application::CalleeAlternative::Known(target) = target {
+                            out.push((target, domains.clone()));
+                        }
+                    }
                 }
             }
             collect_calls(callee, closure, env, cenv, interner, out);
@@ -783,15 +939,50 @@ fn collect_calls(
             if let Some(s) = &m.scrutinee {
                 collect_calls(s, closure, env, cenv, interner, out);
             }
+            let mut body_env = env.clone();
             for item in &m.items {
                 match item {
-                    MatchItem::Bind(Bind { value, .. }) => collect_calls(value, closure, env, cenv, interner, out),
-                    MatchItem::Stmt(x) => collect_calls(x, closure, env, cenv, interner, out),
+                    MatchItem::Bind(binding) => {
+                        collect_calls(
+                            &binding.value,
+                            closure,
+                            &body_env,
+                            cenv,
+                            interner,
+                            out,
+                        );
+                        let analysis = analyze_in_world(
+                            &binding.value,
+                            &body_env,
+                            cenv,
+                            world_for_act(closure.lambda.act_kind),
+                            interner,
+                        );
+                        let mut ignored = Vec::new();
+                        super::analyze_bind(
+                            &binding.target,
+                            &analysis.annotated,
+                            &mut body_env,
+                            &mut ignored,
+                            cenv,
+                            interner,
+                        );
+                    }
+                    MatchItem::Stmt(x) => {
+                        collect_calls(x, closure, &body_env, cenv, interner, out)
+                    }
                     MatchItem::Arm(arm) => {
                         if let Some(g) = &arm.guard {
-                            collect_calls(g, closure, env, cenv, interner, out);
+                            collect_calls(g, closure, &body_env, cenv, interner, out);
                         }
-                        collect_calls(&arm.result, closure, env, cenv, interner, out);
+                        collect_calls(
+                            &arm.result,
+                            closure,
+                            &body_env,
+                            cenv,
+                            interner,
+                            out,
+                        );
                     }
                 }
             }
@@ -835,17 +1026,6 @@ fn collect_calls(
             }
         }
         Expr::Write { value, .. } => collect_calls(value, closure, env, cenv, interner, out),
-    }
-}
-
-/// The concrete function a callee expression names, via the closure's captures.
-fn resolve_callee(callee: &crate::ast::Expr, closure: &crate::value::Closure) -> Option<ValueRef> {
-    let crate::ast::Expr::Ref(crate::ast::Ref::Immutable(crate::ast::BindingRef::Name(n))) = callee else {
-        return None;
-    };
-    match closure.env.lookup(n) {
-        Some(Binding::Value(v)) if v.is_function() => Some(v),
-        _ => None,
     }
 }
 

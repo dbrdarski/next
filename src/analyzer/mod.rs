@@ -7,8 +7,9 @@
 //! it produces, and at each operation site discharges the operation's safety
 //! demand ([`analyze_operation`]) — emitting a [`Finding`] for anything that
 //! **will** trap or that it **cannot prove** safe. Both reject after typed safety
-//! verdicts reach their consuming seat; warnings remain advisory evidence and carry
-//! non-safety third voices such as completion that may fall through.
+//! verdicts reach their consuming seat: safety-Unproven carries an advisory diagnostic
+//! during fact calculation, then gains its Error at policy. Non-safety third voices such
+//! as completion that may fall through remain warning-only.
 //! The soundness contract (§6): an expression the analyzer accepts with no error
 //! never traps in the oracle.
 //!
@@ -114,6 +115,33 @@ pub enum CompletionWitness {
     Write { slot: SlotRef },
 }
 
+/// One primitive-operation safety judgment, retained independently of the diagnostic
+/// policy applied at the operation's consuming seat. A refutation owns the exact
+/// operand witness supplied by the operation rulebook.
+#[derive(Clone, Debug)]
+pub struct OperationSafetyDemand {
+    pub operation: PrimOp,
+    pub inputs: Vec<Contract>,
+    pub verdict: OpSafety,
+}
+
+/// One domain-indexed body-safety judgment made while analyzing an application.
+/// Program policy blocks both failed voices, but this record keeps `Refuted` and
+/// `Unproven` semantically distinct after that policy is applied.
+#[derive(Clone, Debug)]
+pub struct BodySafetyDemand {
+    pub callee: ValueRef,
+    pub arguments: Vec<Contract>,
+    pub verdict: safety::BodySafety,
+}
+
+/// Typed safety evidence raised by an expression and all of its reachable children.
+#[derive(Clone, Debug)]
+pub enum SafetyDemand {
+    Operation(OperationSafetyDemand),
+    Body(BodySafetyDemand),
+}
+
 /// The result of analyzing an expression: the inferred contract, any findings
 /// gathered from it and its subexpressions, and its completion (E10).
 #[derive(Clone, Debug)]
@@ -123,6 +151,9 @@ pub struct Analysis {
     /// `erase(annotated)` and remains the ordinary language-facing denotation.
     pub annotated: AnalysisContract,
     pub findings: Vec<Finding>,
+    /// Semantic safety judgments before their accepting/rejecting diagnostics are
+    /// interpreted. Findings are the policy surface; they are not the evidence store.
+    pub safety_demands: Vec<SafetyDemand>,
     pub completion: Completion,
 }
 
@@ -133,6 +164,7 @@ impl Analysis {
             annotated: AnalysisContract::of_contract(contract.clone()),
             contract,
             findings,
+            safety_demands: Vec::new(),
             completion: Completion::Produces,
         }
     }
@@ -146,13 +178,51 @@ impl Analysis {
             contract: annotated.erase(interner),
             annotated,
             findings,
+            safety_demands: Vec::new(),
             completion: Completion::Produces,
         }
     }
 
-    /// Whether the expression is accepted — no error-level findings.
+    fn produced_with_safety(
+        contract: Contract,
+        findings: Vec<Finding>,
+        safety_demands: Vec<SafetyDemand>,
+    ) -> Analysis {
+        Analysis {
+            annotated: AnalysisContract::of_contract(contract.clone()),
+            contract,
+            findings,
+            safety_demands,
+            completion: Completion::Produces,
+        }
+    }
+
+    fn produced_annotated_with_safety(
+        annotated: AnalysisContract,
+        findings: Vec<Finding>,
+        safety_demands: Vec<SafetyDemand>,
+        interner: &mut Interner,
+    ) -> Analysis {
+        Analysis {
+            contract: annotated.erase(interner),
+            annotated,
+            findings,
+            safety_demands,
+            completion: Completion::Produces,
+        }
+    }
+
+    /// Whether the expression is accepted. Typed safety-unproven blocks even while its
+    /// diagnostic remains advisory inside analysis; the consuming program seat later
+    /// materializes the unsuppressible Error without erasing the verdict.
     pub fn accepted(&self) -> bool {
         self.findings.iter().all(|f| f.severity != Severity::Error)
+            && self.safety_demands.iter().all(|demand| match demand {
+                SafetyDemand::Operation(operation) => {
+                    matches!(operation.verdict, OpSafety::Proven)
+                }
+                SafetyDemand::Body(body) => matches!(body.verdict, safety::BodySafety::Proven),
+            })
     }
 
     /// Whether evaluation may complete without a value (either voice of fall-through).
@@ -285,13 +355,26 @@ fn analyze_primop(
     interner: &mut Interner,
 ) -> Analysis {
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
     let mut inputs = Vec::with_capacity(args.len());
     for a in args {
         let mut r = analyze_in_world(a, env, cenv, world, interner);
         demand(&r, &mut findings); // operands are expecting seats
         findings.append(&mut r.findings);
+        safety_demands.append(&mut r.safety_demands);
         inputs.push(r.contract);
     }
+
+    // The rulebook judgment is made for every operation, including a closed one. The
+    // oracle still supplies the exact folded value/trap below; the typed judgment is
+    // retained separately so its witness/third voice survives program policy.
+    let operation_result = analyze_operation(op, &inputs, interner);
+    let operation_verdict = operation_result.safety.clone();
+    safety_demands.push(SafetyDemand::Operation(OperationSafetyDemand {
+        operation: op,
+        inputs: inputs.clone(),
+        verdict: operation_verdict.clone(),
+    }));
 
     // Constant-fold when every operand is a singleton: run the oracle's own primop
     // semantics, so the trap class is predicted exactly (§6 concordance).
@@ -316,8 +399,7 @@ fn analyze_primop(
             }
         },
         None => {
-            let result = analyze_operation(op, &inputs, interner);
-            match result.safety {
+            match operation_verdict {
                 OpSafety::Proven => {}
                 OpSafety::Refuted(witness) => {
                     // The exact class comes from the oracle trapping on the witness.
@@ -333,15 +415,15 @@ fn analyze_primop(
                 }
                 OpSafety::Unproven => findings.push(Finding {
                     class: TrapClass::OperationSafety,
-                    severity: Severity::Error,
+                    severity: Severity::Warning,
                     message: format!("cannot prove `{op:?}` safe for these operands"),
                 }),
             }
-            result.output
+            operation_result.output
         }
     };
 
-    Analysis::produced(contract, findings)
+    Analysis::produced_with_safety(contract, findings, safety_demands)
 }
 
 fn analyze_tuple(
@@ -352,6 +434,7 @@ fn analyze_tuple(
     interner: &mut Interner,
 ) -> Analysis {
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
     let mut segments: Vec<Contract> = Vec::new();
     let mut run: Vec<Contract> = Vec::new(); // the current spread-free element run
     let mut annotated_elements = Vec::new();
@@ -362,6 +445,7 @@ fn analyze_tuple(
                 let mut r = analyze_in_world(e, env, cenv, world, interner);
                 demand(&r, &mut findings); // elements are expecting seats
                 findings.append(&mut r.findings);
+                safety_demands.append(&mut r.safety_demands);
                 run.push(r.contract);
                 annotated_elements.push(r.annotated);
             }
@@ -380,6 +464,7 @@ fn analyze_tuple(
                     interner,
                 );
                 findings.append(&mut r.findings);
+                safety_demands.append(&mut r.safety_demands);
                 if !run.is_empty() {
                     segments.push(Contract::tuple(std::mem::take(&mut run), interner));
                 }
@@ -392,11 +477,16 @@ fn analyze_tuple(
     }
     // With no spreads this normalizes straight back to the exact Tuple.
     if has_spread {
-        Analysis::produced(Contract::concat(segments, interner), findings)
+        Analysis::produced_with_safety(
+            Contract::concat(segments, interner),
+            findings,
+            safety_demands,
+        )
     } else {
-        Analysis::produced_annotated(
+        Analysis::produced_annotated_with_safety(
             AnalysisContract::tuple(annotated_elements),
             findings,
+            safety_demands,
             interner,
         )
     }
@@ -421,6 +511,7 @@ fn analyze_record(
     interner: &mut Interner,
 ) -> Analysis {
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
     let mut pairs = Vec::new();
     let mut annotated_pairs = Vec::new();
     let mut exact_shape = true;
@@ -430,6 +521,7 @@ fn analyze_record(
                 let mut r = analyze_in_world(value, env, cenv, world, interner);
                 demand(&r, &mut findings); // field values are expecting seats
                 findings.append(&mut r.findings);
+                safety_demands.append(&mut r.safety_demands);
                 pairs.push((key.clone(), r.contract));
                 annotated_pairs.push((key.clone(), r.annotated));
             }
@@ -440,10 +532,12 @@ fn analyze_record(
                 let mut ka = analyze_in_world(key, env, cenv, world, interner);
                 demand(&ka, &mut findings);
                 findings.append(&mut ka.findings);
+                safety_demands.append(&mut ka.safety_demands);
                 check_computed_key(&ka.contract, &mut findings);
                 let mut va = analyze_in_world(value, env, cenv, world, interner);
                 demand(&va, &mut findings);
                 findings.append(&mut va.findings);
+                safety_demands.append(&mut va.safety_demands);
                 exact_shape = false;
             }
             // A record spread must be a Record (else the spread-kind trap).
@@ -458,6 +552,7 @@ fn analyze_record(
                     interner,
                 );
                 findings.append(&mut r.findings);
+                safety_demands.append(&mut r.safety_demands);
                 exact_shape = false;
             }
         }
@@ -468,13 +563,14 @@ fn analyze_record(
         Contract::Top
     };
     if exact_shape {
-        Analysis::produced_annotated(
+        Analysis::produced_annotated_with_safety(
             AnalysisContract::record(annotated_pairs),
             findings,
+            safety_demands,
             interner,
         )
     } else {
-        Analysis::produced(contract, findings)
+        Analysis::produced_with_safety(contract, findings, safety_demands)
     }
 }
 
@@ -491,6 +587,7 @@ fn analyze_template(
     interner: &mut Interner,
 ) -> Analysis {
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
     for part in parts {
         let TemplatePart::Interp(e) = part else {
             continue;
@@ -498,8 +595,9 @@ fn analyze_template(
         let mut r = analyze_in_world(e, env, cenv, world, interner);
         demand(&r, &mut findings); // interpolations are expecting seats
         findings.append(&mut r.findings);
+        safety_demands.append(&mut r.safety_demands);
     }
-    Analysis::produced(Contract::Kind(Kind::String), findings)
+    Analysis::produced_with_safety(Contract::Kind(Kind::String), findings, safety_demands)
 }
 
 /// Access demands (E6). The *demand form* (`total = false`) must prove the
@@ -521,17 +619,20 @@ fn analyze_access(
     interner: &mut Interner,
 ) -> Analysis {
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
     let ta = analyze_in_world(target, env, cenv, world, interner);
     demand(&ta, &mut findings); // the receiver is an expecting seat
     let target_annotated = ta.annotated.clone();
     let tc = ta.contract.clone();
     findings.extend(ta.findings);
+    safety_demands.extend(ta.safety_demands);
 
     // Analyze the index/bound subexpressions for their findings and fold values.
     let mut child = |e: &Expr, findings: &mut Vec<Finding>| -> Contract {
         let mut a = analyze_in_world(e, env, cenv, world, interner);
         demand(&a, findings); // index / slice bounds are expecting seats
         findings.append(&mut a.findings);
+        safety_demands.append(&mut a.safety_demands);
         a.contract
     };
     let idx_c = match form {
@@ -560,15 +661,18 @@ fn analyze_access(
     });
     if let Some(node) = folded {
         return match eval_expr(&node, interner) {
-            Ok(Outcome::Produced(v)) => Analysis::produced_annotated(
+            Ok(Outcome::Produced(v)) => Analysis::produced_annotated_with_safety(
                 AnalysisContract::of_value(v),
                 findings,
+                safety_demands,
                 interner,
             ),
-            Ok(Outcome::CompletedWithoutValue) => Analysis::produced(Contract::Top, findings),
+            Ok(Outcome::CompletedWithoutValue) => {
+                Analysis::produced_with_safety(Contract::Top, findings, safety_demands)
+            }
             Err(trap) => {
                 findings.push(Finding { class: trap.class, severity: Severity::Error, message: trap.message });
-                Analysis::produced(Contract::Bottom, findings)
+                Analysis::produced_with_safety(Contract::Bottom, findings, safety_demands)
             }
         };
     }
@@ -585,7 +689,12 @@ fn analyze_access(
         AccessForm::Slice { .. } => None,
     };
     if let Some(projected) = projected {
-        return Analysis::produced_annotated(projected, findings, interner);
+        return Analysis::produced_annotated_with_safety(
+            projected,
+            findings,
+            safety_demands,
+            interner,
+        );
     }
 
     // Open path.
@@ -594,7 +703,7 @@ fn analyze_access(
         AccessForm::Index(_) => analyze_index(&tc, total, &mut findings, interner),
         AccessForm::Slice { .. } => analyze_slice(&tc, &mut findings, interner),
     };
-    Analysis::produced(contract, findings)
+    Analysis::produced_with_safety(contract, findings, safety_demands)
 }
 
 fn singleton_index(contract: &Contract) -> Option<usize> {
@@ -787,6 +896,7 @@ fn analyze_write(
         contract: Contract::Bottom,
         annotated: AnalysisContract::bottom(),
         findings,
+        safety_demands: rhs.safety_demands,
         completion: Completion::FallsThrough(CompletionWitness::Write { slot: slot.clone() }),
     }
 }
@@ -816,11 +926,13 @@ fn analyze_apply(
     interner: &mut Interner,
 ) -> Analysis {
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
 
     let ca = analyze_in_world(callee, env, cenv, world, interner);
     demand(&ca, &mut findings); // the callee is an expecting seat
     let callee_annotated = ca.annotated.clone();
     findings.extend(ca.findings);
+    safety_demands.extend(ca.safety_demands);
 
     let mut argument_annotated: Vec<AnalysisContract> = Vec::new();
     let mut has_spread = false;
@@ -831,6 +943,7 @@ fn analyze_apply(
                 demand(&aa, &mut findings);
                 argument_annotated.push(aa.annotated.clone());
                 findings.extend(aa.findings);
+                safety_demands.extend(aa.safety_demands);
             }
             Arg::Spread(e) => {
                 has_spread = true;
@@ -838,6 +951,7 @@ fn analyze_apply(
                 demand(&aa, &mut findings);
                 check_spread_kind(&aa.contract, Kind::Tuple, "argument spread of a non-Tuple", &mut findings, interner);
                 findings.extend(aa.findings);
+                safety_demands.extend(aa.safety_demands);
             }
         }
     }
@@ -848,24 +962,33 @@ fn analyze_apply(
     let operand = correlated_access_operand(callee, args, env).unwrap_or_else(|| {
         application::operand_from_annotated(&callee_annotated, &argument_annotated)
     });
-    let transfer = application::drive_application(&operand, |alternative, _| {
+    let transfer = application::drive_application(&operand, |alternative, correlated| {
         analyze_application_alternative(
             alternative,
+            correlated,
             has_spread,
             world,
             cenv,
             interner,
         )
     });
-    for mut alternative_findings in transfer.details {
-        findings.append(&mut alternative_findings);
+    for mut detail in transfer.details {
+        findings.append(&mut detail.findings);
+        safety_demands.append(&mut detail.safety_demands);
     }
     Analysis {
         contract: transfer.outcome.produced.erase(interner),
         annotated: transfer.outcome.produced,
         findings,
+        safety_demands,
         completion: completion_from_application(transfer.outcome.completion),
     }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ApplicationDetail {
+    findings: Vec<Finding>,
+    safety_demands: Vec<SafetyDemand>,
 }
 
 /// Supply one fact-backed contribution to the canonical application driver. This is
@@ -874,11 +997,12 @@ fn analyze_apply(
 /// complete outcome plus diagnostics without performing an alternative join.
 fn analyze_application_alternative(
     alternative: &application::Alternative,
+    correlated: bool,
     has_spread: bool,
     world: World,
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> AlternativeContribution<Vec<Finding>> {
+) -> AlternativeContribution<ApplicationDetail> {
     let arg_contracts: Vec<Contract> = alternative
         .arguments
         .iter()
@@ -904,6 +1028,7 @@ fn analyze_application_alternative(
                     severity: Severity::Error,
                     message: message.into(),
                 }],
+                Vec::new(),
                 Contract::Bottom,
                 Completion::Produces,
             )
@@ -916,12 +1041,14 @@ fn analyze_application_alternative(
                     "cannot prove this callee's body safe (callee not resolved to a known function)"
                         .into(),
             }],
+            Vec::new(),
             Contract::Top,
             Completion::MayFallThrough,
         ),
         CalleeAlternative::Known(callee) => analyze_known_application_alternative(
             &callee,
             &arg_contracts,
+            correlated,
             has_spread,
             world,
             cenv,
@@ -1009,12 +1136,14 @@ fn source_projection(expr: &Expr) -> Option<(String, AccessProjection)> {
 fn analyze_known_application_alternative(
     callee: &ValueRef,
     arg_contracts: &[Contract],
+    correlated: bool,
     has_spread: bool,
     world: World,
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> AlternativeContribution<Vec<Finding>> {
+) -> AlternativeContribution<ApplicationDetail> {
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
     analyze_known_callee(
         callee,
         arg_contracts,
@@ -1028,43 +1157,90 @@ fn analyze_known_application_alternative(
     // Effect primitives are total-return by the B6 user ruling: host failure is
     // ordinary `Failure` data, never a trap. Their Rust body is not analyzer input.
     if callee.as_native().is_some() {
-        return application_contribution(findings, Contract::Top, Completion::Produces);
+        return application_contribution(
+            findings,
+            safety_demands,
+            Contract::Top,
+            Completion::Produces,
+        );
     }
 
     // A recursive reference covered by an active safety fact resolves through that
     // fact; acyclic dependencies retain their exact body outcome.
     if !has_spread && induction::safety_assumed(callee, arg_contracts, interner) {
+        safety_demands.push(SafetyDemand::Body(BodySafetyDemand {
+            callee: callee.clone(),
+            arguments: arg_contracts.to_vec(),
+            verdict: safety::BodySafety::Proven,
+        }));
         if induction::is_recursive(callee) {
             let produced = call_return(callee, arg_contracts, has_spread, cenv, interner);
             let completes = induction::completes_assumed(callee, arg_contracts, interner)
                 || safety::completes(callee, arg_contracts, cenv, interner);
             let completion = callee_completion(callee, arg_contracts, completes, interner);
-            return application_contribution(findings, produced, completion);
+            return application_contribution(findings, safety_demands, produced, completion);
         }
         let observed = outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
             .expect("a known closure has a body outcome");
         let completes = matches!(&observed.completion, Completion::Produces);
         let completion = callee_completion(callee, arg_contracts, completes, interner);
-        return application_contribution(findings, observed.annotated, completion);
+        return application_contribution(
+            findings,
+            safety_demands,
+            observed.annotated,
+            completion,
+        );
     }
 
     // Candidate-graph verification may consume only the active/settled graph. Starting
     // another settlement here would bypass a cutoff dependency.
     if !has_spread && safety::safety_context_active() {
-        findings.push(Finding {
+        let advisory = Finding {
             class: TrapClass::OperationSafety,
             severity: Severity::Warning,
             message: "callee safety is not established by the active fact graph".into(),
-        });
-        return application_contribution(findings, Contract::Top, Completion::MayFallThrough);
+        };
+        findings.push(advisory.clone());
+        safety_demands.push(SafetyDemand::Body(BodySafetyDemand {
+            callee: callee.clone(),
+            arguments: arg_contracts.to_vec(),
+            verdict: safety::BodySafety::Unproven(safety::BodySafetyEvidence {
+                findings: vec![advisory],
+                demands: Vec::new(),
+            }),
+        }));
+        return application_contribution(
+            findings,
+            safety_demands,
+            Contract::Top,
+            Completion::MayFallThrough,
+        );
     }
     if has_spread {
-        return application_contribution(findings, Contract::Top, Completion::Produces);
+        return application_contribution(
+            findings,
+            safety_demands,
+            Contract::Top,
+            Completion::Produces,
+        );
     }
 
-    let body_safe = safety::prove(callee, arg_contracts, cenv, interner);
-    if !discharge_body_safety(body_safe, &mut findings) {
-        return application_contribution(findings, Contract::Top, Completion::MayFallThrough);
+    let body_safe = weaken_projected_body_safety(
+        safety::prove(callee, arg_contracts, cenv, interner),
+        correlated,
+    );
+    safety_demands.push(SafetyDemand::Body(BodySafetyDemand {
+        callee: callee.clone(),
+        arguments: arg_contracts.to_vec(),
+        verdict: body_safe.clone(),
+    }));
+    if !discharge_body_safety(&body_safe, &mut findings) {
+        return application_contribution(
+            findings,
+            safety_demands,
+            Contract::Top,
+            Completion::MayFallThrough,
+        );
     }
 
     // Safety has settled the complete dependency graph. Completion and recursive
@@ -1074,6 +1250,7 @@ fn analyze_known_application_alternative(
             contract: Contract::Top,
             annotated: AnalysisContract::of_contract(Contract::Top),
             findings: Vec::new(),
+            safety_demands: Vec::new(),
             completion: Completion::MayFallThrough,
         });
     let completes = safety::completes(callee, arg_contracts, cenv, interner);
@@ -1089,18 +1266,25 @@ fn analyze_known_application_alternative(
     } else {
         observed.annotated
     };
-    application_contribution(findings, produced, completion)
+    application_contribution(findings, safety_demands, produced, completion)
 }
 
 fn application_contribution(
     findings: Vec<Finding>,
+    safety_demands: Vec<SafetyDemand>,
     produced: impl Into<AnalysisContract>,
     completion: Completion,
-) -> AlternativeContribution<Vec<Finding>> {
+) -> AlternativeContribution<ApplicationDetail> {
     let produced = produced.into();
     let verdict = if findings
         .iter()
         .any(|finding| finding.severity == Severity::Error)
+        || safety_demands.iter().any(|demand| match demand {
+            SafetyDemand::Operation(operation) => {
+                !matches!(operation.verdict, OpSafety::Proven)
+            }
+            SafetyDemand::Body(body) => !matches!(body.verdict, safety::BodySafety::Proven),
+        })
     {
         SeatVerdict::Unproven
     } else {
@@ -1122,7 +1306,29 @@ fn application_contribution(
             completion,
             may_not_complete: false,
         },
-        detail: findings,
+        detail: ApplicationDetail {
+            findings,
+            safety_demands,
+        },
+    }
+}
+
+/// AP-29: an independently projected callee/argument pair is not a represented
+/// execution. A body refutation obtained only from that pair therefore becomes the
+/// third voice before the blocking policy is applied; its diagnostics become advisory
+/// evidence and the policy adds the unsuppressible Unproven error separately.
+fn weaken_projected_body_safety(
+    verdict: safety::BodySafety,
+    correlated: bool,
+) -> safety::BodySafety {
+    if correlated {
+        return verdict;
+    }
+    match verdict {
+        safety::BodySafety::Refuted(evidence) => {
+            safety::BodySafety::Unproven(safety::weaken_refutation_evidence(evidence))
+        }
+        other => other,
     }
 }
 
@@ -1154,13 +1360,14 @@ fn join_completions(completions: &[Completion]) -> Completion {
     }
 }
 
-/// Apply the program policy to a settled body-safety fact. Both refutation and
-/// unproven safety block; an unproven fact may carry only advisory row findings, so
-/// it always gains an explicit Error rather than being silently accepted.
-fn discharge_body_safety(verdict: safety::BodySafety, findings: &mut Vec<Finding>) -> bool {
+/// Attach expression-local diagnostics to a settled body-safety fact. Refutation keeps
+/// its Error evidence. Unproven remains advisory here and blocks through the typed
+/// demand; the executable or declared consuming boundary materializes its policy Error.
+fn discharge_body_safety(verdict: &safety::BodySafety, findings: &mut Vec<Finding>) -> bool {
     match verdict {
         safety::BodySafety::Proven => true,
-        safety::BodySafety::Refuted(mut body_findings) => {
+        safety::BodySafety::Refuted(evidence) => {
+            let mut body_findings = evidence.findings.clone();
             if !body_findings.iter().any(|f| f.severity == Severity::Error) {
                 body_findings.push(Finding {
                     class: TrapClass::OperationSafety,
@@ -1171,10 +1378,11 @@ fn discharge_body_safety(verdict: safety::BodySafety, findings: &mut Vec<Finding
             findings.append(&mut body_findings);
             false
         }
-        safety::BodySafety::Unproven(mut body_findings) => {
+        safety::BodySafety::Unproven(evidence) => {
+            let mut body_findings = evidence.findings.clone();
             body_findings.push(Finding {
                 class: TrapClass::OperationSafety,
-                severity: Severity::Error,
+                severity: Severity::Warning,
                 message: "callee body safety cannot be proven".into(),
             });
             findings.append(&mut body_findings);
@@ -1364,14 +1572,16 @@ fn analyze_match(
     use crate::ast::MatchItem;
 
     let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
 
     // The scrutinee is evaluated once, in an expecting seat.
     let (scrut, scrut_annotated) = match &m.scrutinee {
         Some(e) => {
-            let a = analyze_in_world(e, env, cenv, world, interner);
+            let mut a = analyze_in_world(e, env, cenv, world, interner);
             demand(&a, &mut findings);
             let pair = (a.contract.clone(), a.annotated.clone());
-            findings.extend(a.findings);
+            findings.append(&mut a.findings);
+            safety_demands.append(&mut a.safety_demands);
             pair
         }
         None => (
@@ -1394,9 +1604,10 @@ fn analyze_match(
     for item in &m.items {
         match item {
             MatchItem::Bind(b) => {
-                let a = analyze_in_world(&b.value, &body_env, cenv, world, interner);
+                let mut a = analyze_in_world(&b.value, &body_env, cenv, world, interner);
                 demand(&a, &mut findings); // a bind RHS is an expecting seat
-                findings.extend(a.findings);
+                findings.append(&mut a.findings);
+                safety_demands.append(&mut a.safety_demands);
                 analyze_bind(
                     &b.target,
                     &a.annotated,
@@ -1408,8 +1619,9 @@ fn analyze_match(
             }
             MatchItem::Stmt(e) => {
                 // A statement's value is discarded — *not* an expecting seat.
-                let a = analyze_in_world(e, &body_env, cenv, world, interner);
-                findings.extend(a.findings);
+                let mut a = analyze_in_world(e, &body_env, cenv, world, interner);
+                findings.append(&mut a.findings);
+                safety_demands.append(&mut a.safety_demands);
             }
             MatchItem::Arm(arm) => {
                 let pc = arm
@@ -1448,9 +1660,10 @@ fn analyze_match(
                 // *opaque* guard consumes nothing (uncertainty selects, E9).
                 let mut opaque_guard = false;
                 if let Some(g) = &arm.guard {
-                    let ga = analyze_in_world(g, &arm_env, cenv, world, interner);
+                    let mut ga = analyze_in_world(g, &arm_env, cenv, world, interner);
                     demand(&ga, &mut findings);
-                    findings.extend(ga.findings);
+                    findings.append(&mut ga.findings);
+                    safety_demands.append(&mut ga.safety_demands);
                     check_tested_seat(&ga.contract, &mut findings, interner);
                     let t = Contract::Equals(interner.boolean(true));
                     let f = Contract::Equals(interner.boolean(false));
@@ -1465,8 +1678,9 @@ fn analyze_match(
                 // is demanded only if the enclosing Match's consumer is expecting;
                 // demanding here would falsely reject the same Match in a statement
                 // seat (E10 / compendium 1.0.8).
-                let ra = analyze_in_world(&arm.result, &arm_env, cenv, world, interner);
-                findings.extend(ra.findings);
+                let mut ra = analyze_in_world(&arm.result, &arm_env, cenv, world, interner);
+                findings.append(&mut ra.findings);
+                safety_demands.append(&mut ra.safety_demands);
                 results.push(ra.contract);
                 annotated_results.push(ra.annotated);
                 let arm_is_represented = !opaque_guard && narrowed.has_proven_inhabitant(interner);
@@ -1507,6 +1721,7 @@ fn analyze_match(
         contract,
         annotated,
         findings,
+        safety_demands,
         completion: join_completions(&completions),
     }
 }

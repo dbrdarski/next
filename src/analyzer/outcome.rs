@@ -66,6 +66,7 @@ pub(crate) fn analyze_instance_body(
             contract: Contract::Top,
             annotated: AnalysisContract::of_contract(Contract::Top),
             findings: Vec::new(),
+            safety_demands: Vec::new(),
             completion: Completion::MayFallThrough,
         });
     }

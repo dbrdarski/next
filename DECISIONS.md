@@ -4292,3 +4292,54 @@ or new semantic mechanism was introduced. **`// [ask-author]`: none.**
 **Verification:** 426 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 7 machinery gates
 passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
 `cargo fmt --check` remains the separately recorded pre-existing formatting gate.
+
+## 2026-08-01 — Recovery slice 9: typed safety evidence survives program policy
+
+**Measured red before implementation:** new program regressions could not compile because neither
+`Analysis`, `ExecutableDemand`, nor `ProgramVerdict` exposed a typed safety record. The live
+primitive and application paths reduced `OpSafety` / `BodySafety` immediately to `Finding`s; the
+operation witness disappeared, and an Error used to enforce the ruled blocking policy could make an
+`OpSafety::Unproven` body look `Refuted`. A machinery check failed on the absent fields and the direct
+`safety::prove`→diagnostic reduction at `where`.
+
+**Typed expression and program boundary:** `Analysis` now carries `SafetyDemand::Operation` and
+`SafetyDemand::Body` through every expression composition. The operation record retains the
+primitive, operand contracts, and exact `OpSafety` verdict; a refutation therefore keeps the concrete
+operand tuple admitted by those contracts. Application records retain `(callee, arguments,
+BodySafety)`. Executable demand records copy the complete list, while `ProgramVerdict` adds one
+`DeclaredBodySafetyDemand { name, callee, domain, verdict }` for every actionable `where`. Proven,
+Refuted, and Unproven all survive after accept/reject policy is applied.
+
+**Nested evidence rather than diagnostic-only body facts:** `BodySafety::Refuted` and `Unproven` now
+carry `BodySafetyEvidence { findings, demands }`. A body refuted by `String + Number` therefore owns
+the nested `OperationSafetyDemand` and its oracle-trapping operand tuple instead of retaining only a
+message. This reuses the operation rulebook's existing witness; no new sampler or witness mechanism
+was introduced. Still-untyped definite traps use the existing finding fallback and dominate an
+unrelated typed Unproven demand.
+
+**Policy after judgment:** typed Unproven diagnostics stay advisory during fact calculation.
+`Analysis::accepted` blocks on the typed verdict, and executable/declared program consumers add the
+unsuppressible Error only after retaining it. `SafetyReport` classifies typed demands independently
+of diagnostic severity, so policy can no longer relabel Unproven as Refuted. RT-14 may-regions and
+AP-29 projected alternatives recursively weaken refutation evidence to Unproven before policy; a
+synthesized cross-pair cannot retain a witness.
+
+**False accept exposed and repaired:** once `where` correctly added an Error for every Unproven body
+fact, the existing correlated-source AP-29 regression turned red. Its safety fact had never proved:
+candidate discovery recognized only a direct captured-name callee and missed
+`choice[0](choice[1])`; warning-only policy had hidden that failure. Discovery now threads block-local
+bindings in source order and extracts candidates from the same annotated joint operand used by live
+application. It discovers only `(numFn, 5)` and `(strFn, "hello")`, so both dependency facts prove.
+The safety-context guard remains active while discovery contract-evaluates operands, preserving the
+rule that discovery cannot settle nested safety facts.
+
+**Mechanical enforcement:** the machinery suite now requires typed safety lists on expression,
+executable, declared-body, and body-evidence records; forbids direct `safety::prove` diagnostic
+reduction at `where`; requires discovery to use `correlated_access_operand`,
+`operand_from_annotated`, and `live_alternatives`; and forbids restoration of the retired
+direct-name-only resolver. No reaching fixpoint, widening, candidate synthesis, grounding wiring,
+runtime code analysis, or new language semantics were added. **`// [ask-author]`: none.**
+
+**Verification:** 427 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 9 machinery gates
+passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
+`cargo fmt --check` remains the separately recorded pre-existing gate (8,695 output lines).

@@ -97,21 +97,38 @@ The adjacent region-table bug exposed by this test is also closed: a block-shape
 preceding bind/statement remains one whole-body row, so safety/return/grounding consumers cannot
 discard its executable prefix and then analyze an unbound result expression.
 
+The ninth repair preserves safety judgments through program policy. `Analysis` now carries typed
+primitive-operation and body-safety demands through every expression composition; executable demand
+records retain them, and `ProgramVerdict` records every declared `BodySafe(instance, I)` check with
+its instance, domain, and Proven / Refuted / Unproven verdict. Primitive refutations retain their
+operand tuple, and `BodySafetyEvidence` retains nested typed demands, so wrapping an operation in a
+body fact no longer discards that witness. Safety verification classifies typed evidence before
+diagnostic policy, while a separate definite untyped trap still dominates an unrelated Unproven
+demand. RT-14 and AP-29 weaken non-represented refutations to Unproven before policy. Unproven
+diagnostics remain advisory inside the fact calculation and gain the ruled unsuppressible Error only
+at the executable or declared consuming boundary.
+
+This stricter policy exposed a prior AP-29 false accept: correlated local-projection calls were absent
+from candidate discovery, their body fact remained Unproven, and the old `where` adapter emitted only
+its non-blocking warnings. Discovery now reads the same annotated joint application operand as the
+live analyzer and threads block-local bindings in source order. The represented `(numFn, 5)` and
+`(strFn, "hello")` dependency facts are therefore genuinely discovered and proved; no policy bypass
+is needed. Discovery keeps the safety-context guard active while contract-evaluating those operands,
+so it does not settle nested facts during the discovery phase.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
-1. Body-safety and executable-operation voices are still partly collapsed into findings at program
-   boundaries; declared return demands now retain Proven / Refuted(witness) / Unproven through policy.
-2. Function construction is not universally interned, while equality uses a separate coinductive path;
+1. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
-3. The repository-wide formatting gate is red (measured separately below).
+2. The repository-wide formatting gate is red (measured separately below).
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
 demand's realized-refutation consumer and source-level AP-29 operand propagation are complete. Next
-is preserving the remaining body-safety and executable-operation voices through program policy
-instead of reducing them early to findings. Normative files remain manifest-protected and are not
-edited by these implementation slices.
+is repairing universal function construction/interning and the operation transfer's singleton-function
+assumption. Normative files remain manifest-protected and are not edited by these implementation
+slices.
 
 ---
 
@@ -166,7 +183,7 @@ noted so no one implements a phantom; correcting them is an author/design action
 | Path | Status | Nature |
 |---|---|---|
 | `analyzer::bodycheck` and its reaching core | **DELETED 2026-08-01** | The known-unsound forward reaching-domain checker is no longer compiled or present. `machinery_gate` bans the file, module identifier, and `check_recursive_body` / `reachable_rows` / `grow` identifiers from `src/` |
-| Safety-unproven policy | **RESOLVED 2026-07-31 — RULED [user]: it blocks** | `BodySafety::Unproven` remains typed inside the fact layer; `discharge_body_safety` adds the unsuppressible Error only at the application seat. Completion (`MayFallThrough`) remains a different judgment class (application §1.6) |
+| Safety-unproven policy | **RESOLVED 2026-08-01 — RULED [user]: it blocks** | `BodySafety::Unproven` and `OpSafety::Unproven` remain typed through `Analysis` and program records. Their fact-layer diagnostics are advisory; executable/declared consumers add the unsuppressible Error after retaining the typed verdict. Completion (`MayFallThrough`) remains a different judgment class (application §1.6) |
 | `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **CORRECTED 2026-07-31; still UNWIRED** | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Its *coverage* gaps (GR-18 point-base, peel-k, oscillator, closed-orbit, §8 WorldDecided, multi-param mutual) remain owed — those are incompleteness (→ `Unproven`), not unsoundness. **Wiring still requires separate authorization** |
 | `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT AND WIRED 2026-08-01** | Ordinary known-closure application consumes `BodySafe(instance, I)`. Discovery closure → SCC collapse → reverse-topological → one joint vector pass; dependencies proved by the outer pass are memoized under their own complete keys. `countDown` over a covering declared domain and a divergent self-loop prove; an uncovered repeated-shape chain remains **Unproven**, never a manufactured refutation. Mutual and multi-parameter changed-domain executable calls now reject at the seat because safety is unproven; finer classification remains separately owed |
 | `oracle::mu` — **Algorithm A group canonicalization** | **BUILT but UNWIRED** (`#![allow(dead_code)]`) | SCC grouping (Tarjan over the binding-reference graph), positional μ-refs `⟨d,i⟩`, law 1/3 (only genuine cycles become groups), law 5 canonical slot order. Its own header: *"No runtime consumer yet."* **Deferred inside it: law 2 (nested-binder merge) and law 4 (bisimulation slot merging / partition refinement — spec step 3)**, on which the MU-14/15/16 identity claims rest |
@@ -236,8 +253,9 @@ Conformance holds 12 `#[ignore]`s (6 Phase A · 4 module/linking · MU-18 · M-0
 
 The five boundaries above were prose only, and prose did not hold them: a forward-reaching
 /widening engine was built on 2026-07-31, passed all four blockers, and was reverted whole.
-Six checks now enforce the part a machine can see. **Each was verified to fail on an
-injected violation before landing** — a gate that cannot fire is not a gate.
+Nine checks now enforce the part a machine can see. The original six were verified against injected
+violations; checks 7–9 pin the exact absent source mechanisms exposed by the measured AP-29 and
+typed-boundary regressions. A gate that cannot fire is not a gate.
 
 1. `src/analyzer/summary.rs` (the reverted engine) and sibling names must not exist.
 2. The retired `bodycheck.rs`, its module identifier, and its reaching-core identifiers
@@ -250,6 +268,12 @@ injected violation before landing** — a gate that cannot fire is not a gate.
    `prove_claim` / `joint_vector_pass` return-proof path that drops realized evidence.
 6. `realized_refutation` must carry an explicit Pure-closure guard; its non-executing Effect/Mutator
    boundary may not rely only on the bounded evaluator's current entry-world policy.
+7. The live application path must retain `AnalysisContract` in `TypeEnv` and may not route back
+   through the erased operand bridge.
+8. `Analysis`, executable demands, declared body demands, and `BodySafetyEvidence` must retain typed
+   safety judgments rather than leaving findings as the only program-boundary representation.
+9. Safety candidate discovery must use the same correlated/annotated joint operand path as live
+   application and may not restore the direct-captured-name-only resolver.
 
 **Scope, stated rather than glossed:** the gate catches a literal repeat of the retired engine. It
 does **not** catch a renamed reimplementation. That stays a review obligation, under the standing
@@ -314,14 +338,14 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **426 passed, 0 failed, 1 ignored** (exact-singleton chain) |
+| `cargo test --lib` | **427 passed, 0 failed, 1 ignored** (exact-singleton chain) |
 | `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
-| `cargo test --test machinery_gate` | **7 passed, 0 failed** |
+| `cargo test --test machinery_gate` | **9 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
-| `cargo fmt --check` | **FAILED** — 8,540 formatting output lines |
+| `cargo fmt --check` | **FAILED** — 8,695 formatting output lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
-417) are
+417 / 421 / 424 / 426) are
 **HISTORICAL**; this table is current.
 **Green ≠ complete:** the §4 exact-singleton fact-chain gate remains pinned.

@@ -23,8 +23,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    Analysis, Completion, Finding, Severity, TypeEnv, analyze_bind, analyze_in_world, demand,
-    safety,
+    Analysis, Completion, Finding, SafetyDemand, Severity, TypeEnv, analyze_bind,
+    analyze_in_world, demand, safety,
 };
 use crate::analyzer::TrapClass;
 use crate::analyzer::domain::AnalysisContract;
@@ -63,6 +63,17 @@ pub struct ExecutableDemand {
     pub annotated_contract: AnalysisContract,
     pub completion: Completion,
     pub findings: Vec<Finding>,
+    pub safety_demands: Vec<SafetyDemand>,
+}
+
+/// A source `where` demand for `BodySafe(instance, DeclaredInput)`. The declaration's
+/// acceptance policy is intentionally separate from this retained three-voice fact.
+#[derive(Debug, Clone)]
+pub struct DeclaredBodySafetyDemand {
+    pub name: String,
+    pub callee: ValueRef,
+    pub domain: Vec<Contract>,
+    pub verdict: safety::BodySafety,
 }
 
 /// A declared return demand retained through the program-policy boundary. `verdict`
@@ -85,6 +96,9 @@ pub struct ProgramVerdict {
     /// honest unproven outcomes. Policy may reject both latter voices, but does not erase
     /// their semantic distinction.
     pub return_demands: Vec<ReturnDemand>,
+    /// Every declared body-safety fact checked at a `where`, with all three voices
+    /// retained after policy emits any rejecting diagnostic.
+    pub body_safety_demands: Vec<DeclaredBodySafetyDemand>,
     /// Every checked executable seat, in item order. Keeping this record makes a
     /// regression to “only `where` was checked” directly observable.
     pub executable_demands: Vec<ExecutableDemand>,
@@ -137,6 +151,7 @@ pub(crate) fn analyze_program_in(
 
     let mut findings = Vec::new();
     let mut return_demands = Vec::new();
+    let mut body_safety_demands = Vec::new();
     let mut executable_demands = Vec::new();
     for (item_index, item) in module.items.iter().enumerate() {
         match item {
@@ -162,6 +177,7 @@ pub(crate) fn analyze_program_in(
                                 contract: annotated.erase(interner),
                                 annotated,
                                 findings: Vec::new(),
+                                safety_demands: Vec::new(),
                                 completion: Completion::Produces,
                             }
                         })
@@ -242,6 +258,7 @@ pub(crate) fn analyze_program_in(
                     &cenv,
                     &mut findings,
                     &mut return_demands,
+                    &mut body_safety_demands,
                     interner,
                 );
             }
@@ -252,6 +269,7 @@ pub(crate) fn analyze_program_in(
     ProgramVerdict {
         findings,
         return_demands,
+        body_safety_demands,
         executable_demands,
     }
 }
@@ -262,6 +280,7 @@ fn analyze_where(
     cenv: &ContractEnv,
     findings: &mut Vec<Finding>,
     return_demands: &mut Vec<ReturnDemand>,
+    body_safety_demands: &mut Vec<DeclaredBodySafetyDemand>,
     interner: &mut Interner,
 ) {
     let Some(callee) = values.get(&w.name) else {
@@ -288,10 +307,14 @@ fn analyze_where(
         return;
     };
 
-    findings.extend(verdict_findings(
-        &w.name,
-        safety::prove(callee, &args, cenv, interner),
-    ));
+    let body_safety = safety::prove(callee, &args, cenv, interner);
+    findings.extend(verdict_findings(&w.name, &body_safety));
+    body_safety_demands.push(DeclaredBodySafetyDemand {
+        name: w.name.clone(),
+        callee: callee.clone(),
+        domain: args.clone(),
+        verdict: body_safety,
+    });
 
     // The declared **return** contract is a demand (C§13.1): the `where` asks whether
     // the body produces a value satisfying it, adjudicated here, at the ask site.
@@ -338,8 +361,10 @@ fn record_executable(
         demand(&analysis, &mut local);
     }
     local.extend(analysis.findings.iter().cloned());
+    local.extend(safety_policy_findings(&analysis.safety_demands));
     findings.extend(local.iter().cloned());
     let annotated = analysis.annotated.clone();
+    let safety_demands = analysis.safety_demands.clone();
     demands.push(ExecutableDemand {
         origin,
         seat,
@@ -348,8 +373,43 @@ fn record_executable(
         annotated_contract: analysis.annotated,
         completion: analysis.completion,
         findings: local,
+        safety_demands,
     });
     annotated
+}
+
+/// Apply late-resolution §5 at an executable consuming seat. Refutations already own
+/// error diagnostics from the trapping rule that established them; an `Unproven`
+/// judgment gains its unsuppressible Error here, after the typed voice has been retained.
+fn safety_policy_findings(demands: &[SafetyDemand]) -> Vec<Finding> {
+    demands
+        .iter()
+        .filter_map(|demand| match demand {
+            SafetyDemand::Operation(operation)
+                if matches!(operation.verdict, crate::contract::OpSafety::Unproven) =>
+            {
+                Some(Finding {
+                    class: TrapClass::OperationSafety,
+                    severity: Severity::Error,
+                    message: format!(
+                        "cannot prove `{:?}` safe at this executable seat",
+                        operation.operation
+                    ),
+                })
+            }
+            SafetyDemand::Body(body)
+                if matches!(body.verdict, safety::BodySafety::Unproven(_)) =>
+            {
+                Some(Finding {
+                    class: TrapClass::OperationSafety,
+                    severity: Severity::Error,
+                    message: "callee body safety cannot be proven at this executable seat"
+                        .into(),
+                })
+            }
+            SafetyDemand::Operation(_) | SafetyDemand::Body(_) => None,
+        })
+        .collect()
 }
 
 /// Walk the items once, building the module environment (function values, so that late
@@ -443,13 +503,17 @@ fn spread_input(callee: &ValueRef, declared: Contract) -> Option<Vec<Contract>> 
 /// compile error, un-suppressible — a `where` the compiler cannot discharge is not a
 /// `where` it may assume. A voice that carries no finding of its own still rejects, with
 /// the fact named, so the verdict is never silently empty.
-fn verdict_findings(name: &str, v: safety::BodySafety) -> Vec<Finding> {
-    let (voice, mut fs) = match v {
+fn verdict_findings(name: &str, v: &safety::BodySafety) -> Vec<Finding> {
+    let (voice, mut fs, unproven) = match v {
         safety::BodySafety::Proven => return Vec::new(),
-        safety::BodySafety::Refuted(fs) => ("is refuted over", fs),
-        safety::BodySafety::Unproven(fs) => ("cannot be proven over", fs),
+        safety::BodySafety::Refuted(evidence) => {
+            ("is refuted over", evidence.findings.clone(), false)
+        }
+        safety::BodySafety::Unproven(evidence) => {
+            ("cannot be proven over", evidence.findings.clone(), true)
+        }
     };
-    if fs.is_empty() {
+    if unproven || !fs.iter().any(|finding| finding.severity == Severity::Error) {
         fs.push(malformed(name, &format!("{voice} its declared input domain")));
     }
     fs
@@ -474,7 +538,8 @@ fn malformed(name: &str, why: &str) -> Finding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::CompletionWitness;
+    use crate::analyzer::{CompletionWitness, SafetyDemand};
+    use crate::contract::OpSafety;
 
     /// Through the shared front end (`check_source`), so these tests exercise the same
     /// lex/parse/desugar path the CLI does.
@@ -530,6 +595,79 @@ mod tests {
              countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n",
         );
         assert!(!v.accepted(), "0.5 leaves the declared domain — unproven, not accepted");
+    }
+
+    /// Program policy may reject both failed voices, but it must retain which one the
+    /// declared BodySafe judgment actually produced. Otherwise an unproven proof is
+    /// indistinguishable from a represented refutation at the public boundary.
+    #[test]
+    fn declared_body_safety_retains_all_three_voices() {
+        let (proven, _) = check("f where (Number) => Number\nf = (n) => n + 1\n");
+        assert!(matches!(
+            proven.body_safety_demands[0].verdict,
+            safety::BodySafety::Proven
+        ));
+
+        let (refuted, mut interner) =
+            check("g where (String) => Number\ng = (s) => s + 1\n");
+        let safety::BodySafety::Refuted(evidence) =
+            &refuted.body_safety_demands[0].verdict
+        else {
+            panic!("the String-domain body must be refuted");
+        };
+        let operation = evidence
+            .demands
+            .iter()
+            .find_map(|demand| match demand {
+                SafetyDemand::Operation(operation) => Some(operation),
+                SafetyDemand::Body(_) => None,
+            })
+            .expect("the body refutation retains its primitive operation evidence");
+        let OpSafety::Refuted(witness) = &operation.verdict else {
+            panic!("the nested operation demand must own a refuting witness");
+        };
+        assert!(
+            crate::oracle::eval_prim(operation.operation, witness, &mut interner).is_err(),
+            "the retained operand tuple must actually trap in the oracle"
+        );
+        assert!(
+            operation
+                .inputs
+                .iter()
+                .zip(witness)
+                .all(|(contract, value)| contract.contains(value)),
+            "the retained witness must inhabit the declared operation inputs"
+        );
+
+        let (unproven, _) = check(
+            "countDown where (GreaterEq(0)) => Number\n\
+             countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n",
+        );
+        assert!(matches!(
+            unproven.body_safety_demands[0].verdict,
+            safety::BodySafety::Unproven(_)
+        ));
+
+        let (operation_unproven, _) = check(
+            "useFn where (Function) => Top\n\
+             useFn = (candidate) => candidate + 1\n",
+        );
+        assert!(matches!(
+            operation_unproven.body_safety_demands[0].verdict,
+            safety::BodySafety::Unproven(_)
+        ), "an unsampleable operation domain must not become a false body refutation");
+
+        let (mixed, _) = check(
+            "mixed where (Function) => Top\n\
+             mixed = (candidate) => {\n\
+              missing\n\
+              => candidate + 1\n\
+             }\n",
+        );
+        assert!(matches!(
+            mixed.body_safety_demands[0].verdict,
+            safety::BodySafety::Refuted(_)
+        ), "a separate definite trap must dominate an unrelated Unproven operation");
     }
 
     /// A `where` naming nothing, and one whose arity disagrees with the function, are
@@ -684,9 +822,28 @@ mod tests {
     /// because the program entry only originated `where` demands.
     #[test]
     fn an_unsafe_binding_rhs_is_checked_without_being_evaluated() {
-        let (v, _) = check("boom = 1 + \"x\"\n");
+        let (v, mut interner) = check("boom = 1 + \"x\"\n");
         assert!(!v.accepted(), "the binding operation-safety demand must reject: {:?}", v.findings);
         assert!(v.findings.iter().any(|f| f.class == TrapClass::OperationSafety));
+        let operation = v.executable_demands[0]
+            .safety_demands
+            .iter()
+            .find_map(|demand| match demand {
+                SafetyDemand::Operation(operation) => Some(operation),
+                SafetyDemand::Body(_) => None,
+            })
+            .expect("the executable record retains the primitive operation judgment");
+        assert_eq!(operation.operation, crate::ast::PrimOp::Add);
+        match &operation.verdict {
+            OpSafety::Refuted(witness) => {
+                assert_eq!(
+                    witness,
+                    &vec![interner.integer(1), interner.string("x")],
+                    "the typed refutation owns the exact operand witness"
+                );
+            }
+            other => panic!("the operation refutation was collapsed to {other:?}"),
+        }
     }
 
     /// Operation safety fires on arrival even when the result is discarded (C§7).
@@ -820,6 +977,19 @@ mod tests {
             v.findings
                 .iter()
                 .any(|f| f.class == TrapClass::OperationSafety)
+        );
+        assert!(
+            v.executable_demands
+                .last()
+                .expect("the call statement is recorded")
+                .safety_demands
+                .iter()
+                .any(|demand| matches!(
+                    demand,
+                    SafetyDemand::Body(body)
+                        if matches!(body.verdict, safety::BodySafety::Unproven(_))
+                )),
+            "the blocking policy must not relabel an unsettled BodySafe fact as Refuted"
         );
     }
 

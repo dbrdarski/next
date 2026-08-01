@@ -237,7 +237,7 @@ fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, inte
             // the partition rule (each region-table row under `I ∩ row.region`).
             Claim::Safety => {
                 with_hypotheses(hyps, || crate::analyzer::safety::verify(&c.callee, &c.args, cenv, interner))
-                    .is_empty()
+                    .is_proven()
             }
             Claim::Completes => {
                 with_hypotheses(hyps, || {
