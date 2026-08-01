@@ -8,8 +8,9 @@
 > and T1.4 are complete; the reaching checker is deleted; T2.2 carries realized structural
 > completion witnesses through Match to the consuming seat. The only remaining lib pin is 1b
 > (exact-singleton chains). T2.3 now routes the live expression adapter through the one canonical
-> application driver; erased source environments still owe full annotated correlation. The
-> realized-refutation voice at the existing `where` return-demand consumer is next. Older scan counts
+> application driver. The existing `where` return-demand consumer now preserves the canonical
+> Proven / Refuted(realized witness) / Unproven judgment through program policy. Erased source
+> environments still owe full annotated correlation; that propagation is next. Older scan counts
 > and “no top / bodycheck live” passages below are historical where this delta supersedes them.
 
 # NEXT — Feature-by-feature completion plan
@@ -278,11 +279,9 @@ synthesis — *may not be resurrected by any reading*) · **Part D** (candidate,
 
 ## Recommended immediate order
 
-1. Make the existing `where` return demand consume `check_return_claim`, preserving realized
-   Refuted evidence instead of collapsing it into generic Unproven.
-2. Carry `AnalysisContract` through source bindings/accesses so the now-live driver receives the
+1. Carry `AnalysisContract` through source bindings/accesses so the now-live driver receives the
    normative joint operand rather than the legal-but-projecting erased bridge.
-3. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
+2. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
 
 *The remaining T1.2 breadth is pulled by these consumers; it is not a licence for a standalone
 backward-analysis rebuild.*

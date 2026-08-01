@@ -23,7 +23,8 @@
 //! application witness for the completion tri-state.
 
 use crate::analyzer::application::ApplicationWitness;
-use crate::analyzer::induction::{Candidate, joint_vector_pass};
+use crate::analyzer::induction::Claim;
+use crate::analyzer::safety::{BodySafety, prove_claim};
 use crate::ast::{Arg, Expr};
 use crate::contract::{Contract, ContractEnv};
 use crate::interner::Interner;
@@ -60,14 +61,18 @@ pub enum ClaimVerdict {
 /// Samples genuine argument tuples from `args`, runs each through the oracle under the
 /// fuel bound, and returns the first `(arguments, v)` that **completes** with `v ∉
 /// γ(claim)`. `None` when no sampled input refutes (never a proof — the sampler is
-/// incomplete).
+/// incomplete). Like completion refutation, this executes only a `Pure` NEXT closure;
+/// Effects and Mutators remain non-executing analysis cases.
 pub fn realized_refutation(
     callee: &ValueRef,
     args: &[Contract],
     claim: &Contract,
     interner: &mut Interner,
 ) -> Option<RealizedWitness> {
-    callee.as_fn()?; // only a function can be applied
+    let closure = callee.as_closure()?;
+    if closure.lambda.act_kind != crate::ast::ActKind::Pure {
+        return None;
+    }
     for tuple in argument_samples(args, interner) {
         let node = Expr::Apply {
             callee: Box::new(Expr::Const(callee.clone())),
@@ -143,8 +148,8 @@ pub(crate) fn represented_application(
 /// Verify a return claim three-voiced (§6): a realized refutation (permanent) is tried
 /// **first** — it is the sound ground truth, catching a false claim the abstract vector
 /// pass could otherwise leave merely unproven — then the inductive proof
-/// (per-compilation). Single-candidate; a mutual claim goes through the driver
-/// (`prove_facts`).
+/// (per-compilation). The proof runs through the global fact graph, so recursive and
+/// mutually recursive claims use the same SCC settlement as safety and completion.
 pub fn check_return_claim(
     callee: &ValueRef,
     args: &[Contract],
@@ -155,16 +160,9 @@ pub fn check_return_claim(
     if let Some(w) = realized_refutation(callee, args, claim, interner) {
         return ClaimVerdict::Refuted(w);
     }
-    let cand = Candidate {
-        callee: callee.clone(),
-        args: args.to_vec(),
-        claim: crate::analyzer::induction::Claim::Return(claim.clone()),
-        cutoff: false,
-    };
-    if joint_vector_pass(&[cand], cenv, interner) {
-        ClaimVerdict::Proven
-    } else {
-        ClaimVerdict::Unproven
+    match prove_claim(callee, args, Claim::Return(claim.clone()), cenv, interner) {
+        BodySafety::Proven => ClaimVerdict::Proven,
+        BodySafety::Refuted(_) | BodySafety::Unproven(_) => ClaimVerdict::Unproven,
     }
 }
 

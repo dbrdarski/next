@@ -2110,6 +2110,16 @@ mod refute {
     }
 
     #[test]
+    fn realized_return_refutation_never_probes_an_effect_body() {
+        let mut i = Interner::new();
+        let effect = run_source_in("@effect f = () => 1\nf", &mut i).unwrap().0;
+        assert!(
+            realized_refutation(&effect, &[], &string(), &mut i).is_none(),
+            "only Pure NEXT closures may be executed while searching for evidence"
+        );
+    }
+
+    #[test]
     fn a_true_claim_has_no_realized_witness_and_terminates() {
         // f DOES return Number over Number. The [Number] sample includes -1, on which f
         // diverges — the call-depth bound skips it (OutOfFuel), so the search both finds

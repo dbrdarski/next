@@ -158,3 +158,54 @@ fn application_uses_the_canonical_joint_driver() {
         "analyze_apply still carries its old parallel alternative/join implementation"
     );
 }
+
+/// Return demands have one three-voice judgment. The demand adapter must not call the
+/// abstract proof graph directly, because that path drops a realized counterexample and
+/// collapses `Refuted` into `Unproven` before the program policy sees it.
+#[test]
+fn return_demands_use_the_canonical_three_voice_judgment() {
+    let src = std::fs::read_to_string(root().join("src/analyzer/demand.rs")).expect("readable");
+    let body = src
+        .split_once("pub fn adjudicate")
+        .expect("adjudicate exists")
+        .1
+        .split_once("\npub fn ")
+        .map_or_else(|| src.clone(), |(b, _)| b.to_string());
+    let code: String = body
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        has_ident(&code, "check_return_claim"),
+        "demand::adjudicate bypasses the canonical three-voice return judgment and can lose a \
+         realized refutation"
+    );
+    assert!(
+        !has_ident(&code, "prove_claim") && !has_ident(&code, "joint_vector_pass"),
+        "demand::adjudicate carries a parallel return-proof path"
+    );
+}
+
+/// Realized return refutation may execute only a Pure NEXT closure. Keep the guard at the
+/// probe itself rather than relying on the oracle entry world's current admission policy.
+#[test]
+fn realized_return_refutation_is_explicitly_pure_only() {
+    let src = std::fs::read_to_string(root().join("src/analyzer/refute.rs")).expect("readable");
+    let body = src
+        .split_once("pub fn realized_refutation")
+        .expect("realized_refutation exists")
+        .1
+        .split_once("\n/// Search for a represented application")
+        .map_or_else(|| src.clone(), |(b, _)| b.to_string());
+    let code: String = body
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        has_ident(&code, "ActKind") && has_ident(&code, "Pure"),
+        "realized_refutation has no local Pure-closure guard; analysis must never execute an \
+         Effect or Mutator while searching for evidence"
+    );
+}

@@ -33,9 +33,8 @@
 //! then widened over loops. There is no partial state to accumulate, because there is no
 //! stall to accumulate it in.
 
-use crate::analyzer::induction::Claim;
-use crate::analyzer::safety::{BodySafety, prove_claim};
-use crate::contract::{Contract, ContractEnv, Verdict};
+use crate::analyzer::refute::{ClaimVerdict, check_return_claim};
+use crate::contract::{Contract, ContractEnv};
 use crate::interner::Interner;
 use crate::value::ValueRef;
 
@@ -61,16 +60,11 @@ pub struct Demand {
 /// Resolution runs forward through the operation rules over the origin's body, and
 /// recursion closes through the **same** global fact graph the safety and completion
 /// claims use (C§13.2a) — a return question is a third claim over one graph, never a
-/// second graph. `Verdict::Unproven` is terminal for this compilation: there is no stall.
-pub fn adjudicate(d: &Demand, cenv: &ContractEnv, interner: &mut Interner) -> Verdict {
-    match prove_claim(&d.origin, &d.domain, Claim::Return(d.required.clone()), cenv, interner) {
-        BodySafety::Proven => Verdict::Proven,
-        // A return claim that does not settle is unproven, never refuted: failing to show
-        // `produced ⊑ required` is not showing `produced ⊄ required`. Refuting a return
-        // contract needs a realized witness (C§13.2a's individual semantic refutations),
-        // which this pass does not mint.
-        BodySafety::Refuted(_) | BodySafety::Unproven(_) => Verdict::Unproven,
-    }
+/// second graph. `ClaimVerdict::Unproven` is terminal for this compilation: there is no
+/// stall. A represented completing execution that violates `required` remains a concrete
+/// `Refuted` witness rather than being collapsed into that third voice.
+pub fn adjudicate(d: &Demand, cenv: &ContractEnv, interner: &mut Interner) -> ClaimVerdict {
+    check_return_claim(&d.origin, &d.domain, &d.required, cenv, interner)
 }
 
 /// Whether `callee` over `domain` provably returns a value satisfying `required`.
@@ -86,7 +80,7 @@ pub fn returns(
     asker: &str,
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> Verdict {
+) -> ClaimVerdict {
     let d = Demand {
         origin: callee.clone(),
         domain: domain.to_vec(),
@@ -101,6 +95,7 @@ mod tests {
     use super::*;
     use crate::contract::Kind;
     use crate::oracle::run_source_in;
+    use crate::rational::Rational;
 
     fn f(src: &str, i: &mut Interner) -> ValueRef {
         run_source_in(src, i).unwrap().0
@@ -118,14 +113,13 @@ mod tests {
             &ContractEnv::new(),
             &mut i,
         );
-        assert!(matches!(v, Verdict::Proven), "Number + Number produces a Number: {v:?}");
+        assert!(matches!(v, ClaimVerdict::Proven), "Number + Number produces a Number: {v:?}");
     }
 
-    /// The third voice, and the reason it is a voice rather than a failure: `f` really
-    /// does return a Number, so `String` is *false* — but this pass does not mint the
-    /// realized witness a refutation requires (C§13.2a), so it says unproven, not refuted.
+    /// `f(0) = 1` is a represented completing execution, so the false String claim is
+    /// refuted with that concrete evidence rather than collapsed into Unproven.
     #[test]
-    fn an_unsatisfied_return_demand_is_unproven_not_refuted() {
+    fn an_unsatisfied_return_demand_preserves_its_realized_refutation() {
         let mut i = Interner::new();
         let g = f("f = (n) => n + 1\nf", &mut i);
         let v = returns(
@@ -136,7 +130,34 @@ mod tests {
             &ContractEnv::new(),
             &mut i,
         );
-        assert!(matches!(v, Verdict::Unproven), "no witness is minted, so not refuted: {v:?}");
+        match v {
+            ClaimVerdict::Refuted(witness) => {
+                assert_eq!(witness.arguments.len(), 1);
+                assert!(!Contract::Kind(Kind::String).contains(&witness.produced));
+            }
+            other => panic!("the represented counterexample must survive adjudication: {other:?}"),
+        }
+    }
+
+    /// Factorial produces only positive values on the represented completing samples, but
+    /// over all Numbers the abstract multiplication rule cannot prove positivity. With no
+    /// concrete counterexample and no proof, the result is the honest third voice.
+    #[test]
+    fn an_unsettled_return_demand_without_a_witness_is_unproven() {
+        let mut i = Interner::new();
+        let g = f(
+            "factorial = (n) => n == 0 ? 1 : n * factorial(n - 1)\nfactorial",
+            &mut i,
+        );
+        let v = returns(
+            &g,
+            &[Contract::Kind(Kind::Number)],
+            &Contract::Greater(Rational::from(0)),
+            "where factorial",
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert!(matches!(v, ClaimVerdict::Unproven), "no proof and no witness: {v:?}");
     }
 
     /// Recursion closes through the fact graph rather than unfolding — and **proves**,
@@ -156,6 +177,6 @@ mod tests {
             &ContractEnv::new(),
             &mut i,
         );
-        assert!(matches!(v, Verdict::Proven), "recursion closes on the fact and proves: {v:?}");
+        assert!(matches!(v, ClaimVerdict::Proven), "recursion closes on the fact and proves: {v:?}");
     }
 }

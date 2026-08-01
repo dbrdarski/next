@@ -27,8 +27,9 @@ use super::{
     safety,
 };
 use crate::analyzer::TrapClass;
+use crate::analyzer::refute::ClaimVerdict;
 use crate::ast::{Bind, BindTarget, Expr, Item, Lambda, Module, Pat};
-use crate::contract::{Contract, ContractEnv, Verdict, eval_contract};
+use crate::contract::{Contract, ContractEnv, eval_contract};
 use crate::env::{Binding, Env, Scope};
 use crate::interner::Interner;
 use crate::oracle::{World, make_closure_in};
@@ -62,24 +63,35 @@ pub struct ExecutableDemand {
     pub findings: Vec<Finding>,
 }
 
+/// A declared return demand retained through the program-policy boundary. `verdict`
+/// preserves all three voices; a `Refuted` record owns the represented arguments and
+/// produced value that made the declaration false.
+#[derive(Debug, Clone)]
+pub struct ReturnDemand {
+    pub name: String,
+    pub domain: Vec<Contract>,
+    pub required: Contract,
+    pub verdict: ClaimVerdict,
+}
+
 /// The result of analyzing a whole module.
 #[derive(Debug, Clone)]
 pub struct ProgramVerdict {
     /// Every finding raised, in item order.
     pub findings: Vec<Finding>,
-    /// Declared return contracts checked and **proven**, as `(name, contract)`. The
-    /// record of what the demand core discharged, kept so a regression to "recorded but
-    /// unchecked" is visible rather than silent.
-    pub proven_returns: Vec<(String, Contract)>,
+    /// Every declared return contract checked, including concrete refutation evidence and
+    /// honest unproven outcomes. Policy may reject both latter voices, but does not erase
+    /// their semantic distinction.
+    pub return_demands: Vec<ReturnDemand>,
     /// Every checked executable seat, in item order. Keeping this record makes a
     /// regression to “only `where` was checked” directly observable.
     pub executable_demands: Vec<ExecutableDemand>,
 }
 
 impl ProgramVerdict {
-    /// A module is accepted when nothing was **refuted**. `Warning`s do not reject, and an
-    /// `unproven` verdict surfaces as an `Error` finding per the 2026-07-31 severity
-    /// ruling — safety-unproven is un-suppressible.
+    /// A module is accepted when program policy emitted no `Error`. `Warning`s do not
+    /// reject; both a concrete refutation and a blocking `Unproven` verdict surface as
+    /// errors, while their typed records remain distinct.
     pub fn accepted(&self) -> bool {
         !self.findings.iter().any(|f| f.severity == Severity::Error)
     }
@@ -124,7 +136,7 @@ pub(crate) fn analyze_program_in(
     };
 
     let mut findings = Vec::new();
-    let mut proven_returns = Vec::new();
+    let mut return_demands = Vec::new();
     let mut executable_demands = Vec::new();
     for (item_index, item) in module.items.iter().enumerate() {
         match item {
@@ -220,7 +232,7 @@ pub(crate) fn analyze_program_in(
                     &values,
                     &cenv,
                     &mut findings,
-                    &mut proven_returns,
+                    &mut return_demands,
                     interner,
                 );
             }
@@ -230,7 +242,7 @@ pub(crate) fn analyze_program_in(
 
     ProgramVerdict {
         findings,
-        proven_returns,
+        return_demands,
         executable_demands,
     }
 }
@@ -240,7 +252,7 @@ fn analyze_where(
     values: &HashMap<String, ValueRef>,
     cenv: &ContractEnv,
     findings: &mut Vec<Finding>,
-    proven_returns: &mut Vec<(String, Contract)>,
+    return_demands: &mut Vec<ReturnDemand>,
     interner: &mut Interner,
 ) {
     let Some(callee) = values.get(&w.name) else {
@@ -276,16 +288,31 @@ fn analyze_where(
     // the body produces a value satisfying it, adjudicated here, at the ask site.
     if let Some(ret) = eval_contract(&w.return_contract, cenv, interner) {
         let asker = format!("where {}", w.name);
-        match super::demand::returns(callee, &args, &ret, &asker, cenv, interner) {
-            Verdict::Proven => proven_returns.push((w.name.clone(), ret)),
+        let verdict = super::demand::returns(callee, &args, &ret, &asker, cenv, interner);
+        match &verdict {
+            ClaimVerdict::Proven => {}
+            ClaimVerdict::Refuted(witness) => findings.push(malformed(
+                &w.name,
+                &format!(
+                    "declares a return contract refuted by represented arguments {:?}, \
+                     which produce {:?}",
+                    witness.arguments, witness.produced
+                ),
+            )),
             // Unproven rejects. A declared return the compiler cannot discharge is not
             // a declaration it may assume — the same discipline as safety-unproven
             // (late-resolution §5), and the reason the third voice is un-suppressible.
-            Verdict::Unproven | Verdict::Refuted(_) => findings.push(malformed(
+            ClaimVerdict::Unproven => findings.push(malformed(
                 &w.name,
                 "declares a return contract that cannot be proven of its body",
             )),
         }
+        return_demands.push(ReturnDemand {
+            name: w.name.clone(),
+            domain: args,
+            required: ret,
+            verdict,
+        });
     }
 }
 
@@ -571,6 +598,44 @@ mod tests {
     fn a_declared_return_contract_that_the_body_does_not_meet_rejects() {
         let (v, _) = check("f where (Number) => String\nf = (n) => n + 1\n");
         assert!(!v.accepted(), "`f` returns a Number where String is declared: {:?}", v.findings);
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.message.contains("refuted by represented arguments")),
+            "a concrete counterexample must remain Refuted at the program boundary: {v:?}"
+        );
+        assert_eq!(v.return_demands.len(), 1);
+        match &v.return_demands[0].verdict {
+            ClaimVerdict::Refuted(witness) => {
+                assert_eq!(witness.arguments.len(), 1);
+                assert!(!Contract::Kind(crate::contract::Kind::String).contains(&witness.produced));
+            }
+            other => panic!("the typed program record lost its refutation: {other:?}"),
+        }
+    }
+
+    /// A failed abstract proof with no represented counterexample remains Unproven; the
+    /// rejection policy is the same, but the semantic evidence is deliberately distinct.
+    #[test]
+    fn an_unproven_declared_return_is_not_reported_as_refuted() {
+        let (v, _) = check(
+            "factorial where (Number) => Greater(0)\n\
+             factorial = (n) => n == 0 ? 1 : n * factorial(n - 1)\n",
+        );
+        assert!(!v.accepted(), "an unproven declaration remains rejecting");
+        assert!(matches!(v.return_demands[0].verdict, ClaimVerdict::Unproven));
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.message.contains("cannot be proven of its body")),
+            "Unproven keeps the non-witness diagnostic: {v:?}"
+        );
+        assert!(
+            v.findings
+                .iter()
+                .all(|f| !f.message.contains("refuted by represented arguments")),
+            "Unproven must not claim a represented counterexample: {v:?}"
+        );
     }
 
     /// And the complement: a return contract the body does meet is proven and recorded.
@@ -578,7 +643,8 @@ mod tests {
     fn a_declared_return_contract_the_body_meets_is_proven() {
         let (v, _) = check("f where (Number) => Number\nf = (n) => n + 1\n");
         assert!(v.accepted(), "{:?}", v.findings);
-        assert_eq!(v.proven_returns.len(), 1, "the discharge is recorded: {v:?}");
+        assert_eq!(v.return_demands.len(), 1, "the discharge is recorded: {v:?}");
+        assert!(matches!(v.return_demands[0].verdict, ClaimVerdict::Proven));
     }
 
     /// Analysis checks a binding's executable RHS without running it. This used to pass

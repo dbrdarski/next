@@ -75,10 +75,20 @@ environment still carries erased `Contract`s, so the bridge keeps argument contr
 does not falsely claim source-level annotated correlation; propagating `AnalysisContract` through
 source bindings/accesses remains owed.
 
+The seventh repair makes the existing `where` return demand consume the canonical three-voice
+return judgment. A represented completing Pure call outside the declared return contract now
+survives as `Refuted(RealizedWitness { arguments, produced })`; failure of the global abstract fact
+proof without such evidence remains `Unproven`. `check_return_claim` keeps refutation first and now
+uses the same domain-aware candidate graph as safety and completion, preserving recursive proof
+behavior rather than falling back to its former single-candidate pass. `ProgramVerdict` retains
+every checked declaration as a typed `ReturnDemand` through policy, so the two rejecting voices
+receive distinct diagnostics without losing their evidence. Realized probes have an explicit
+Pure-closure guard; Effect and Mutator bodies are never executed during this check.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
-1. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
-   remaining typed verdicts until policy is applied.
+1. Body-safety and executable-operation voices are still partly collapsed into findings at program
+   boundaries; declared return demands now retain Proven / Refuted(witness) / Unproven through policy.
 2. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
 3. The live expression environment erases `AnalysisContract` metadata/correlation before an
@@ -87,10 +97,11 @@ Remaining measured P0 implementation drift, to be recovered in authority order:
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
-typed seat boundary (T2.2), and application-path unification (T2.3) are complete. Next is making the
-existing `where` return demand consume `check_return_claim`'s realized-refutation voice instead of
-collapsing a false claim into generic Unproven. Normative files remain manifest-protected and are not
-edited by these implementation slices.
+typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
+demand's realized-refutation consumer are complete. Next is propagating `AnalysisContract` through
+source bindings/accesses so the canonical application driver receives the normative correlated
+operand. Normative files remain manifest-protected and are not edited by these implementation
+slices.
 
 ---
 
@@ -215,7 +226,7 @@ Conformance holds 12 `#[ignore]`s (6 Phase A · 4 module/linking · MU-18 · M-0
 
 The five boundaries above were prose only, and prose did not hold them: a forward-reaching
 /widening engine was built on 2026-07-31, passed all four blockers, and was reverted whole.
-Four checks now enforce the part a machine can see. **Each was verified to fail on an
+Six checks now enforce the part a machine can see. **Each was verified to fail on an
 injected violation before landing** — a gate that cannot fire is not a gate.
 
 1. `src/analyzer/summary.rs` (the reverted engine) and sibling names must not exist.
@@ -225,6 +236,10 @@ injected violation before landing** — a gate that cannot fire is not a gate.
    may not be asserted by a coarse body pass (a false **accept**, the dangerous direction).
 4. `analyze_apply` must call `drive_application` and may not restore its own callee-alternative
    enumeration or application outcome join.
+5. `demand::adjudicate` must consume `check_return_claim` and may not restore a parallel direct
+   `prove_claim` / `joint_vector_pass` return-proof path that drops realized evidence.
+6. `realized_refutation` must carry an explicit Pure-closure guard; its non-executing Effect/Mutator
+   boundary may not rely only on the bounded evaluator's current entry-world policy.
 
 **Scope, stated rather than glossed:** the gate catches a literal repeat of the retired engine. It
 does **not** catch a renamed reimplementation. That stays a review obligation, under the standing
@@ -289,11 +304,11 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **421 passed, 0 failed, 1 ignored** (exact-singleton chain) |
+| `cargo test --lib` | **424 passed, 0 failed, 1 ignored** (exact-singleton chain) |
 | `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
-| `cargo test --test machinery_gate` | **4 passed, 0 failed** |
+| `cargo test --test machinery_gate` | **6 passed, 0 failed** |
 | `cargo clippy --all-targets` | **0 warnings** |
-| `cargo fmt --check` | **FAILED** — 8,439 formatting diff lines |
+| `cargo fmt --check` | **FAILED** — 8,438 formatting output lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /

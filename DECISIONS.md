@@ -4216,3 +4216,34 @@ returning there. The gate was observed red first and green after consolidation.
 **Verification:** 421 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 4 machinery gates
 passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
 `cargo fmt --check` remains the separately recorded pre-existing gate (8,439 diff lines).
+
+## 2026-08-01 — Recovery slice 7: realized return refutation reaches program policy
+
+**Measured red before implementation:** the live return-demand adapter called `prove_claim`
+directly, mapped every failed abstract proof to generic Unproven, and never called the already-built
+`check_return_claim`. A false `f where (Number) => String` declaration therefore rejected only as
+“cannot be proven” even though the bounded oracle had a represented completing counterexample. Two
+new machinery checks failed on that bypass and on the absence of a local Pure-closure guard.
+
+**One judgment, existing proof graph:** `demand::adjudicate` now delegates to
+`check_return_claim`. That checker still tries realized refutation first, but its abstract fallback
+now calls the global domain-aware `prove_claim(Return(C))` graph rather than constructing a separate
+single-candidate vector pass. The existing recursive return regression remains Proven, while the
+factorial-positive case remains honestly Unproven when neither a proof nor a represented
+counterexample exists. No reaching domains, widening, or new fact graph was introduced.
+
+**Typed consumer boundary:** `ProgramVerdict` replaces its proven-only return list with a
+`ReturnDemand { name, domain, required, verdict }` record for every checked declaration. Proven is
+accepted; Refuted and Unproven both reject under current policy, but Refuted retains its concrete
+arguments and produced out-of-contract value and receives a witness-bearing diagnostic. Unproven
+keeps the non-witness diagnostic. Policy no longer erases the semantic distinction.
+
+**Non-execution boundary:** realized return refutation now accepts only Pure NEXT closures before
+constructing any oracle application. The bounded evaluator already entered Pure world, but the
+guard makes the analysis boundary local and stable: Effect and Mutator bodies cannot become probes
+through a later evaluator-world change. The machinery suite pins both this guard and the one
+three-voice demand path. **`// [ask-author]`: none.**
+
+**Verification:** 424 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 6 machinery gates
+passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
+`cargo fmt --check` remains the separately recorded pre-existing gate (8,438 output lines).
