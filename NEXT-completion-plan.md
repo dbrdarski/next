@@ -2,6 +2,12 @@
 > The current implementation-status authority is **`IMPLEMENTATION-STATUS.md`**; where this file
 > conflicts with it, **that file wins**. The tier structure and the owed/liveness synthesis here
 > stand as supporting detail.
+>
+> **Progress delta 2026-08-01:** the program checker now originates executable and `where` demands;
+> the memo key is dependency-complete; grounding's T2.1 corrections are complete but unwired; T1.3
+> and T1.4 are complete; the reaching checker is deleted. The remaining lib pins are 1b
+> (exact-singleton chains) and 3 (structured recursive completion). T2.2 is next. Older scan counts
+> and “no top / bodycheck live” passages below are historical where this delta supersedes them.
 
 # NEXT — Feature-by-feature completion plan
 
@@ -13,13 +19,14 @@ compendium C§17 + Part J, and all six per-spec owed lists (~148 items, 13 doc c
 
 ---
 
-## 1. The root finding — the analyzer has no top
+## 1. Historical root finding — the analyzer had no top (fixed 2026-08-01)
 
-**`src/main.rs` imports only `oracle::run_source`. Nothing outside unit tests ever calls
-`analyzer::analyze`. `tests/conformance.rs` has zero analyzer call sites — all six analyzer rows
-are `#[ignore]`.** There is no `analyze_program`; the analyzer's entry point takes an `Expr`.
+The original scan found that **`src/main.rs` imported only `oracle::run_source`; nothing outside
+unit tests called `analyzer::analyze`; and there was no program-level checker.** That finding drove
+T1.1. It is now fixed: `--check` calls the program checker, which originates typed executable and
+`where` demands. The six broad Phase-A rows remain ignored for their own later feature gates.
 
-This is the structural cause of everything else. In a **demand-driven** design the program-level
+This was the structural cause of the residue below. In a **demand-driven** design the program-level
 entry point is what *originates* demands (C§13.1: demands come from source-authored seats and
 fixed-rule compiler obligations). With no top, nothing pulls — so every layer was built
 speculatively bottom-up, and speculation leaves exactly the residue the scan found:
@@ -29,10 +36,9 @@ speculatively bottom-up, and speculation leaves exactly the residue the scan fou
   live) · `grounding`'s entire judgment (~1,000 lines; only `collect_self_calls` escapes) ·
   `analyzer::refute` · `application`'s driver and outcome algebra · `domain`'s annotated machinery
   (`Instance` never constructed live) · `contract::grapheme` · `obligation::input_obligation`.
-- **~16 parallel implementations of one concept**, including **two live** callee body summaries
-  (`bodycheck::body_summary` for safety, `outcome::summarize_instance` for return facts — different
-  paths, same question), **four** separate Proven/Refuted/Unproven enums, three `intersect` copies,
-  two row-selection walks.
+- **~16 parallel implementations of one concept**, including two callee body summaries at the time.
+  The unsound `bodycheck` branch is now deleted; `outcome::summarize_instance` remains the coarse
+  outcome projection, sharpened by settled safety/completion/return facts.
 
 **The plan's organizing rule follows from this: build the consumer before the capability.** Every
 feature below must be pulled by something that already needs it. This is also the direct fix for
@@ -49,25 +55,24 @@ reasoning, and two are defects nobody had counted.
 
 **New defects (verified here, not previously on any list):**
 
-- **G-BUG — grounding produces a FALSE REFUTATION.** `drift_away` treats a *syntactically present*
+- **G-BUG — RESOLVED 2026-07-31.** `drift_away` treated a *syntactically present*
   self-call as a **forced** recursive transition; GR-23 requires exact selection (or another
   applicable must-condition) at every step. Verified live: for
   `flag = false; f = (n) => n == 0 ? 0 : (flag ? f(n-2) : 0)`, `ground(f, Equals(1))` returns
   **`Refuted`** — the program terminates (the guard is false, the recursive edge is never taken).
   Claiming a terminating program diverges, on an unrealizable witness, is the worst error class.
   Pinned as `grounding::review_gates::captured_false_guard_must_not_refute`.
-- **W-BUG — unproven callee safety is silently dropped.** `analyze_apply` (`mod.rs:607`) uses
+- **W-BUG — RESOLVED 2026-08-01.** At the time, `analyze_apply` used
   `summary.errors()`, which filters to `Severity::Error` only (`bodycheck.rs:72`). A callee whose
   body safety is *unproven* therefore contributes **no diagnostic at the call site** and the call is
   `accepted()`. Late-resolution §5 is explicit: **safety-unproven blocks, un-suppressibly.** So this
-  is a false acceptance, not the "standing diagnostic gap" the doc comment calls it.
+  was a false acceptance, not the "standing diagnostic gap" the doc comment called it. Ordinary
+  application now consumes `BodySafety` and blocks Unproven at the seat.
 
-**Also confirmed:** the recursive cycle assumption supplies `Completion::Produces`
-(`bodycheck.rs:66`) — a cycle assumption cannot soundly claim production; unproven is the ceiling.
-`grounding::Verdict` is payload-free, so a refutation **cannot carry its witness**.
-`grounding.rs`'s header still claims grounding is *"the specified replacement for widening as the
-analysis's termination bound"* — which **this session already disproved** (DECISIONS 2026-07-30);
-stale text I should have caught. And `induction.rs:31` imports `obligation::accepted_domain` — the
+**Also confirmed at the time:** the recursive cycle assumption supplied `Completion::Produces`
+(`bodycheck.rs:66`); that path is now deleted. `grounding::Verdict` lacked its witness and the
+module header misclassified grounding as the analysis termination bound; both were corrected in
+T2.1. `induction.rs` still imports `obligation::accepted_domain` — the
 **dissolved** materialized-accepted-domain concept — so the "kept" induction engine is **not**
 keep-as-is.
 
@@ -152,7 +157,8 @@ domain is **declared**, nothing to guess). Wire it into `main.rs` behind a check
 ### T1.2 — Demand core (C§13.1) — pulled by T1.1
 Backward demand propagation to origins with three-valued adjudication; **eager preimage as the
 primary mechanism** per the author's model (`total + n` *demands* `total : Number`, checked against
-providers — never reconstructed by watching values flow forward). Nothing of this exists today.
+providers — never reconstructed by watching values flow forward). Typed program origins now exist;
+the broader backward propagation remains partial.
 - **Absorbs the old F1**: the operation interface (`OperationOutcome`) is defined *by what the
   demand core needs to consume*, not built ahead of it. (F1 failed twice as a standalone.)
 - **Dependency note:** F0 (the operation rulebook) is **built** — the demand core resolves *through*
@@ -160,19 +166,19 @@ providers — never reconstructed by watching values flow forward). Nothing of t
 - **Done means:** a demand registered at an operation reaches the parameter origin and is
   adjudicated there; the `where`-declared contract is the truth checked against.
 
-### T1.3 — Domain-indexed safety facts `BodySafe(instance, I)` (C§13.2a) — pulled by T1.2
+### T1.3 — ✅ COMPLETE: domain-indexed safety facts `BodySafe(instance, I)` (C§13.2a)
 The **safety** analogue of the existing return facts, settled by the **kept** `joint_vector_pass`
 induction. `I` comes from the demand (T1.2) — which is exactly why F3-before-F2 would have had to
 *guess* `I`, i.e. re-import.
 - **Done means:** recursion closes on a fact; mutual/SCC cases work through the existing driver.
 
-### T1.4 — Native body check; **delete** the forward-reaching engine
-Replace `bodycheck::check_recursive_body` / `reachable_rows` / `grow` with region-table
-reachability (kept — it is a single-domain contract question) + safety-fact induction.
-- **Done means (hard gate):** blockers **1b / 2a / 2b / 3** un-ignored and passing **with a grep
-  gate proving no reaching fixpoint or widening exists in the tree** (`summary.rs` absent;
-  `check_recursive_body`/`reachable_rows`/`grow_pos` absent). The `#[ignore]` strings already say
-  *"do NOT import a forward reaching/widening engine to pass this."*
+### T1.4 — ✅ COMPLETE 2026-08-01: native body check; forward-reaching engine deleted
+Ordinary application consumes domain-indexed safety/completion/return facts. `bodycheck.rs`,
+`check_recursive_body`, `reachable_rows`, and `grow` are deleted; a machinery gate requires their
+absence. Blockers 2a/2b no longer false-accept: an unsupported changed-domain repeated-shape fact is
+Unproven and blocks at the seat. Later diagnosis split 1b and 3 from this wiring gate: 1b requires
+T3.2's exact-singleton chains, while 3 requires T2.2's structured completion evidence. Keeping them
+ignored is therefore the honest completion of T1.4, not a relaxation of it.
 
 ---
 
@@ -180,7 +186,7 @@ reachability (kept — it is a single-domain contract question) + safety-fact in
 
 | Feature | What it is | Pulled by |
 |---|---|---|
-| **T2.1 Grounding — FIX BEFORE WIRING** | **Do not wire.** Three corrections first: (i) **G-BUG** — `drift_away` must establish a *forced* recursive transition (exact selection / another must-condition at every step), not syntactic self-call presence; (ii) `Verdict::Refuted` must **carry its represented-exact witness + certificate**; (iii) the module header's "grounding is the analysis's termination bound" is superseded — grounding is a *behavioural* judgment, and C§13.3 bounds the symbolic procedure independently. Only then wire as A-NEG's derived-input-domain source. | T1.3, A-NEG |
+| **T2.1 Grounding corrections — COMPLETE; still unwired** | The three prerequisite corrections are complete: forced recursive transitions, witness-bearing refutation, and the behavioural-judgment header correction. Wiring remains consumer-gated; do not wire merely because the implementation exists. | T1.3, A-NEG |
 | **T2.2 AP-30 + `refute`** | The structured `ProvenPresent` witness — the concrete blocker that killed F1 twice (`Completion` has no witness; `CompletionWithoutValue` requires one). Wires the entirely-dead `refute` module as the claim consumer. | T1.2 (seat demands), T1.4 |
 | **T2.3 Application path unification** | Choose **one**: wire `application.rs`'s driver into `analyze_apply`, or delete it and keep the inline version. Today both exist; `analyze_apply` reimplements `live_alternatives`/`admit_callee`/`join`/`seat_demand` inline. Note the driver's admission is *weaker* (never refutes) than the live inline one — reconcile, don't blindly swap. | T1.2 |
 | **T2.4 Recursive source contracts → `RecGroup`** | Nothing live constructs `Contract::Ref`, so `contract::recursive` (and via it `length`) is dead. Building named recursive *source* contracts gives it its first real consumer. | T1.1 (`where`/named contracts) |
@@ -212,8 +218,8 @@ reachability (kept — it is a single-domain contract question) + safety-fact in
 
 ## TIER 4 — Consolidate (only safe once the live path is settled)
 
-Deduplicate the ~16 parallel implementations the scan named — the **two live** callee body
-summaries first (`bodycheck::body_summary` vs `outcome::summarize_instance`), then the four verdict
+Deduplicate the remaining parallel implementations the scan named — the retired body-summary fork
+is already gone; next reconcile the four verdict
 enums, the two row-selection walks, the three `intersect` copies, the two completion tri-states.
 Delete the Phase-3 superseded set (`accepted_domain`, `summarize_instance`'s per-call role,
 residual `kind_abstraction`). **Nothing is deleted until its replacement passes what the current
@@ -237,8 +243,8 @@ is bound*); **A-SND** as the executable soundness harness.
   leaning). Blocker (4) satisfied; **(2) hard-vs-acknowledgeable and (3) the [permanent] gray
   family remain open.** *Gates Phase GR's expected-verdict polarity* — GRAY vs REJECT rides the P-1
   status, not test edits.
-- **R8's ruling** (`Numeric`, specific `a/0`) — needs to land in a spec; it contradicts C§7 and F0's
-  new safety table.
+- **R8's ruling — SETTLED 2026-08-01:** `Numeric = Number ∪ Indeterminate`, with specific
+  `DivZero(a)` / `ModZero(a)` forms, is recorded in manifest-governed Part XII and implemented.
 - **Uncalled proven-unsafe body** — definition-site diagnostic: error / lint / silent. Unruled.
 - **F0 draft Q1** — `Union` distribution vs interval hull (hull implemented).
 - Literal parameter patterns; mutator returns; module dot-nesting; modules in value seats;
@@ -255,14 +261,14 @@ synthesis — *may not be resurrected by any reading*) · **Part D** (candidate,
 
 ---
 
-## Acceptance map — the 17 `#[ignore]`s by feature
+## Acceptance map — current `#[ignore]`s by feature
 
 | Ignored tests | Count | Released by |
 |---|---|---|
-| **G-BUG** grounding false refutation (lib) | 1 | **T2.1** (fix before wiring) |
-| Blockers 1b / 2a / 2b / 3 (lib) | 4 | **T1.4** |
+| Blocker 1b exact-singleton chain (lib) | 1 | **T3.2** |
+| Blocker 3 recursive completion witness (lib) | 1 | **T2.2** |
 | Phase A (A-VER, A-ACC, A-SND, verdicts, A-LNT, A-WRK) | 6 | **T1.1** (+ T3.6 for lints, T5 for A-SND) |
-| MOD-01/03/04/05, P-27b | 5 | **T3.4** |
+| MOD-03/04/05, P-27b | 4 | **T3.4** |
 | MU-18 | 1 | **T3.3** |
 | M-04 | 1 | **T3.5** |
 
@@ -270,10 +276,10 @@ synthesis — *may not be resurrected by any reading*) · **Part D** (candidate,
 
 ## Recommended immediate order
 
-1. **Tier 0** — reconcile the record (start with **R8**, which touches code I just wrote, then R2/R3/R5).
-2. **T1.1** — the program-level entry point + `where` demand origin. *This is the highest-leverage
-   single step in the plan:* it creates the consumer whose absence caused the whole speculative-build
-   pattern, and it activates six ignored conformance rows.
-3. Then **T1.2 → T1.3 → T1.4** as one spine, each pulled by the last.
+1. **T2.2** — carry structured `ProvenPresent(witness)` through the outcome/consumer boundary; this
+   is the direct blocker for recursive arm completion.
+2. **T2.3** — reconcile the still-duplicated application driver with the now-live inline path.
+3. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
 
-*Nothing in Tier 2+ should start while Tier 1 is open — that is how the unwired backlog accumulated.*
+*The remaining T1.2 breadth is pulled by these consumers; it is not a licence for a standalone
+backward-analysis rebuild.*

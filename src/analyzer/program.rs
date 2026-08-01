@@ -658,6 +658,50 @@ mod tests {
         assert!(called.findings.iter().any(|f| f.class == TrapClass::OperationSafety));
     }
 
+    /// The program path must consume the global fact graph. The helper edge changes
+    /// the domain before returning to `f`; §4a cuts off that repeated shape, leaving
+    /// safety unproven, and late-resolution §5 therefore blocks the executable seat.
+    #[test]
+    fn an_executable_mutual_domain_change_is_not_silently_accepted() {
+        let (v, _) = check(
+            "f = (x) => x == 0 ? g(\"x\") : x + 1\n\
+             g = (y) => f(y)\n\
+             f(0)\n",
+        );
+        assert!(
+            !v.accepted(),
+            "f(0) -> g(\"x\") -> f(\"x\") must not pass an unsettled fact graph: {:?}",
+            v.findings
+        );
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.class == TrapClass::OperationSafety)
+        );
+    }
+
+    /// Multi-parameter row projection remains a precision gap, but it cannot remain a
+    /// soundness hole: the changed-domain re-entry is a repeated-shape fact with no
+    /// admitted proof, so safety-unproven rejects until §5 tuple projection can prove or
+    /// refute it more precisely.
+    #[test]
+    fn an_executable_multiparameter_domain_change_is_not_silently_accepted() {
+        let (v, _) = check(
+            "f = (a, b) => a == 0 ? f(\"x\", b) : a + b\n\
+             f(0, 1)\n",
+        );
+        assert!(
+            !v.accepted(),
+            "f(0, 1) -> f(\"x\", 1) must not pass an unsettled fact graph: {:?}",
+            v.findings
+        );
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.class == TrapClass::OperationSafety)
+        );
+    }
+
     /// Entry statements run in effect world, but a named module's executable bindings
     /// remain pure. World is part of the demand key; it cannot be guessed from the callee.
     #[test]

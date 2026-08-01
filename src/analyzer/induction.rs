@@ -155,9 +155,9 @@ pub(crate) fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R
 
 /// Whether a safety-component verification is currently in progress. During that
 /// pass, a call not covered by an installed safety fact is an unresolved graph
-/// dependency (for example a shape-cutoff node); recursively launching the legacy
-/// body summary would silently bypass the graph's `Unproven` verdict.
-pub(crate) fn safety_context_active() -> bool {
+/// dependency (for example a shape-cutoff node); recursively launching another
+/// settlement would bypass the current graph's `Unproven` verdict.
+pub(crate) fn safety_hypotheses_active() -> bool {
     HYPOTHESES.with(|h| h.borrow().iter().any(|hyp| matches!(hyp.claim, Claim::Safety)))
 }
 

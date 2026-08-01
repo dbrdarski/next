@@ -68,8 +68,8 @@
 //! Candidate-locality (GR-04): outside applicability each candidate concludes **nothing**
 //! — [`Verdict::Unproven`], always sound. Point-base/Ackermann (grid + domain, GR-18),
 //! exact-singleton chains (§4) and the WorldDecided classifier (§8) are later increments.
-//! **Not yet wired** into the body check — same discipline as `region.rs` / `bodycheck.rs`:
-//! build standalone, prove green, integrate after.
+//! **Not yet wired** into application safety: build standalone, prove green, integrate
+//! only when the exact-chain and broader grounding consumers are authorized.
 
 use num_bigint::BigInt;
 
@@ -936,8 +936,7 @@ fn point_value(c: &Contract) -> Option<Rational> {
 }
 
 /// Every self-call's **positional argument list** in `e` (paths discarded) — the shape
-/// [`numeric_descent`] / [`measure_descent`] read, and the demand core's reachable-rows
-/// fixpoint (`bodycheck`). Thin wrapper over [`walk`].
+/// [`numeric_descent`] / [`measure_descent`] read. Thin wrapper over [`walk`].
 pub(crate) fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) {
     let mut full = Vec::new();
     walk(e, closure, std::slice::from_ref(cv), &[], &[], &mut full);

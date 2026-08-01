@@ -4,8 +4,8 @@
 //! > unproven entries per-compilation). Every key interned pointers; every entry a fact or
 //! > an appropriately-scoped shrug.
 //!
-//! **Why this had to come before the T1.4 wiring.** Moving `analyze_apply` onto the settled
-//! facts means a settlement analyzes bodies whose calls reach `analyze_apply` again. Guarding
+//! **Why this is part of the T1.4 boundary.** Moving `analyze_apply` onto the settled facts
+//! means a settlement analyzes bodies whose calls reach `analyze_apply` again. Guarding
 //! that with a *global* "am I settling?" flag is unsound: it answers every nested query from
 //! the hypotheses, including for callees that are not members of the graph and hold no
 //! hypothesis, which silently drops their traps. Measured on 2026-08-01: ten lib failures,
@@ -175,7 +175,7 @@ pub(crate) fn begin(key: &FactKey) {
 ///
 /// At depth > 1 the verdict was reached with ambient hypotheses in scope, so it is
 /// **removed** rather than recorded — a hypothesis-relative answer is not a fact.
-pub(crate) fn finish(key: &FactKey, verdict: &BodySafety) {
+pub(crate) fn finish(key: &FactKey, verdict: &BodySafety) -> bool {
     let outer = DEPTH.with(|d| {
         let mut d = d.borrow_mut();
         *d -= 1;
@@ -189,6 +189,15 @@ pub(crate) fn finish(key: &FactKey, verdict: &BodySafety) {
             c.remove(key);
         }
     });
+    outer
+}
+
+/// Publish another verdict settled by the same outermost graph pass. Dependency
+/// components are facts too: retaining only the seed would force later completion/
+/// return analysis to settle the graph again. The caller may use this only after
+/// [`finish`] reports that no ambient hypotheses remain.
+pub(crate) fn record_settled(key: FactKey, verdict: BodySafety) {
+    CACHE.with(|c| c.borrow_mut().insert(key, Some(verdict)));
 }
 
 /// Drop everything for test isolation or explicit memory reclamation. Correctness does not

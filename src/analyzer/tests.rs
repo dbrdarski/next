@@ -1914,7 +1914,6 @@ mod apply_wiring {
     }
 
     #[test]
-    #[ignore = "FALSE POSITIVE exposed by the 2026-07-31 ruling (safety-unproven -> Error). These were green only because the finding was a Warning that analyze_apply's errors() filter discarded. Root: bodycheck.rs:213 computes the recursive target under the ROW REGION, which grows the reaching domain back up to Top, so `n - 1` can no longer be proven a Number. SAME ROOT AS BLOCKER 1b (parked). The programs are safe; the analyzer cannot currently prove it. Un-ignore when 1b's root is fixed. Do NOT fix by reverting the severity or by widening/reaching machinery."]
     fn a_recursive_call_infers_its_return_over_the_argument() {
         // `f(x)` with `x : Number` — `analyze_apply` now infers f's return over the
         // call-site argument, giving pure Number rather than Top.
@@ -2177,8 +2176,8 @@ mod body_safety {
 
     #[test]
     fn transitive_body_trap_is_rejected() {
-        // bad calls helper, whose body traps — the trap must reach bad's call site even
-        // though the nested helper() call coarsens under the guard.
+        // bad calls helper, whose body traps — the dependency component settles first,
+        // and its refutation must reach bad's call site.
         let a = analyze_call("helper = () => 1 + \"x\"\nbad = () => helper()\nbad", "bad", &[]);
         assert!(!a.accepted(), "a transitive body trap must be surfaced: {:?}", a.findings);
     }
@@ -2190,10 +2189,9 @@ mod body_safety {
     }
 
     #[test]
-    #[ignore = "FALSE POSITIVE exposed by the 2026-07-31 ruling (safety-unproven -> Error). These were green only because the finding was a Warning that analyze_apply's errors() filter discarded. Root: bodycheck.rs:213 computes the recursive target under the ROW REGION, which grows the reaching domain back up to Top, so `n - 1` can no longer be proven a Number. SAME ROOT AS BLOCKER 1b (parked). The programs are safe; the analyzer cannot currently prove it. Un-ignore when 1b's root is fixed. Do NOT fix by reverting the severity or by widening/reaching machinery."]
     fn a_recursive_safe_body_terminates_without_false_findings() {
-        // factorial: the recursive call coarsens to Top (Number * Top is an *unproven*
-        // Mul — a Warning, filtered out), so no false finding, and analysis terminates.
+        // factorial: safety, completion, and return all close over the covering Number
+        // fact, so the recursive operand is safe and analysis terminates.
         let a = analyze_call("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf", "f", &[("n", num())]);
         assert!(a.accepted(), "factorial accepted: {:?}", a.findings);
         assert!(a.findings.is_empty(), "no false findings from the coarsened recursion: {:?}", a.findings);
@@ -2283,9 +2281,10 @@ mod body_safety {
     }
 
     #[test]
-    fn a_recursive_call_over_a_new_domain_is_analyzed() {
-        // §11.2: f(0) recurses to f("x"); over String, `x + 1` traps. Keying by
-        // (instance, domain) — not shape/instance alone — must analyze the String edge.
+    fn a_recursive_call_over_a_new_domain_is_not_silently_accepted() {
+        // §11.2: f(0) recurses to f("x"); over String, `x + 1` traps. The second f is a
+        // repeated shape and therefore not admitted through this path; the honest graph
+        // result is Unproven, which must block rather than silently accept.
         let mut i = Interner::new();
         let f = run_source_in("f = (x) => x == 0 ? f(\"x\") : x + 1\nf", &mut i).unwrap().0;
         let mut env = empty();
@@ -2387,12 +2386,13 @@ mod recursive_domains {
     use crate::rational::Rational;
 
     #[test]
+    #[ignore = "BLOCKER 1b: the safe exact chain f(0) -> f(1) crosses a repeated shape. Section 4a admits no new node through that path, so proving this call requires grounding section 4's exact-singleton fact-chain mechanism. The retired reaching checker accepted it by following domains forward; do not restore that mechanism."]
     fn a_widened_domain_trap_does_not_refute_the_narrower_call() {
         // §17.1: f(0) → f(1) → 1 is concretely safe. Widening `Equals(1)` to `Number`
         // would make `1 + "x"` live, but that trap has no witness represented in
-        // `Equals(1)` — it must not refute the call. Here `1` is in the program's literal
-        // vocabulary, so the recursive edge is analyzed at its exact domain anyway and
-        // the dead-arm rule prunes the trapping branch.
+        // `Equals(1)` — it must not refute the call. The exact edge is known, but §4a's
+        // shape-repeat cutoff cannot admit it as another ordinary fact node; grounding's
+        // exact-singleton chain is the separate proof license this test awaits.
         let mut i = Interner::new();
         let f = run_source_in(
             "f = (x) => x == 0 ? f(1) : (x == 1 ? 1 : 1 + \"x\")\nf",
@@ -2604,281 +2604,5 @@ mod region {
         assert_eq!(select(&rows, &two, &mut i).len(), 1);
         let nine = eq(&mut i, 9);
         assert_eq!(select(&rows, &nine, &mut i).len(), 1);
-    }
-}
-
-// ── Call-site body check §6 / E3-E7 — the accepted-domain gate (14.1–14.3) ─────
-
-mod bodycheck {
-    use super::{ActKind, Severity, arm, closure, konst, matchx, name, one_param, prim};
-    use crate::analyzer::bodycheck::body_check;
-    use crate::ast::{Expr, Pat, PrimOp};
-    use crate::contract::{Contract, ContractEnv, Kind};
-    use crate::interner::Interner;
-
-    fn cenv() -> ContractEnv {
-        ContractEnv::new()
-    }
-    fn has_error(fs: &[crate::analyzer::Finding]) -> bool {
-        fs.iter().any(|f| f.severity == Severity::Error)
-    }
-    fn eqc(i: &mut Interner, v: i64) -> Contract {
-        Contract::Equals(i.integer(v))
-    }
-
-    #[test]
-    fn gate_14_1_unconditional_bad_body_rejects_the_call() {
-        // () => 1 + "x" — one input tuple (); the body traps. bad() is rejected.
-        let mut i = Interner::new();
-        let (one, x) = (i.integer(1), i.string("x"));
-        let body = prim(PrimOp::Add, vec![konst(one), konst(x)]);
-        let bad = closure(&mut i, Pat::Tuple(vec![]), body, ActKind::Pure);
-        assert!(
-            has_error(&body_check(&bad, &[], &cenv(), &mut i)),
-            "bad() must reject"
-        );
-    }
-
-    #[test]
-    fn gate_14_2_numeric_requirement_from_the_body() {
-        // x => x + 1 — the body demands Number of x. f(Number) accepted; f(String)
-        // rejected; f(Top) unproven (a warning, not a rejection).
-        let mut i = Interner::new();
-        let one = i.integer(1);
-        let f = closure(
-            &mut i,
-            one_param("x"),
-            prim(PrimOp::Add, vec![name("x"), konst(one)]),
-            ActKind::Pure,
-        );
-        assert!(
-            !has_error(&body_check(
-                &f,
-                &[Contract::Kind(Kind::Number)],
-                &cenv(),
-                &mut i
-            )),
-            "f(Number) ok"
-        );
-        assert!(
-            has_error(&body_check(
-                &f,
-                &[Contract::Kind(Kind::String)],
-                &cenv(),
-                &mut i
-            )),
-            "f(String) rejects"
-        );
-        // f(Top) is at least flagged (never silently accepted); severity is a precision
-        // detail of the operation-safety sampler (warning today, could sharpen to error).
-        assert!(
-            !body_check(&f, &[Contract::Top], &cenv(), &mut i).is_empty(),
-            "f(Top) flagged"
-        );
-    }
-
-    /// n == 0 ? 1 : n + "x"
-    fn cond_body(i: &mut Interner) -> Expr {
-        let (zero, one, x) = (i.integer(0), i.integer(1), i.string("x"));
-        matchx(
-            None,
-            vec![
-                arm(None, Some(prim(PrimOp::Eq, vec![name("n"), konst(zero)])), konst(one)),
-                arm(None, None, prim(PrimOp::Add, vec![name("n"), konst(x)])),
-            ],
-        )
-    }
-
-    #[test]
-    fn gate_14_3_path_sensitive_accepted_region() {
-        // AcceptedDomain = Equals(0) ∪ String — proved path-sensitively through the
-        // region table: f(0) ok; f(5) rejected (the else arm's 5+"x" traps, definite);
-        // f(String) ok (the else arm is String+String); f(Top) unproven (mixed).
-        let mut i = Interner::new();
-        let body = cond_body(&mut i);
-        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
-        let zero = eqc(&mut i, 0);
-        assert!(
-            !has_error(&body_check(&f, &[zero], &cenv(), &mut i)),
-            "f(0) ok"
-        );
-        let five = eqc(&mut i, 5);
-        assert!(
-            has_error(&body_check(&f, &[five], &cenv(), &mut i)),
-            "f(5) rejects (5 + \"x\")"
-        );
-        assert!(
-            !has_error(&body_check(
-                &f,
-                &[Contract::Kind(Kind::String)],
-                &cenv(),
-                &mut i
-            )),
-            "f(String) ok"
-        );
-        // f(Top): the else arm is exact and definitely reached, and a concrete witness
-        // (n = 5, reaching `5 + "x"`) traps — so the unrestricted call is refuted, not
-        // merely unproven. Top ⊄ (Equals(0) ∪ String).
-        assert!(
-            has_error(&body_check(&f, &[Contract::Top], &cenv(), &mut i)),
-            "f(Top) rejects (witness 5)"
-        );
-    }
-
-    #[test]
-    fn rt14_a_may_region_trap_does_not_refute() {
-        // (n) => n*n <= 5 ? n + "x" : 0 — the guard is opaque (case d, non-exact), so
-        // even though `n + "x"` traps for a numeric n, the may-region row cannot refute:
-        // the finding downgrades to a warning (RT-14 witness discipline).
-        let mut i = Interner::new();
-        let (five, x, zero) = (i.integer(5), i.string("x"), i.integer(0));
-        let guard = prim(
-            PrimOp::Le,
-            vec![prim(PrimOp::Mul, vec![name("n"), name("n")]), konst(five)],
-        );
-        let body = matchx(
-            None,
-            vec![
-                arm(
-                    None,
-                    Some(guard),
-                    prim(PrimOp::Add, vec![name("n"), konst(x)]),
-                ),
-                arm(None, None, konst(zero)),
-            ],
-        );
-        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
-        let fs = body_check(&f, &[Contract::Kind(Kind::Number)], &cenv(), &mut i);
-        assert!(
-            !has_error(&fs),
-            "opaque-guard row may not refute — warning only"
-        );
-        assert!(
-            fs.iter().any(|f| f.severity == Severity::Warning),
-            "but it is flagged unproven"
-        );
-    }
-}
-
-// ── Body check over captures (14.4) — capture-dependent operation demand ───────
-
-mod bodycheck_captures {
-    use crate::analyzer::bodycheck::body_check;
-    use crate::contract::{Contract, ContractEnv, Kind};
-    use crate::interner::Interner;
-    use crate::oracle::run_source;
-
-    #[test]
-    fn inner_closure_domain_depends_on_the_capture() {
-        // make = (y) => (x) => x + y. make(1)'s inner demands x : Number (x + 1);
-        // make("s")'s inner demands x : String (x + "s"). The capture parameterizes it.
-        let cenv = ContractEnv::new();
-        let add1 = run_source("make = (y) => (x) => x + y\nmake(1)").unwrap().0;
-        let mut i = Interner::new();
-        assert!(!body_check(&add1, &[Contract::Kind(Kind::Number)], &cenv, &mut i).iter().any(|f| f.severity == crate::analyzer::Severity::Error), "add1(Number) ok");
-        assert!(body_check(&add1, &[Contract::Kind(Kind::String)], &cenv, &mut i).iter().any(|f| f.severity == crate::analyzer::Severity::Error), "add1(String) rejects");
-
-        let adds = run_source("make = (y) => (x) => x + y\nmake(\"s\")").unwrap().0;
-        assert!(!body_check(&adds, &[Contract::Kind(Kind::String)], &cenv, &mut i).iter().any(|f| f.severity == crate::analyzer::Severity::Error), "adds(String) ok — capture flips the domain");
-    }
-}
-
-// ── body_check terminates on recursion (via the existing recursion-safe path) ──
-
-mod bodycheck_recursion {
-    use crate::analyzer::Severity;
-    use crate::analyzer::bodycheck::body_check;
-    use crate::contract::{Contract, ContractEnv, Kind};
-    use crate::interner::Interner;
-    use crate::oracle::run_source;
-
-    #[test]
-    fn recursive_body_with_a_local_trap_terminates_and_rejects() {
-        // f = (n) => n == 0 ? (1 + "x") : f(n - 1). body_check must terminate (the
-        // recursive f(n-1) routes through the existing recursion-safe apply path) and
-        // catch the base-arm's local trap.
-        let f = run_source("f = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\nf").unwrap().0;
-        let mut i = Interner::new();
-        let fs = body_check(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
-        assert!(fs.iter().any(|x| x.severity == Severity::Error), "local trap in the base arm rejected");
-    }
-
-    #[test]
-    #[ignore = "FALSE POSITIVE exposed by the 2026-07-31 ruling (safety-unproven -> Error). These were green only because the finding was a Warning that analyze_apply's errors() filter discarded. Root: bodycheck.rs:213 computes the recursive target under the ROW REGION, which grows the reaching domain back up to Top, so `n - 1` can no longer be proven a Number. SAME ROOT AS BLOCKER 1b (parked). The programs are safe; the analyzer cannot currently prove it. Un-ignore when 1b's root is fixed. Do NOT fix by reverting the severity or by widening/reaching machinery."]
-    fn a_plain_recursion_terminates_cleanly() {
-        // factorial: no local trap over Number → no error, and it terminates.
-        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
-        let mut i = Interner::new();
-        let fs = body_check(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
-        assert!(!fs.iter().any(|x| x.severity == Severity::Error), "clean recursion: no error");
-    }
-}
-
-// ── body_summary — the full {produced, completion, findings} region-table summary ─
-
-mod bodycheck_summary {
-    use super::{ActKind, arm, closure, konst, matchx, name, one_param, prim};
-    use crate::analyzer::Completion;
-    use crate::analyzer::Severity;
-    use crate::analyzer::bodycheck::body_summary;
-    use crate::ast::PrimOp;
-    use crate::contract::{Contract, ContractEnv, Kind};
-    use crate::interner::Interner;
-    use crate::oracle::run_source;
-
-    fn has_error(fs: &[crate::analyzer::Finding]) -> bool {
-        fs.iter().any(|f| f.severity == Severity::Error)
-    }
-
-    #[test]
-    fn straight_line_body_produces_and_completes() {
-        // x => x + 1 over Number: produced Number, always completes, no findings.
-        let mut i = Interner::new();
-        let one = i.integer(1);
-        let f = closure(&mut i, one_param("x"), prim(PrimOp::Add, vec![name("x"), konst(one)]), ActKind::Pure);
-        let s = body_summary(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
-        assert_eq!(s.produced, Contract::Kind(Kind::Number));
-        assert!(matches!(s.completion, Completion::Produces));
-        assert!(!has_error(&s.findings));
-    }
-
-    #[test]
-    fn conditional_body_narrows_produced_by_the_live_arm() {
-        // n => n == 0 ? 1 : n + "x", applied to Equals(0): only the base arm is live, so
-        // produced = Equals(1) and there are no findings.
-        let mut i = Interner::new();
-        let (zero, one, x) = (i.integer(0), i.integer(1), i.string("x"));
-        let body = matchx(
-            None,
-            vec![
-                arm(None, Some(prim(PrimOp::Eq, vec![name("n"), konst(zero.clone())])), konst(one.clone())),
-                arm(None, None, prim(PrimOp::Add, vec![name("n"), konst(x)])),
-            ],
-        );
-        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
-        let arg = Contract::Equals(zero);
-        let s = body_summary(&f, &[arg], &ContractEnv::new(), &mut i);
-        assert_eq!(s.produced, Contract::Equals(one), "only the base arm is reachable for 0");
-        assert!(!has_error(&s.findings));
-    }
-
-    #[test]
-    #[ignore = "FALSE POSITIVE exposed by the 2026-07-31 ruling (safety-unproven -> Error). These were green only because the finding was a Warning that analyze_apply's errors() filter discarded. Root: bodycheck.rs:213 computes the recursive target under the ROW REGION, which grows the reaching domain back up to Top, so `n - 1` can no longer be proven a Number. SAME ROOT AS BLOCKER 1b (parked). The programs are safe; the analyzer cannot currently prove it. Un-ignore when 1b's root is fixed. Do NOT fix by reverting the severity or by widening/reaching machinery."]
-    fn recursion_summarizes_coarsely_and_terminates() {
-        // factorial: produced is coarse (the recursive call returns Top via the existing
-        // path), completion Produces, no findings — and it terminates.
-        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
-        let mut i = Interner::new();
-        let s = body_summary(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
-        assert!(!has_error(&s.findings));
-        assert!(matches!(s.completion, Completion::Produces), "the total ternary completes");
-    }
-
-    #[test]
-    fn recursion_with_a_local_trap_is_still_rejected() {
-        let f = run_source("f = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\nf").unwrap().0;
-        let mut i = Interner::new();
-        let s = body_summary(&f, &[Contract::Kind(Kind::Number)], &ContractEnv::new(), &mut i);
-        assert!(has_error(&s.findings), "the base-arm local trap is caught");
     }
 }

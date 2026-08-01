@@ -46,20 +46,30 @@ function body is run at compile time. Check mode starts with the same inert harn
 mode (`String`, `println`, `exit`, `readFile`), so prelude use is resolved rather than falsely
 reported unbound.
 
+The fourth repair wires ordinary application to the settled candidate graph and deletes the
+quarantined recursive checker. `analyze_apply` now requires `BodySafe(instance, I) = Proven`, reads
+completion from the corresponding completion fact, and uses the shape-bounded outcome projection
+for produced values (with return induction for recursive results). Safety-unproven is converted to
+an unsuppressible error only at the consuming seat. An outer graph settlement publishes every
+proven dependency fact under its complete memo key, while diagnostic verification cannot launch a
+nested graph past a shape cutoff. Outcome summarization has its own §4a active-shape sequence, so a
+safe divergent recursion is analyzed coarsely and terminates rather than overflowing. The retired
+`bodycheck.rs` file, module export, reaching primitives, and implementation-specific tests are gone;
+the machinery gate requires them to remain absent.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
-1. Recursive application is still wired through the quarantined `bodycheck` path even though the fact
-   graph exists.
+1. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
+   remaining typed verdicts until policy is applied.
 2. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
-3. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
-   remaining typed verdicts until policy is applied.
-4. The repository-wide formatting gate is red (8,602 diff lines on 2026-08-01).
+3. The repository-wide formatting gate is red (8,560 diff lines on 2026-08-01).
 
-**Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, and typed
-executable program demands are complete. Next, wire ordinary application to settled facts and retire
-the quarantined checker; only then advance Phase A. Normative files remain manifest-protected and are
-not edited by these implementation slices.
+**Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
+executable program demands, and ordinary-application fact wiring are complete. The next analyzer
+slice is the structured completion witness / typed seat boundary (T2.2), which is also the direct
+blocker for the remaining recursive fall-through pin. Normative files remain manifest-protected and
+are not edited by these implementation slices.
 
 ---
 
@@ -109,22 +119,17 @@ noted so no one implements a phantom; correcting them is an author/design action
 
 ---
 
-## 3. Quarantined — code that is NON-AUTHORITATIVE
-
-These paths **execute and are tested, but may return a wrong verdict**. No result from them may be
-treated as a settled judgment, and no new work may be layered on them.
+## 3. Implementation trust boundaries
 
 | Path | Status | Nature |
 |---|---|---|
-| `analyzer::bodycheck` recursive body checker — `body_summary` → `body_check` → `check_recursive_body`, the callee-keyed `ACTIVE` cutoff, `grow`, `reachable_rows` | **KNOWN UNSOUND** | Forward reaching-domain accumulation (see §5, forbidden). Documented false rejection **and** false acceptances (§4). It is the wired path of `analyze_apply` today |
-| `BodySummary::cycle()` supplying `Completion::Produces` | **KNOWN UNSOUND** | A cycle *assumption* cannot claim production |
-| Safety-unproven severity | **RESOLVED 2026-07-31 — RULED [user]: it is an `Error`** | Aligned with late-resolution §5 (*"safety-unproven → compile error, un-suppressible"*). Ten emission sites flipped. **Completion (`MayFallThrough`) deliberately excluded** — a different judgment class (application §1.6). Exposed six pre-existing false positives (§4) that `Warning` had been hiding |
-| `analyze_apply`'s `summary.errors()` call-site filter | **NOW LIVE — it discards blocking findings** | Since unproven is an `Error`, this filter no longer merely loses a message: it is the boundary at which a callee body's blocking findings would be dropped. Currently they pass (they are Errors); the filter should be revisited when the three voices are carried structurally |
+| `analyzer::bodycheck` and its reaching core | **DELETED 2026-08-01** | The known-unsound forward reaching-domain checker is no longer compiled or present. `machinery_gate` bans the file, module identifier, and `check_recursive_body` / `reachable_rows` / `grow` identifiers from `src/` |
+| Safety-unproven policy | **RESOLVED 2026-07-31 — RULED [user]: it blocks** | `BodySafety::Unproven` remains typed inside the fact layer; `discharge_body_safety` adds the unsuppressible Error only at the application seat. Completion (`MayFallThrough`) remains a different judgment class (application §1.6) |
 | `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **CORRECTED 2026-07-31; still UNWIRED** | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Its *coverage* gaps (GR-18 point-base, peel-k, oscillator, closed-orbit, §8 WorldDecided, multi-param mutual) remain owed — those are incompleteness (→ `Unproven`), not unsoundness. **Wiring still requires separate authorization** |
-| `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT, not yet wired** | Discovery closure (candidates + edges, **no verification during discovery**) → SCC collapse → reverse-topological → **one joint vector pass** per component, with §5's partition rule as each member's verification. Finiteness = C§13.3(2)'s shape cutoff + domain-covering reuse, **not** a budget. Measured: mutual `f→g→f` **Refuted**; `countDown` over its declared domain **Proven**; a divergent body **Proven and terminating**; an uncovered concrete chain **cut off, not expanded**. **Not the wired path** — `analyze_apply` still calls `bodycheck::body_summary`, which is why nine pins are unmoved |
+| `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT AND WIRED 2026-08-01** | Ordinary known-closure application consumes `BodySafe(instance, I)`. Discovery closure → SCC collapse → reverse-topological → one joint vector pass; dependencies proved by the outer pass are memoized under their own complete keys. `countDown` over a covering declared domain and a divergent self-loop prove; an uncovered repeated-shape chain remains **Unproven**, never a manufactured refutation. Mutual and multi-parameter changed-domain executable calls now reject at the seat because safety is unproven; finer classification remains separately owed |
 | `oracle::mu` — **Algorithm A group canonicalization** | **BUILT but UNWIRED** (`#![allow(dead_code)]`) | SCC grouping (Tarjan over the binding-reference graph), positional μ-refs `⟨d,i⟩`, law 1/3 (only genuine cycles become groups), law 5 canonical slot order. Its own header: *"No runtime consumer yet."* **Deferred inside it: law 2 (nested-binder merge) and law 4 (bisimulation slot merging / partition refinement — spec step 3)**, on which the MU-14/15/16 identity claims rest |
 | `oracle::canon` — per-lambda shape | **BUILT, wired** | α-renaming (`$0`), capture slots (`@cap0`), polynomial NF. This is what `make_closure` (`eval.rs:239`) actually calls |
-| **The join between them** | **MISSING — function-identity conformance gap** | `mu::canonicalize_group` takes `(name, Expr)` binding lists; `make_closure` builds closures from a single `Lambda` + env and stores the **raw** body. So no constructed closure knows it belongs to a μ-group, and a mutual partner remains an ordinary *capture* rather than a μ-ref. The group structure is computed and discarded. This does **not** explain blocker 2b: the live application path still bypasses the candidate graph entirely |
+| **The join between them** | **MISSING — function-identity conformance gap** | `mu::canonicalize_group` takes `(name, Expr)` binding lists; `make_closure` builds closures from a single `Lambda` + env and stores the **raw** body. So no constructed closure knows it belongs to a μ-group, and a mutual partner remains an ordinary *capture* rather than a μ-ref. The group structure is computed and discarded. This is independent of application safety; blocker 2b was closed without it |
 | `analyzer::induction` pipeline — candidate discovery, domain derivation (`obligation::accepted_domain`, a **dissolved** concept), `summarize_instance` consumption, same-arity domain propagation (marked interim), candidate-to-candidate-only edges | **NON-AUTHORITATIVE** | Not a ready foundation. **Its independently valid SCC utilities (e.g. `scc_reverse_topo`, the reverse-topological order) may be reused.** There is **no** authorized broad replace-and-rebuild project |
 
 **Not quarantined** (trusted): the lexer, parser, desugar, oracle interpreter, normalization harness,
@@ -133,40 +138,32 @@ value/interner layer, and the contract algebra including `contract::numeric` + `
 
 ---
 
-## 4. Known failing gates — **PARKED 2026-07-31** (4 `#[ignore]`d in lib)
+## 4. Known analyzer pins — 2 `#[ignore]`d in lib
 
-Acceptance criteria, not bugs to route around. **All four are parked**: none is to be worked until
-its own blocker below is built. They are **not** parked under one cause — filing them all under
-"canonicalization" would set up a false expectation, and the moment Algorithm A lands and three of
-them still fail is exactly when someone reaches for machinery to close the gap.
+These are independent precision/completion gaps. Both block acceptance where proof is absent; neither
+is permission to reintroduce reaching domains, widening, or manufactured witnesses.
 
-| Gate | How it fails | Its actual blocker |
+| Gate | Current behavior | Actual blocker |
 |---|---|---|
-| **2b** mutual/helper domain-changing recursion (**false acceptance**, reports `[]`) | `f → g → f`: the quarantined body checker follows its own coarse recursion path and misses the changed-domain re-entry | **T1.4 application wiring** — ordinary application still calls `bodycheck::body_summary` instead of settling the already-built global candidate graph. The graph can discover the helper edge by chasing closure captures; μ-canonicalization remains a separate identity/conformance gap |
-| **1b** coarse recursive target (**false rejection**) | `bodycheck.rs:213` binds the parameter to the **row region**, so `x-1` becomes "anything above −1" | **RE-FILED 2026-07-31 (oracle-verified): grounding §4 exact-singleton fact chains** — *not* the fact graph. `f(0.5)` genuinely **traps**, and `0.5` sits in the **same row** as `1`, so `BodySafe(f, {row x>0})` is **false**. No row-set-keyed fact can prove `f(1)` safe; it needs the exact chain `1 → 0`, a domain finer than a row |
-| **2a** multi-parameter domain-changing recursion (**false acceptance**, reports `[]`) | no multi-parameter branch map, so the whole-body fallback **cuts** the recursion and never sees `a` become a String | **region-table §5** (argument-tuple projection), plus the same fact bound |
-| **3** recursive fall-through completion lost (reports `Produces`) | the cycle assumption *asserts* `completion: Produces` rather than settling it | **completion carried on the fact** (the same fact layer as 1b) — not canonicalization |
+| **1b** exact recursive singleton chain | `f(0) → f(1) → 1` is safe, but the second `f` repeats a shape and §4a admits no new node through that path; the seat rejects safety-unproven | grounding §4 exact-singleton fact chains. A row-wide fact is insufficient because the same row also contains trapping inputs |
+| **3** recursive arm fall-through | the completion fact exists, but `analyze_match` derives completion from uncovered scrutinee remainder and does not propagate a selected arm result's `CompletedWithoutValue` voice | T2.2's structured `ProvenPresent(witness)` carried through the outcome and demanded by the consumer |
 
-### Additionally pinned 2026-07-31 — six **false positives** exposed by the severity ruling
+Resolved by the 2026-08-01 wiring:
 
-`factorial` / `countDown` / the induction + summary recursion tests / `safety.rs`'s
-`declared_domain_recursion_proves_by_induction`. All assert that an ordinary **safe** program is
-accepted; all now fail.
+- **2b mutual/helper domain change:** the executable program is no longer silently accepted. Global
+  discovery reaches the changed-domain dependency, §4a cuts off the repeated shape, and
+  safety-unproven blocks at the application seat. The graph verdict is honestly **Unproven**, not
+  permanently Refuted: no admitted realized witness has been attached.
+- **2a multi-parameter domain change:** likewise no longer a false acceptance. Until §5
+  argument-tuple projection exists, the changed-domain repeated-shape fact remains Unproven and the
+  seat rejects. The missing projection is now a precision/classification gap, not a soundness hole.
+- The broad-domain factorial safety and recursive-return tests are live again. Their `Number` fact
+  covers `n - 1`; safety now consults the completion cross-claim and return induction instead of
+  treating the recursive operand as a false possible fall-through.
+- Direct tests of the deleted checker were removed with it. They tested implementation internals,
+  not stable language IDs; their live application/graph counterparts remain.
 
-- **Root:** `bodycheck.rs:213` computes the recursive target under the **row region**, growing the
-  reaching domain back up to `Top`, so `n - 1` stops being provably a Number. Verified the algebra
-  is innocent — `Difference(Number, {0}) ⊑ Number` is *Proven*; only `Difference(Top, {0})` is not.
-  **Same root as blocker 1b.**
-- **Not a regression.** They were green *only because* the finding was a `Warning` that
-  `analyze_apply`'s `errors()` filter discarded. The honest state is that the analyzer **cannot
-  currently prove `factorial` safe** — and never could.
-- **Consequence:** blocker **1b now gates six further tests**, all ordinary safe programs.
-
-**Do not un-ignore any of these by other means.** Making one green without its blocker is a
-regression dressed as progress — and in particular, do **not** fix these six by reverting the
-severity ruling or by adding widening/reaching machinery.
-
-Conformance additionally holds 13 `#[ignore]`s (6 Phase A · 5 module system · MU-18 · M-04).
+Conformance holds 12 `#[ignore]`s (6 Phase A · 4 module/linking · MU-18 · M-04).
 
 ---
 
@@ -195,77 +192,56 @@ Conformance additionally holds 13 `#[ignore]`s (6 Phase A · 5 module system · 
 
 The five boundaries above were prose only, and prose did not hold them: a forward-reaching
 /widening engine was built on 2026-07-31, passed all four blockers, and was reverted whole.
-Four checks now enforce the part a machine can see. **Each was verified to fail on an
+Three checks now enforce the part a machine can see. **Each was verified to fail on an
 injected violation before landing** — a gate that cannot fire is not a gate.
 
 1. `src/analyzer/summary.rs` (the reverted engine) and sibling names must not exist.
-2. The quarantined reaching core — `check_recursive_body`, `reachable_rows`, `grow` — appears
-   only inside `src/analyzer/bodycheck.rs`.
-3. The fact machinery (`safety`, `induction`, `refute`, `obligation`, `grounding`) carries no
-   *code* reference to `bodycheck`; doc comments are stripped first, since documenting the
-   quarantine is expected.
-4. `callee_completion` still consults the settled completion fact — `Produces` at a call site
+2. The retired `bodycheck.rs`, its module identifier, and its reaching-core identifiers
+   (`check_recursive_body`, `reachable_rows`, `grow`) must be absent from `src/`.
+3. `callee_completion` still consults the settled completion fact — `Produces` at a call site
    may not be asserted by a coarse body pass (a false **accept**, the dangerous direction).
 
-**Scope, stated rather than glossed:** the gate catches a literal repeat and the spread of the
-quarantined engine. It does **not** catch a renamed reimplementation. That stays a review
-obligation, under the standing rule that when a pinned blocker goes green the **mechanism** is
+**Scope, stated rather than glossed:** the gate catches a literal repeat of the retired engine. It
+does **not** catch a renamed reimplementation. That stays a review obligation, under the standing
+rule that when a pinned blocker goes green the **mechanism** is
 reported, not merely the outcome. If a check fires, the fix is never to relax it — imprecision
 yields `unproven`, never another prerequisite and never a growth loop.
 
 
-### T1.4 (the wiring) — ATTEMPTED 2026-08-01, REVERTED. Memo-key containment first.
+### T1.4 — COMPLETE 2026-08-01: ordinary application consumes settled facts
 
-The swap of `analyze_apply` off `bodycheck::body_summary` and onto the settled facts was
-attempted and reverted whole. All three inputs now exist (`safety::prove` for findings,
-`safety::completes` for completion, and a partition-based `body_outcome` for `produced`),
-so the blocker is no longer a missing input.
+The earlier swap failed because settlement re-entrancy was guarded globally and because the memo key
+omitted named-contract dependencies. Both prerequisites are now closed, and the application path has
+been swapped without retaining the reaching checker.
 
-**The blocker is re-entrancy granularity.** A settlement analyzes bodies, whose calls reach
-`analyze_apply`, which would launch a nested settlement. Guarding that with the existing
-**global `SETTLING` boolean is unsound**: during any settlement, *every* nested `prove` gets
-answered from the hypotheses — including callees that are not members of the graph and have
-no hypothesis at all. Those return `Unproven(vec![])`, silently dropping a real transitive
-trap. Measured effect: 10 lib failures, of which
-`safety::graph_tests::mutual_recursion_closes_via_the_joint_vector_pass` reported **Proven
-where it must refute** — a false accept, the dangerous direction.
+- `analyze_apply` requires the three-voiced `safety::prove` result and applies the ruled blocking
+  policy at the seat. It takes completion from `safety::completes`; recursive produced values use
+  return induction, while acyclic dependencies preserve exact body outcomes.
+- The in-progress marker is the complete fact key, not a thread-global “settling” answer. An outer
+  graph pass publishes every proven dependency candidate under its own complete key. Nested,
+  hypothesis-relative settlements are still discarded.
+- Safety verification has an explicit dynamic context so an unresolved cutoff dependency remains
+  Unproven during diagnostic recovery instead of launching a nested proof past the cutoff.
+- Outcome projection follows §4a's active shape sequence. Re-entering a shape contributes coarse
+  `Top` / possible completion, preventing stack overflow on `loop = () => loop()`; settled return
+  and completion facts sharpen that projection where licensed.
+- The old `bodycheck.rs` path and reaching primitives are deleted and mechanically banned.
 
-**What it needs:** the in-progress key must be the complete fact node, not a global flag — so a
-member resolves through its hypothesis (vector induction, correct) while a non-member is genuinely
-verified. The first implementation added `(canonical shape, value-capture contracts, I, C)` but
-omitted **named-contract dependencies read by the shape**. Therefore `N = String` and `N = Number`
-can collide for a body containing `N => ...`. Recovery first completes that pure memoization key;
-cache scope or an explicit clear cannot repair semantic aliasing.
+**Witness correction:** the mutual changed-domain example is rejected, but the candidate graph alone
+returns **Unproven**, not Refuted. The repeated `f` shape is not admitted through that path, and no
+realized exact witness is attached. This is the required honest voice; late-resolution §5 still
+blocks the executable call. The same mechanism closes the multi-parameter false acceptance while
+leaving §5 tuple projection as an owed precision feature.
 
-**Consequence for ordering:** C§13.4's fact cache moves *before* T1.4, not after. The
-canonicalizer lands with that cache (it is the key's consumer), so the two travel together.
-No part of the attempt was kept — `body_outcome` included — because unused machinery ahead
-of its consumer is the pattern this project is recovering from.
-
-## 6a. In progress — `BodySafe(instance, I)` (authorized once §6 completed)
-
-**Landed:** the safety fact keyed `(instance, I)`, `I` taken from the call site (never synthesized),
-and **assume-and-check** discharge so a recursive reference resolves through the fact instead of
-unfolding. Proven natively for the clean case (`countDown` over a declared domain).
-
-**Not landed — the named gap:** a recursive call whose domain is *not* contained in `I` has no
-principled bound yet, so it falls back to the quarantined checker. The spec's answer is `I` ranging
-over the instance's **finite row-set lattice** (C§13.2 / GR-03) — that is what makes the fact graph
-finite. Until it exists the four blockers stay pinned.
-
-**A measurement discipline worth keeping:** a probe through the new entry point answered all four
-blockers correctly, but the **pinned tests still failed** — the probe was measuring two cutoffs
-composing, not the mechanism. Always check the pinned gate, never a convenience probe.
+**Still separate:** blocker 1b needs grounding's exact-singleton chains; blocker 3 needs structured
+completion evidence through the consumer. Neither is a reason to restore forward reaching domains.
 
 ---
+## 6. Historical prerequisite slice — ✅ COMPLETE 2026-07-31
 
-## 6. The authorized slice — ✅ COMPLETE 2026-07-31
-
-> **Status: done.** All three corrections landed; grounding remains **unwired**; no forbidden
-> machinery introduced; existing suites unchanged. **The next slice is not yet authorized** —
-> `BodySafe(instance, I)` was gated on "this rebaseline and the grounding gates", both of which are
-> now complete, but the ordering question (whether the program-level entry point / demand core come
-> first, per `NEXT-completion-plan.md` T1.1–T1.2) is open and author-owned.
+> **Status: done; retained for provenance.** All three corrections landed; grounding remains
+> **unwired** and no forbidden machinery was introduced. The later program-demand, memo, and T1.4
+> slices are recorded above and in `DECISIONS.md`.
 
 **Correct `analyzer::grounding` while it remains unwired.** Nothing else is authorized; in
 particular **`BodySafe(instance, I)` must not be started** until this is complete.
@@ -288,14 +264,14 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **425 passed, 0 failed, 10 ignored** (4 parked blockers + 6 pinned false positives) |
+| `cargo test --lib` | **414 passed, 0 failed, 2 ignored** (exact-singleton chain + recursive arm completion) |
 | `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
-| `cargo test --test machinery_gate` | **4 passed, 0 failed** |
+| `cargo test --test machinery_gate` | **3 passed, 0 failed** |
 | `cargo clippy --all-targets` | **0 warnings** |
-| `cargo fmt --check` | **FAILED** — 8,602 formatting diff lines |
+| `cargo fmt --check` | **FAILED** — 8,560 formatting diff lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
 417) are
 **HISTORICAL**; this table is current.
-**Green ≠ sound:** the suite does not cover the §4 gates, which is why they are pinned.
+**Green ≠ complete:** the two §4 gates remain pinned with independent mechanisms.

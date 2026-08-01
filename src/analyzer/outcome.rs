@@ -12,15 +12,16 @@
 //!   promoted to `ProvenPresent` (the structured AP-30 witness is owed); the call site
 //!   reads the finer three-voice `Completion` off [`analyze_instance_body`] directly.
 //!
-//! **Recursion is coarse and terminating here.** A recursive/mutual call resolves its
-//! callee to a captured `Equals(closure)`; with abstract (non-singleton) argument
-//! contracts the call does not constant-fold, so `analyze_apply` returns `Top` for the
-//! recursive result rather than re-entering the body. The summary is therefore sound
-//! but coarse on recursion; the §6 return induction sharpens the recursive result from
-//! `Top` to a proven contract under the induction hypothesis.
+//! **Recursion is coarse and terminating here.** The active shape sequence implements
+//! §4a's shape-repeat cutoff: re-entering a shape contributes the conservative `Top` /
+//! possible-completion outcome instead of re-entering its body. The summary is therefore
+//! sound but coarse on recursion; the §6 return and completion facts sharpen that fallback
+//! when their hypotheses cover the recursive call.
 //!
 //! `may_not_complete` (divergence) is left `false` — it feeds no safety verdict (§1.5)
 //! and its precise value on a gray SCC is the §6 concern.
+
+use std::cell::RefCell;
 
 use crate::analyzer::application::{ApplicationOutcome, CompletionWithoutValue};
 use crate::analyzer::domain::AnalysisContract;
@@ -31,6 +32,14 @@ use crate::contract::{Contract, ContractEnv};
 use crate::env::Binding;
 use crate::interner::Interner;
 use crate::value::ValueRef;
+
+thread_local! {
+    /// §4a's active shape sequence for the coarse outcome projection. This is not a
+    /// proof cache: it only prevents a body summary from recursively summarizing a
+    /// repeated shape after safety has already been settled by the candidate graph.
+    static ACTIVE_SHAPES: RefCell<Vec<crate::intern::Interned<crate::ast::Lambda>>> =
+        const { RefCell::new(Vec::new()) };
+}
 
 /// Analyze one instance's body in its environment — captures bound to their exact
 /// values (`Equals`), parameters narrowed by the argument tuple — **coarsely**: the
@@ -45,7 +54,22 @@ pub(crate) fn analyze_instance_body(
     interner: &mut Interner,
 ) -> Option<Analysis> {
     let closure = callee.as_closure()?;
-    let free: Vec<String> = callee.as_fn()?.free_vars().to_vec();
+    let function = callee.as_fn()?;
+    let shape = function.shape_rc();
+    let repeated = ACTIVE_SHAPES.with(|active| {
+        active
+            .borrow()
+            .iter()
+            .any(|held| held.ptr_eq(&shape))
+    });
+    if repeated {
+        return Some(Analysis {
+            contract: Contract::Top,
+            findings: Vec::new(),
+            completion: Completion::MayFallThrough,
+        });
+    }
+    let free: Vec<String> = function.free_vars().to_vec();
 
     let mut tenv = TypeEnv::new();
     // Captures first, so a same-named parameter shadows them.
@@ -58,7 +82,8 @@ pub(crate) fn analyze_instance_body(
     let arg_tuple = Contract::tuple(arg_contracts.to_vec(), interner);
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut tenv);
 
-    Some(crate::analyzer::induction::without_inference(|| {
+    ACTIVE_SHAPES.with(|active| active.borrow_mut().push(shape));
+    let analysis = crate::analyzer::induction::without_inference(|| {
         analyze_in_world(
             &closure.lambda.body,
             &tenv,
@@ -66,7 +91,11 @@ pub(crate) fn analyze_instance_body(
             world_for_act(closure.lambda.act_kind),
             interner,
         )
-    }))
+    });
+    ACTIVE_SHAPES.with(|active| {
+        active.borrow_mut().pop();
+    });
+    Some(analysis)
 }
 
 /// Summarize applying the callee closure to arguments described by `arg_contracts`

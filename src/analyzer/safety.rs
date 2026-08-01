@@ -113,7 +113,7 @@ pub(crate) fn prove_claim(
     // of callees that hold none — measured as a false accept on 2026-08-01.
     let Some(key) = factcache::key(callee, args, &claim, cenv, interner) else {
         let (nodes, edges) = discover(callee, args, cenv, interner);
-        return settle(nodes, &edges, claim, cenv, interner);
+        return settle(nodes, &edges, claim, cenv, interner).verdict;
     };
     match factcache::lookup(&key) {
         Some(factcache::Cached::Settled(v)) => return v,
@@ -123,9 +123,25 @@ pub(crate) fn prove_claim(
 
     factcache::begin(&key);
     let (nodes, edges) = discover(callee, args, cenv, interner);
-    let out = settle(nodes, &edges, claim, cenv, interner);
-    factcache::finish(&key, &out);
-    out
+    let settlement = settle(nodes, &edges, claim, cenv, interner);
+    let outer = factcache::finish(&key, &settlement.verdict);
+    if outer {
+        // The graph settled dependencies before their dependants. They are ordinary
+        // proven facts of their complete semantic keys, not seed-local evidence; keep
+        // them so later outcome dimensions consult rather than re-settle them.
+        for candidate in &settlement.proven {
+            if let Some(key) = factcache::key(
+                &candidate.callee,
+                &candidate.args,
+                &candidate.claim,
+                cenv,
+                interner,
+            ) {
+                factcache::record_settled(key, BodySafety::Proven);
+            }
+        }
+    }
+    settlement.verdict
 }
 
 /// The verdict for a **recursive reference** — a query for a node already being settled.
@@ -151,6 +167,18 @@ thread_local! {
     /// through the assumed facts instead (the same discipline as
     /// `induction::without_inference` for return facts).
     static SETTLING: Cell<bool> = const { Cell::new(false) };
+
+    /// Set during every body-safety verification, including the diagnostic pass after
+    /// a vector failure. Calls not covered by the current graph must remain Unproven;
+    /// launching another settlement here would recurse past the graph cutoff.
+    static VERIFYING_SAFETY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a body-safety verification is active. The hypothesis table covers normal
+/// vector passes; `VERIFYING_SAFETY` also covers post-settlement diagnostic recovery.
+pub(crate) fn safety_context_active() -> bool {
+    VERIFYING_SAFETY.with(Cell::get)
+        || induction::safety_hypotheses_active()
 }
 
 /// Whether **every path** through `callee`'s body over `args` produces a value — settled
@@ -415,13 +443,18 @@ fn discover(
 /// Settlement (§6) — delegated to the **one** driver in `induction`, over this graph's
 /// own domain-aware edges. There is a single place components are settled; the safety
 /// fact is simply the [`Claim::Safety`] node kind travelling through it.
+struct Settlement {
+    verdict: BodySafety,
+    proven: Vec<Candidate>,
+}
+
 fn settle(
     nodes: Vec<Node>,
     edges: &[Vec<usize>],
     claim: Claim,
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> BodySafety {
+) -> Settlement {
     let seed = nodes[0].clone();
     let candidates: Vec<Candidate> = nodes
         .into_iter()
@@ -433,19 +466,26 @@ fn settle(
         .iter()
         .any(|c| c.callee == seed.callee && c.args == seed.input);
     if settled {
-        return BodySafety::Proven;
+        return Settlement {
+            verdict: BodySafety::Proven,
+            proven: result.proven,
+        };
     }
     // Not settled. A **safety** claim re-verifies only to recover refuting/unproven
     // diagnostics; that diagnostic pass may never upgrade the graph's `Unproven` to
-    // `Proven` (notably when a shape-cutoff dependency is hidden by a coarser legacy
-    // body summary). Completion/return likewise retain the graph verdict.
-    match claim {
+    // `Proven` (notably when a shape-cutoff dependency remains unresolved).
+    // Completion/return likewise retain the graph verdict.
+    let verdict = match claim {
         Claim::Safety => match classify(verify(&seed.callee, &seed.input, cenv, interner)) {
             BodySafety::Refuted(findings) => BodySafety::Refuted(findings),
             BodySafety::Unproven(findings) => BodySafety::Unproven(findings),
             BodySafety::Proven => BodySafety::Unproven(Vec::new()),
         },
         Claim::Completes | Claim::Return(_) => BodySafety::Unproven(Vec::new()),
+    };
+    Settlement {
+        verdict,
+        proven: result.proven,
     }
 }
 
@@ -553,6 +593,18 @@ pub(crate) fn verify_completes(
 
 /// Verify one member under the currently-assumed facts (the partition rule).
 pub(crate) fn verify(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<Finding> {
+    let saved = VERIFYING_SAFETY.with(|active| active.replace(true));
+    let findings = verify_inner(callee, args, cenv, interner);
+    VERIFYING_SAFETY.with(|active| active.set(saved));
+    findings
+}
+
+fn verify_inner(
     callee: &ValueRef,
     args: &[Contract],
     cenv: &ContractEnv,
@@ -760,16 +812,46 @@ mod graph_tests {
     }
 
     #[test]
-    fn mutual_recursion_closes_via_the_joint_vector_pass() {
-        // f -> g -> f, and the String reaches f's `x + 1`. Proving `f` ALONE cannot
-        // discharge its call to `g` — only `f`'s own fact would be assumed. The joint
-        // pass assumes every member of the component, which is what makes the mutual
-        // edge resolvable and the deep trap visible.
+    fn a_shape_repeat_without_an_admitted_fact_is_unproven() {
+        // f(0) -> g("x") -> f("x"). The second f is a distinct domain-indexed fact,
+        // but its shape already occurs on this inventory path, so §4a admits no node
+        // through that path. Without ladder (b)'s generalized fact or an exact-chain
+        // witness, the graph must stop at the honest third voice. The program seat still
+        // rejects safety-unproven; this test locks the graph's witness discipline.
         let mut i = Interner::new();
         let m = f("f = (x) => x == 0 ? g(\"x\") : x + 1\ng = (y) => f(y)\nf", &mut i);
         let zero = Contract::Equals(i.integer(0));
         let v = prove(&m, std::slice::from_ref(&zero), &ContractEnv::new(), &mut i);
-        assert!(matches!(v, BodySafety::Refuted(_)), "the mutual deep trap must refute: {v:?}");
+        assert!(matches!(v, BodySafety::Unproven(_)), "shape-cutoff evidence cannot refute: {v:?}");
+    }
+
+    #[test]
+    fn an_outer_graph_publishes_proven_dependency_facts() {
+        // f(Number) depends on g(Number). The reverse-topological pass proves g first;
+        // that result is an ordinary fact of g's complete key, not private evidence for
+        // f. Later outcome dimensions must be able to consult it without re-settling.
+        factcache::clear();
+        let mut i = Interner::new();
+        let root = f("f = (x) => g(x)\ng = (y) => y + 1\nf", &mut i);
+        let g = match root.as_closure().unwrap().env.lookup("g") {
+            Some(Binding::Value(v)) => v,
+            other => panic!("f must capture g, got {other:?}"),
+        };
+        let args = vec![Contract::Kind(crate::contract::Kind::Number)];
+        assert!(prove(&root, &args, &ContractEnv::new(), &mut i).is_proven());
+
+        let key = factcache::key(
+            &g,
+            &args,
+            &Claim::Safety,
+            &ContractEnv::new(),
+            &mut i,
+        )
+        .expect("captured closure has a fact key");
+        assert!(
+            matches!(factcache::lookup(&key), Some(factcache::Cached::Settled(BodySafety::Proven))),
+            "the dependency component must remain memoized"
+        );
     }
 
     #[test]

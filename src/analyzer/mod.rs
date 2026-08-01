@@ -6,8 +6,9 @@
 //! analyzer walks an [`Expr`], infers a [`Contract`] over-approximating the value
 //! it produces, and at each operation site discharges the operation's safety
 //! demand ([`analyze_operation`]) — emitting a [`Finding`] for anything that
-//! **will** trap or that it **cannot prove** safe. Both reject; warnings are
-//! reserved for non-safety third voices such as completion that may fall through.
+//! **will** trap or that it **cannot prove** safe. Both reject after typed safety
+//! verdicts reach their consuming seat; warnings remain advisory evidence and carry
+//! non-safety third voices such as completion that may fall through.
 //! The soundness contract (§6): an expression the analyzer accepts with no error
 //! never traps in the oracle.
 //!
@@ -15,11 +16,10 @@
 //! `Template` (E11), `Access` (E6), `Match` (E9/E10), and `Apply` (C§7/B5/E10).
 //! Closed **primitive** operations and **accesses** fold through the finite oracle
 //! kernel (`eval_prim` / `eval_expr` on a `Const` target) for an exact verdict; a
-//! **closed function call is never executed** — a callee's traps, completion, and
-//! non-recursive return come from the **summary-over-partition** body check
-//! (`bodycheck::body_summary`: the §4a shape cutoff + reachable region rows × reaching
-//! domains, GR-03 finite row-set lattice — no widening), so static analysis never runs a
-//! user function. The source seat supplies its actual world; a function body instead owns
+//! **closed function call is never executed** — a callee's traps come from the
+//! domain-indexed candidate graph (`safety` + `induction`), completion from its settled
+//! completion fact, and return from the coarse shape-bounded outcome projection sharpened
+//! by return facts. The source seat supplies its actual world; a function body instead owns
 //! the world declared by its `ActKind` (B5/E14). Index/slice bounds await C§17 (see
 //! `OwedItems.md`). `Write` checks world admission and its right-hand expression; resolving
 //! and validating the target slot remains owed.
@@ -47,7 +47,6 @@ pub mod demand;
 pub(crate) mod factcache;
 pub mod program;
 pub mod application;
-pub mod bodycheck;
 pub mod bodywalk;
 pub mod domain;
 pub mod grounding;
@@ -67,7 +66,8 @@ mod tests;
 pub enum Severity {
     /// The operation is proven to trap on some reachable input — a rejection.
     Error,
-    /// Safety could not be proven (nor refuted) — surfaced, but not a rejection.
+    /// Advisory evidence. It does not reject by itself; a typed safety-unproven verdict
+    /// gains an Error when policy is applied at its consuming seat.
     Warning,
 }
 
@@ -770,26 +770,46 @@ fn analyze_apply(
                     }
                     // A recursive reference covered by an **assumed safety fact** resolves
                     // through that fact (C§13.2) — the body is not re-entered, so nothing
-                    // accumulates across depths. Only the return still needs the induction.
+                    // accumulates across depths. Acyclic dependencies retain their exact
+                    // body outcome (`always() -> Equals(true)`); only recursive returns
+                    // need the induction/coarse fallback.
                     if !has_spread && induction::safety_assumed(cv, &arg_contracts, interner) {
-                        produced.push(call_return(cv, &arg_contracts, has_spread, cenv, interner));
-                        // Completion is settled, never asserted: `Produces` only when a
-                        // completion fact covers *this* call's domain.
-                        completions.push(if induction::completes_assumed(cv, &arg_contracts, interner) {
-                            Completion::Produces
+                        if induction::is_recursive(cv) {
+                            produced.push(call_return(cv, &arg_contracts, has_spread, cenv, interner));
+                            // Safety of an expecting use also depends on completion. Read
+                            // an active completion hypothesis when one covers the call;
+                            // otherwise settle that cross-claim through the same fact graph.
+                            let completes = induction::completes_assumed(
+                                cv,
+                                &arg_contracts,
+                                interner,
+                            ) || safety::completes(cv, &arg_contracts, cenv, interner);
+                            completions.push(if completes {
+                                Completion::Produces
+                            } else {
+                                Completion::MayFallThrough
+                            });
                         } else {
-                            Completion::MayFallThrough
-                        });
+                            let observed = outcome::analyze_instance_body(
+                                cv,
+                                &arg_contracts,
+                                cenv,
+                                interner,
+                            )
+                            .expect("a known closure has a body outcome");
+                            produced.push(observed.contract);
+                            completions.push(observed.completion);
+                        }
                         continue;
                     }
                     // Inside candidate-graph verification, every admissible dependency
-                    // must resolve through a settled/current safety fact. Re-entering the
-                    // legacy body summary here would unfold a cutoff dependency behind the
+                    // must resolve through a settled/current safety fact. Launching a
+                    // nested settlement here would pass a cutoff dependency behind the
                     // graph's back and could turn its required `Unproven` into `Proven`.
-                    if !has_spread && induction::safety_context_active() {
+                    if !has_spread && safety::safety_context_active() {
                         findings.push(Finding {
                             class: TrapClass::OperationSafety,
-                            severity: Severity::Error,
+                            severity: Severity::Warning,
                             message: "callee safety is not established by the active fact graph".into(),
                         });
                         produced.push(Contract::Top);
@@ -801,12 +821,31 @@ fn analyze_apply(
                         completions.push(Completion::Produces);
                         continue;
                     }
-                    let summary = bodycheck::body_summary(cv, &arg_contracts, cenv, interner);
-                    findings.extend(summary.errors());
+                    let body_safe = safety::prove(cv, &arg_contracts, cenv, interner);
+                    if !discharge_body_safety(body_safe, &mut findings) {
+                        produced.push(Contract::Top);
+                        completions.push(Completion::MayFallThrough);
+                        continue;
+                    }
+
+                    // Safety has settled the complete dependency graph. Read the
+                    // seat/world-independent body outcome; recursive results are
+                    // sharpened separately by the return fact below.
+                    let observed = outcome::analyze_instance_body(
+                        cv,
+                        &arg_contracts,
+                        cenv,
+                        interner,
+                    )
+                    .unwrap_or_else(|| Analysis {
+                        contract: Contract::Top,
+                        findings: Vec::new(),
+                        completion: Completion::MayFallThrough,
+                    });
                     // Completion comes from the **fact** (settled over the candidate
                     // graph), not from a coarse whole-body pass.
                     let completes = safety::completes(cv, &arg_contracts, cenv, interner);
-                    completions.push(callee_completion(cv, completes, summary.completion));
+                    completions.push(callee_completion(cv, completes, observed.completion));
                     // A recursive/mutual return needs the induction (`call_return`
                     // sharpens the coarse cycle assumption); a non-recursive return is its
                     // body's **exact** contract, so `always() → Equals(true)` and the
@@ -814,7 +853,7 @@ fn analyze_apply(
                     produced.push(if induction::is_recursive(cv) {
                         call_return(cv, &arg_contracts, has_spread, cenv, interner)
                     } else {
-                        summary.produced
+                        observed.contract
                     });
                 }
             }
@@ -825,6 +864,35 @@ fn analyze_apply(
         contract,
         findings,
         completion,
+    }
+}
+
+/// Apply the program policy to a settled body-safety fact. Both refutation and
+/// unproven safety block; an unproven fact may carry only advisory row findings, so
+/// it always gains an explicit Error rather than being silently accepted.
+fn discharge_body_safety(verdict: safety::BodySafety, findings: &mut Vec<Finding>) -> bool {
+    match verdict {
+        safety::BodySafety::Proven => true,
+        safety::BodySafety::Refuted(mut body_findings) => {
+            if !body_findings.iter().any(|f| f.severity == Severity::Error) {
+                body_findings.push(Finding {
+                    class: TrapClass::OperationSafety,
+                    severity: Severity::Error,
+                    message: "callee body safety is refuted".into(),
+                });
+            }
+            findings.append(&mut body_findings);
+            false
+        }
+        safety::BodySafety::Unproven(mut body_findings) => {
+            body_findings.push(Finding {
+                class: TrapClass::OperationSafety,
+                severity: Severity::Error,
+                message: "callee body safety cannot be proven".into(),
+            });
+            findings.append(&mut body_findings);
+            false
+        }
     }
 }
 

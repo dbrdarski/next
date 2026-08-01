@@ -80,57 +80,27 @@ fn the_reverted_reaching_engine_does_not_exist() {
     }
 }
 
-/// The quarantined recursive body checker stays inside its own file.
+/// The retired recursive body checker and its reaching core stay deleted.
 ///
-/// `bodycheck.rs` is non-authoritative (per `IMPLEMENTATION-STATUS.md`) and scheduled for
-/// deletion when the native body check lands. Until then the live risk is not that it
-/// exists — it is that its internals get *called* from the new fact machinery, which would
-/// launder the reaching engine into the replacement. These names are its reaching core.
+/// Ordinary application now consumes the domain-indexed fact graph. Keeping the old file,
+/// its module reference, or one of its three reaching primitives would leave two competing
+/// implementations and make a later accidental rewire possible.
 #[test]
-fn the_quarantined_reaching_core_stays_in_its_own_file() {
-    const CORE: &[&str] = &["check_recursive_body", "reachable_rows", "grow"];
+fn the_quarantined_reaching_core_is_deleted() {
+    const RETIRED: &[&str] = &["bodycheck", "check_recursive_body", "reachable_rows", "grow"];
     const HOME: &str = "src/analyzer/bodycheck.rs";
 
+    assert!(
+        !root().join(HOME).exists(),
+        "{HOME} returned. Ordinary application must have one body-safety implementation: \
+         the settled candidate graph."
+    );
     for (path, src) in sources() {
-        if path == HOME {
-            continue;
-        }
-        for name in CORE {
+        for name in RETIRED {
             assert!(
                 !has_ident(&src, name),
-                "`{name}` appears in {path}, outside its quarantine ({HOME}). The quarantined \
-                 reaching core must not be called from — or copied into — the fact machinery \
-                 that replaces it. If a fact cannot be settled without it, the honest answer is \
-                 `unproven`."
-            );
-        }
-    }
-}
-
-/// The demand/fact machinery does not depend on the quarantined body checker.
-///
-/// `safety.rs` (BodySafe facts), `induction.rs` (the settlement driver) and the claim
-/// consumers are the replacement for `bodycheck`. A code reference from any of them to
-/// `bodycheck` means the replacement is resting on the thing it replaces — the exact shape
-/// of the 2026-07-31 revert. Doc-comment references are stripped before this check and are
-/// fine; they are how the quarantine is documented.
-#[test]
-fn the_fact_machinery_does_not_call_the_quarantined_checker() {
-    const REPLACEMENTS: &[&str] = &[
-        "src/analyzer/safety.rs",
-        "src/analyzer/induction.rs",
-        "src/analyzer/refute.rs",
-        "src/analyzer/obligation.rs",
-        "src/analyzer/grounding.rs",
-    ];
-    for (path, src) in sources() {
-        if REPLACEMENTS.contains(&path.as_str()) {
-            assert!(
-                !has_ident(&src, "bodycheck"),
-                "{path} references `bodycheck` in code. The fact machinery must not depend on \
-                 the quarantined body checker it replaces — that is how a reverted engine gets \
-                 laundered back in. (Doc comments are stripped before this check; describing \
-                 the quarantine is expected.)"
+                "retired identifier `{name}` appears in {path}. The reaching checker must not \
+                 be called, copied, or re-exported; an unsettled fact remains `unproven`."
             );
         }
     }

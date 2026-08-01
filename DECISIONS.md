@@ -4074,3 +4074,62 @@ world-admission concordance. Import/linking rows MOD-03/04/05 remain staged.
 Effect/Mutator body-world case; 112 conformance passed / 12 ignored; 4 machinery gates passed;
 clippy clean; normative manifest 19/19 OK. The repository-wide formatting debt remains the separate
 pre-existing gate and was not mixed into this semantic slice.
+
+## 2026-08-01 — Recovery slice 4: ordinary application consumes settled facts
+
+**Measured red before implementation:** the executable program
+
+```next
+f = (x) => x == 0 ? g("x") : x + 1
+g = (y) => f(y)
+f(0)
+```
+
+was accepted with `findings: []`. The candidate graph existed, but ordinary application still read
+the quarantined per-callee summary. This was blocker 2b's live soundness failure.
+
+**Wired:** known NEXT closures now require `BodySafe(instance, I) = Proven` from `safety::prove`.
+`Refuted` and `Unproven` remain separate inside the graph; `discharge_body_safety` applies the ruled
+program policy at the seat, adding an unsuppressible operation-safety Error for Unproven. Completion
+comes from `safety::completes`, recursive produced values from return induction, and nonrecursive
+produced values from the exact body outcome. No closed function call is executed.
+
+**Pure memo publication:** one outer discovery/settlement pass proves dependency components before
+their dependants. Those dependency candidates are facts under their own complete semantic keys, so
+the outer pass now publishes every proven candidate after ambient hypotheses have been removed. A
+direct regression proves `f(Number) -> g(Number)` and then observes `BodySafe(g, Number) = Proven`
+in the memo. Nested hypothesis-relative settlements are still removed rather than cached.
+
+**Re-entrancy and termination:** diagnostic safety verification has an explicit dynamic context;
+an unresolved cutoff edge remains Unproven instead of recursively launching a new settlement.
+Separately, coarse outcome projection now carries §4a's active shape sequence. A repeated shape
+returns `Top` / possible completion, so analyzing `loop = () => loop()` terminates rather than
+overflowing the Rust stack. Return and completion facts sharpen that coarse projection where their
+domain-indexed hypotheses cover the call.
+
+**Cross-claim dependency:** a safety proof that uses a recursive result in an expecting seat also
+depends on the completion fact. Consulting that fact releases the broad-domain factorial safety and
+return tests: `Number` covers `n - 1`, completion closes over the same graph, and return induction
+supplies `Number`. Acyclic dependencies preserve exact outcomes, so `always() = true` still prunes a
+dead trapping branch rather than generalizing it to Boolean during safety verification.
+
+**Witness correction:** the changed-domain mutual example rejects, but the fact graph's verdict is
+`Unproven`, not `Refuted`. The second `f` repeats a shape and §4a admits no node through that path;
+without a generalized fact or admitted realized witness, permanent refutation would be fabricated.
+Late-resolution §5 still blocks the executable seat. The multi-parameter changed-domain case closes
+the same false-accept direction, while §5 tuple projection remains an owed precision/classification
+feature.
+
+**Retired:** `src/analyzer/bodycheck.rs`, its module export, all direct tests of its reaching
+internals, and the `check_recursive_body` / `reachable_rows` / `grow` implementation are deleted.
+The machinery gate now requires the file and identifiers to stay absent. This is deletion of known
+unsound implementation machinery, not deletion of stable language conformance IDs.
+
+**Still separate:** blocker 1b remains the exact-singleton fact-chain work in grounding §4; blocker
+3 remains selected-arm completion evidence through the typed outcome/consumer boundary. The former
+`f(0) -> f(1)` acceptance test is pinned to 1b. The recursive fall-through test remains pinned to
+blocker 3. Neither is addressed by reaching domains or widening.
+
+**Verification:** 414 lib passed / 2 ignored; 112 conformance passed / 12 ignored; 3 machinery gates
+passed; clippy clean; normative manifest 19/19 OK. Repository-wide `cargo fmt --check` remains the
+separately recorded pre-existing formatting gate.
