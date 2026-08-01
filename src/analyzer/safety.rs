@@ -81,11 +81,29 @@ pub fn prove(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> BodySafety {
+    prove_claim(callee, args, Claim::Safety, cenv, interner)
+}
+
+/// Settle any [`Claim`] over `(callee, args)` through the one global fact graph
+/// (C§13.2a): discover the candidates, collapse to SCCs, settle in reverse topological
+/// order with a joint vector pass per cyclic component.
+///
+/// Claim-general because discovery is claim-independent — the dependency structure of a
+/// body is a property of the body, not of what is being asked about it. Safety,
+/// completion and return claims are three questions over the **same** graph, which is why
+/// they must not grow three graphs.
+pub(crate) fn prove_claim(
+    callee: &ValueRef,
+    args: &[Contract],
+    claim: Claim,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> BodySafety {
     if callee.as_closure().is_none() {
         return BodySafety::Unproven(Vec::new()); // not a known function — nothing to prove over
     }
     let (nodes, edges) = discover(callee, args, cenv, interner);
-    settle(nodes, &edges, Claim::Safety, cenv, interner)
+    settle(nodes, &edges, claim, cenv, interner)
 }
 
 thread_local! {
@@ -114,8 +132,7 @@ pub fn completes(
         return induction::completes_assumed(callee, args, interner);
     }
     SETTLING.with(|f| f.set(true));
-    let (nodes, edges) = discover(callee, args, cenv, interner);
-    let out = matches!(settle(nodes, &edges, Claim::Completes, cenv, interner), BodySafety::Proven);
+    let out = matches!(prove_claim(callee, args, Claim::Completes, cenv, interner), BodySafety::Proven);
     SETTLING.with(|f| f.set(false));
     out
 }
@@ -455,6 +472,43 @@ pub(crate) fn verify(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, i
             analyze(&closure.lambda.body, &env, cenv, interner).findings
         }
     }
+}
+
+/// The contract a member **produces** over `args`, evaluated by the same §5 partition the
+/// safety check uses (C§13.2: the region-table walk contract-evaluates the result
+/// expressions of the selected rows).
+///
+/// The partition is not an optimization here — it is what makes a recursive return claim
+/// provable at all. `countDown = (n) => n == 0 ? 0 : countDown(n - 1)` over the
+/// non-negative integers only keeps `n - 1` inside that domain **because the else row
+/// carries `n ≠ 0`**; analyzed whole, `n` still admits `0`, `n - 1` reaches `-1`, no
+/// assumed fact covers the call, and the claim fails on a body that plainly satisfies it.
+/// Safety saw this correctly and the return did not, purely because only one of them
+/// walked the rows.
+///
+/// `None` when the partition does not apply (not a single plain parameter — the §5
+/// multi-parameter case is owed); the caller falls back to the whole-body summary.
+pub(crate) fn produced_by_partition(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Contract> {
+    let closure = callee.as_closure()?;
+    let (param, domain) = match (single_param(&closure.lambda.params), args) {
+        (Some(param), [domain]) => (param, domain),
+        _ => return None,
+    };
+    let table = region_table(&closure.lambda.body, &param, cenv);
+    let base = capture_env(callee);
+    let mut parts = Vec::new();
+    for sel in select(&table, domain) {
+        let mut env = base.clone();
+        env.insert(param.to_string(), sel.region.clone());
+        parts.push(analyze(&sel.result, &env, cenv, interner).contract);
+    }
+    // No row selected means no path through the body over this domain produces anything.
+    if parts.is_empty() { None } else { Some(crate::analyzer::union_of(parts)) }
 }
 
 /// Collect every application in `e` whose callee resolves through the closure's captured

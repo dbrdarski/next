@@ -27,10 +27,10 @@
 
 use std::collections::HashMap;
 
-use super::{safety, Finding, Severity};
+use super::{demand, safety, Finding, Severity};
 use crate::analyzer::TrapClass;
 use crate::ast::{Bind, BindTarget, Expr, Item, Lambda, Module, Pat};
-use crate::contract::{Contract, ContractEnv, eval_contract};
+use crate::contract::{Contract, ContractEnv, Verdict, eval_contract};
 use crate::env::{Binding, Env, Scope};
 use crate::interner::Interner;
 use crate::oracle::make_closure_in;
@@ -41,9 +41,10 @@ use crate::value::ValueRef;
 pub struct ProgramVerdict {
     /// Every finding raised, in item order.
     pub findings: Vec<Finding>,
-    /// Declared return contracts that this pass could not check, as `(name, contract)`.
-    /// Not a failure — the honest record of what the demand core (T1.2) owes.
-    pub owed_return_checks: Vec<(String, Contract)>,
+    /// Declared return contracts checked and **proven**, as `(name, contract)`. The
+    /// record of what the demand core discharged, kept so a regression to "recorded but
+    /// unchecked" is visible rather than silent.
+    pub proven_returns: Vec<(String, Contract)>,
 }
 
 impl ProgramVerdict {
@@ -67,7 +68,7 @@ pub fn analyze_program(module: &Module, interner: &mut Interner) -> ProgramVerdi
     let (values, cenv) = collect(module, &scope, interner);
 
     let mut findings = Vec::new();
-    let mut owed_return_checks = Vec::new();
+    let mut proven_returns = Vec::new();
 
     for item in &module.items {
         let Item::Where(w) = item else { continue };
@@ -95,12 +96,24 @@ pub fn analyze_program(module: &Module, interner: &mut Interner) -> ProgramVerdi
 
         findings.extend(verdict_findings(&w.name, safety::prove(callee, &args, &cenv, interner)));
 
+        // The declared **return** contract is a demand (C§13.1): the `where` asks whether
+        // the body produces a value satisfying it, adjudicated here, at the ask site.
         if let Some(ret) = eval_contract(&w.return_contract, &cenv) {
-            owed_return_checks.push((w.name.clone(), ret));
+            let asker = format!("where {}", w.name);
+            match demand::returns(callee, &args, &ret, &asker, &cenv, interner) {
+                Verdict::Proven => proven_returns.push((w.name.clone(), ret)),
+                // Unproven rejects. A declared return the compiler cannot discharge is not
+                // a declaration it may assume — the same discipline as safety-unproven
+                // (late-resolution §5), and the reason the third voice is un-suppressible.
+                Verdict::Unproven | Verdict::Refuted(_) => findings.push(malformed(
+                    &w.name,
+                    "declares a return contract that cannot be proven of its body",
+                )),
+            }
         }
     }
 
-    ProgramVerdict { findings, owed_return_checks }
+    ProgramVerdict { findings, proven_returns }
 }
 
 /// Walk the items once, building the module environment (function values, so that late
@@ -288,18 +301,21 @@ mod tests {
         assert!(v.accepted(), "a named contract resolves as the declared domain: {:?}", v.findings);
     }
 
-    /// The declared **return** contract is recorded as owed, not silently dropped and not
-    /// guessed at: checking it is a demand, and the demand core (C§13.1) does not exist.
+    /// The declared **return** contract is now checked (demand core, C§13.1). This test
+    /// previously asserted the opposite — that the contract was recorded but unverified —
+    /// and it is the flip that slice was written to produce.
     #[test]
-    fn the_declared_return_contract_is_recorded_as_owed_not_checked() {
+    fn a_declared_return_contract_that_the_body_does_not_meet_rejects() {
         let (v, _) = check("f where (Number) => String\nf = (n) => n + 1\n");
-        assert_eq!(v.owed_return_checks.len(), 1, "the return contract is recorded: {v:?}");
-        assert!(
-            v.accepted(),
-            "and NOT checked — `f` returns a Number where String is declared, which this pass \
-             cannot yet catch. When the demand core lands this test flips to reject: {:?}",
-            v.findings
-        );
+        assert!(!v.accepted(), "`f` returns a Number where String is declared: {:?}", v.findings);
+    }
+
+    /// And the complement: a return contract the body does meet is proven and recorded.
+    #[test]
+    fn a_declared_return_contract_the_body_meets_is_proven() {
+        let (v, _) = check("f where (Number) => Number\nf = (n) => n + 1\n");
+        assert!(v.accepted(), "{:?}", v.findings);
+        assert_eq!(v.proven_returns.len(), 1, "the discharge is recorded: {v:?}");
     }
 
     /// Analysis must not run the program. A module whose top level would trap on evaluation

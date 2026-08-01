@@ -205,9 +205,19 @@ fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, inte
         match &c.claim {
             // A return claim holds when the body's produced contract is contained in it.
             Claim::Return(want) => {
-                let summary = with_hypotheses(hyps, || summarize_instance(&c.callee, &c.args, cenv, interner));
-                match summary {
-                    Some(o) => matches!(subcontract(&o.produced.erase(), want, interner), Verdict::Proven),
+                // Evaluated by the §5 partition (C§13.2's region-table walk), falling back
+                // to the whole-body summary where the partition does not apply. Analyzing
+                // the body whole loses each row's narrowing, which is exactly what a
+                // recursive return claim needs to stay inside its declared domain.
+                let produced = with_hypotheses(hyps, || {
+                    crate::analyzer::safety::produced_by_partition(&c.callee, &c.args, cenv, interner)
+                        .or_else(|| {
+                            summarize_instance(&c.callee, &c.args, cenv, interner)
+                                .map(|o| o.produced.erase())
+                        })
+                });
+                match produced {
+                    Some(p) => matches!(subcontract(&p, want, interner), Verdict::Proven),
                     None => false,
                 }
             }

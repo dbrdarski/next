@@ -3682,3 +3682,45 @@ completion unconditionally is explicitly rejected: it over-reports at statement 
 
 No widening, no reaching fixpoint, no candidate synthesis, no grounding cutoff was added.
 384 lib + 111 conformance green, clippy clean.
+
+## 2026-08-01 — T1.1 program entry + T1.2 demand core (first increment)
+
+**T1.1 — `analyzer::program::analyze_program`.** The analyzer had no top; `main.rs` only ran
+the oracle, so every analyzer path was reachable solely from unit tests. Each `where` is now
+verified as `BodySafe(instance, DeclaredInput)` (E11/E-8). Analysis never evaluates the
+module — closures are built via `make_closure_in` (extracted from `Oracle::make_closure`, not
+duplicated), which forces no binding. `next --check <file>` is the CLI consumer.
+
+**Two spec clauses I had backwards, corrected by reading C§13.1 rather than my plan doc.**
+My `NEXT-completion-plan.md` T1.2 entry said "eager preimage as the **primary** mechanism"
+and "a demand reaches the parameter origin and is **adjudicated there**". C§13.1 says the
+opposite on both: demands propagate backward *untransformed as subscriptions*, resolution is
+*forward* through the operation rules, adjudication happens *where the demand was asked*, and
+eager preimage is explicitly *an optimization*. The implementation follows the compendium.
+The plan doc is a maintainer file and stays as written; this record is the correction.
+
+**"No stall concept" is what makes the module safe by construction.** A demand is never
+parked awaiting more information — there is no state meaning "come back when you know more".
+So the slide this step was flagged for (unadjudicated demand → accumulate per-path info →
+join → widen over loops) has nowhere to accumulate. Unproven is terminal for the compilation.
+
+**One graph, three claims.** `safety::prove_claim` is now claim-general: discovery is a
+property of the body, not of the question asked about it, so Safety, Completes and Return are
+three questions over the *same* C§13.2a fact graph. This is unification, not a fourth path.
+
+**Found: the return claim was not walking the region table.** Safety verifies per §5 row, so
+it sees `n ≠ 0` in the else branch; the return claim analyzed the body whole, so `n` still
+admitted `0`, `n − 1` reached `−1`, no assumed fact covered the recursive call, and
+`countDown where (…) => Number` failed on a body that plainly satisfies it. C§13.2's
+region-table walk contract-evaluates the *result expressions of the selected rows* — so the
+partition applies to the return too. `safety::produced_by_partition` mirrors
+`verify_by_partition`; `run_pass`'s `Return` arm uses it, falling back to the whole-body
+summary where the partition does not apply (single plain parameter only — §5 multi-parameter
+stays owed). No new machinery: the same partition, asked a second question.
+
+**A failed return claim is unproven, never refuted.** Failing to show `produced ⊑ required`
+is not showing `produced ⊄ required`; refutation needs a realized witness (C§13.2a), which
+this pass does not mint. Unproven still rejects, per the safety-unproven discipline.
+
+396 lib + 111 conformance + 4 gate green, clippy clean. No pinned blocker flipped — they
+remain gated on T1.4, and were re-checked rather than assumed.

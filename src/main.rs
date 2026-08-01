@@ -83,10 +83,6 @@ fn run_check(src: &str) {
         };
         eprintln!("{tier}: [{:?}] {}", f.class, f.message);
     }
-    for (name, c) in &verdict.owed_return_checks {
-        eprintln!("note: return contract of `{name}` ({c:?}) is not yet checked — demand core owed");
-    }
-
     if verdict.accepted() {
         println!("ok");
     } else {
