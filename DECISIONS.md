@@ -3759,3 +3759,37 @@ Also corrected: I called the first failed run a hang and theorized an exponentia
 from per-call-site settlement. It was neither — the suite completes in ~5s. The first
 command timed out during compilation, not execution. The measurement, not the theory, was
 right.
+
+## 2026-08-01 — C§13.4 proven-fact cache landed; T1.4 retried on it and still deferred
+
+**The cache (kept, green).** `analyzer::factcache` keys facts by the **fact node** —
+`(canonical shape + de-Bruijn-ordered capture contracts, row-set I, claim)` — per C§13.4,
+replacing the unsound global "am I settling?" flag. A re-entrant query on *the same* node is
+a recursive reference and resolves through its hypothesis (C§13.2a vector induction); a query
+on any *other* node is genuinely settled, so a callee holding no hypothesis is still checked
+and its traps still surface. This is the specific defect that produced yesterday's false
+accept. Only **top-level** settlements are recorded: at depth > 1 ambient hypotheses are in
+scope, so the verdict is hypothesis-relative and the entry is dropped rather than stored.
+
+**This is where canonicalization earns its keep** — the instance half of the key is
+`FnValue::shape()` from `oracle::canon`, not the closure allocation. Closures are plain
+allocations rather than hash-consed values, so without the canonical shape two spellings of
+one function would miss each other. A miss costs a cache hit, never an answer.
+
+**T1.4 retried on top of the cache — still deferred, new reason.** The swap no longer fails
+soundly-wrong; it fails to terminate in usable time. Root: `finish` deliberately *discards*
+entries settled at depth > 1, so nested settlements are unmemoized, and `analyze_apply`
+calling `prove` per callee makes a depth-n call chain do exponential re-settlement. That
+discard is correct — a hypothesis-relative verdict is not a fact — so the fix is not to relax
+it but to memoize nested results **under their hypothesis set**, or to avoid nested
+settlement entirely by having `analyze_apply` consult facts rather than settle them.
+
+**Recorded ordering:** T1.4 now waits on that, not on the cache. The cache was the right
+prerequisite and is independently green; it was not sufficient.
+
+**Correction to my own report:** I attributed the first T1.4 timeout to exponential blowup,
+then measured it as a 5-second suite and withdrew the theory. On the retry the blowup was
+real — a live test process, no completion. The earlier withdrawal was still right (that run
+timed out in compilation); the theory simply turned out to describe a different run.
+
+396 lib + 111 conformance + 4 gate green, clippy clean.

@@ -167,7 +167,7 @@ pub struct Candidate {
 /// What a fact node claims. C§13.2a's node is `(instance, row-set I, demanded C)`; a
 /// **safety** fact is the kind with no demanded `C`. Both kinds live in **one** graph
 /// because dependency cycles cross them — *"the graph and its SCC collapse are global."*
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Claim {
     /// `BodySafe(instance, I)` — every operation the body reaches over `I` discharges.
     Safety,

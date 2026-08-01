@@ -39,6 +39,7 @@ use crate::oracle::{Outcome, TrapClass, eval_expr, eval_prim};
 use crate::value::ValueRef;
 
 pub mod demand;
+pub(crate) mod factcache;
 pub mod program;
 pub mod application;
 pub mod bodycheck;

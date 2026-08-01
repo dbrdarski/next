@@ -37,6 +37,7 @@
 
 use std::cell::Cell;
 
+use crate::analyzer::factcache;
 use crate::analyzer::induction::{self, Candidate, Claim};
 use crate::analyzer::region::{region_table, select};
 use crate::analyzer::{Finding, Severity, TypeEnv, analyze, bind_pattern};
@@ -46,7 +47,7 @@ use crate::interner::Interner;
 use crate::value::ValueRef;
 
 /// The three-voiced verdict for `BodySafe(instance, I)`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BodySafety {
     /// Every operation the body reaches over `I` discharges.
     Proven,
@@ -102,8 +103,43 @@ pub(crate) fn prove_claim(
     if callee.as_closure().is_none() {
         return BodySafety::Unproven(Vec::new()); // not a known function — nothing to prove over
     }
+
+    // Keyed by the **fact node**, not by a global "am I settling?" flag. That distinction
+    // is the whole point (C§13.4): a re-entrant query on *this* node is a recursive
+    // reference and resolves through its hypothesis; a query on any *other* node is
+    // genuinely settled. A global flag answers both from hypotheses and so drops the traps
+    // of callees that hold none — measured as a false accept on 2026-08-01.
+    let Some(key) = factcache::key(callee, args, &claim) else {
+        let (nodes, edges) = discover(callee, args, cenv, interner);
+        return settle(nodes, &edges, claim, cenv, interner);
+    };
+    match factcache::lookup(&key) {
+        Some(factcache::Cached::Settled(v)) => return v,
+        Some(factcache::Cached::InProgress) => return assumed(callee, args, &claim, interner),
+        None => {}
+    }
+
+    factcache::begin(&key);
     let (nodes, edges) = discover(callee, args, cenv, interner);
-    settle(nodes, &edges, claim, cenv, interner)
+    let out = settle(nodes, &edges, claim, cenv, interner);
+    factcache::finish(&key, &out);
+    out
+}
+
+/// The verdict for a **recursive reference** — a query for a node already being settled.
+/// C§13.2: recursive references never unfold; they resolve through the assumed fact. No
+/// hypothesis covering this call's domain means the third voice, never a pass.
+fn assumed(callee: &ValueRef, args: &[Contract], claim: &Claim, interner: &mut Interner) -> BodySafety {
+    let held = match claim {
+        Claim::Safety => induction::safety_assumed(callee, args, interner),
+        Claim::Completes => induction::completes_assumed(callee, args, interner),
+        Claim::Return(want) => {
+            induction::hypothesis_for(callee, args, interner).is_some_and(|got| {
+                matches!(crate::contract::subcontract(&got, want, interner), crate::contract::Verdict::Proven)
+            })
+        }
+    };
+    if held { BodySafety::Proven } else { BodySafety::Unproven(Vec::new()) }
 }
 
 thread_local! {
