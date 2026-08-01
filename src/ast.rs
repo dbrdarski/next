@@ -68,7 +68,8 @@ pub enum Expr {
     /// Application — one node for all calls. Strict left-to-right arg eval.
     Apply { callee: Box<Expr>, args: Vec<Arg> },
     /// Built-in operation. No truthiness/logic/conditional op exists here —
-    /// those desugar to `Match`. Division is total via Indeterminate.
+    /// those desugar to `Match`. Division/remainder are total via specific
+    /// Indeterminate forms.
     PrimOp { op: PrimOp, args: Vec<Expr> },
     /// The sole control node (§1). A block is a `Match` with implicit scrutinee.
     Match(Match),

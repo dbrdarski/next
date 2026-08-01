@@ -165,9 +165,9 @@ impl<'a> Oracle<'a> {
         Ok(true)
     }
 
-    /// A contract-as-pattern: the runtime-decidable Kind and Indeterminate checks
-    /// (E9). User-defined contracts need the contract engine (analyzer phase) and
-    /// are not yet evaluable here.
+    /// A contract-as-pattern: the runtime-decidable Kind and arithmetic umbrella
+    /// checks (E9). User-defined contracts need the contract engine (analyzer
+    /// phase) and are not yet evaluable here.
     fn match_contract(&mut self, r: &Ref, value: &ValueRef) -> Result<bool, Trap> {
         let Ref::Immutable(BindingRef::Name(name)) = r else {
             return Self::trap(TrapClass::OperationSafety, "unsupported contract reference in a pattern");
@@ -181,6 +181,7 @@ impl<'a> Oracle<'a> {
             "Record" => value.as_record().is_some(),
             "Function" => value.as_closure().is_some(),
             "Indeterminate" => value.as_indeterminate().is_some(),
+            "Numeric" => value.as_number().is_some() || value.as_indeterminate().is_some(),
             // The one prelude Failure shape (B6): a Record carrying `path` and
             // `reason`. Failure discharge dissolves into contract-as-pattern (E9).
             "Failure" => value.as_record().is_some_and(|entries| {

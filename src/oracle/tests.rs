@@ -2,7 +2,7 @@
 //! source; these are the executable checks the specs call for.
 
 use super::*;
-use crate::value::ValueData;
+use crate::value::{IndeterminateForm, ValueData};
 
 /// Evaluate a program, expecting a produced value.
 fn eval(src: &str) -> ValueRef {
@@ -19,6 +19,20 @@ fn is_true(v: &ValueRef) -> bool {
 }
 fn num(v: &ValueRef) -> &Rational {
     v.as_number().expect("a number")
+}
+
+fn div_zero_operand(v: &ValueRef) -> Option<&Rational> {
+    match v.as_indeterminate()? {
+        IndeterminateForm::DivZero(operand) => operand.as_number(),
+        IndeterminateForm::ModZero(_) => None,
+    }
+}
+
+fn mod_zero_operand(v: &ValueRef) -> Option<&Rational> {
+    match v.as_indeterminate()? {
+        IndeterminateForm::ModZero(operand) => operand.as_number(),
+        IndeterminateForm::DivZero(_) => None,
+    }
 }
 
 // ── Exactness and arithmetic ─────────────────────────────────────────────────
@@ -38,17 +52,42 @@ fn exact_rational_arithmetic() {
 }
 
 #[test]
-fn division_is_total_via_indeterminate() {
-    assert_eq!(eval("1 / 0").as_indeterminate(), Some(IndetForm::DivByZero));
-    assert_eq!(eval("0 / 0").as_indeterminate(), Some(IndetForm::ZeroOverZero));
-    // Indeterminate propagates through arithmetic, left-most.
-    assert_eq!(eval("1 / 0 + 5").as_indeterminate(), Some(IndetForm::DivByZero));
+fn division_and_remainder_are_total_via_specific_indeterminate_forms() {
+    assert_eq!(div_zero_operand(&eval("1 / 0")), Some(&Rational::from(1)));
+    assert_eq!(div_zero_operand(&eval("0 / 0")), Some(&Rational::from(0)));
+    assert_eq!(mod_zero_operand(&eval("1 % 0")), Some(&Rational::from(1)));
+    assert_eq!(mod_zero_operand(&eval("0 % 0")), Some(&Rational::from(0)));
+}
+
+/// Part XII: Indeterminate values retain their canonical operand and form tag.
+/// A generic marker would make the first assertion false; a form-blind wrapper
+/// would make the final assertion false.
+#[test]
+fn specific_indeterminate_values_preserve_form_and_operand_identity() {
+    assert!(is_true(&eval("(1 / 0) != (2 / 0)")));
+    assert!(is_true(&eval("(1 / 0) == ((2 - 1) / 0)")));
+    assert!(is_true(&eval("(0 / 0) != (1 / 0)")));
+    assert!(is_true(&eval("(1 % 0) != (2 % 0)")));
+    assert!(is_true(&eval("(1 % 0) == ((2 - 1) % 0)")));
+    assert!(is_true(&eval("(1 / 0) != (1 % 0)")));
+}
+
+/// Part XII fixes identity but explicitly leaves the Indeterminate algebra open.
+/// Until that algebra is ruled, consuming one at a strict Number seat is the
+/// ordinary undischarged-value trap, never generic marker propagation.
+#[test]
+fn indeterminate_arithmetic_requires_discharge_until_its_algebra_is_ruled() {
+    assert_eq!(trap_class("(1 / 0) + 5"), TrapClass::UndischargedIndeterminate);
+    assert_eq!(trap_class("(1 % 0) + 5"), TrapClass::UndischargedIndeterminate);
+    assert_eq!(trap_class("-(1 / 0)"), TrapClass::UndischargedIndeterminate);
 }
 
 #[test]
 fn indeterminate_is_a_value_not_a_trap_for_equality() {
-    // `==` treats Indeterminate as an ordinary value; discharge by match.
-    assert!(is_true(&eval("(1 / 0) == (2 / 0)")));
+    // `==` treats every Indeterminate as an ordinary value; discharge by match.
+    assert!(is_true(&eval("(1 / 0) == (1 / 0)")));
+    assert!(is_true(&eval("(1 / 0) != (2 / 0)")));
+    assert!(is_true(&eval("(1 % 0) == (1 % 0)")));
     // but an ordering comparison on it traps (undischarged).
     assert_eq!(trap_class("(1 / 0) < 2"), TrapClass::UndischargedIndeterminate);
 }
@@ -188,8 +227,36 @@ fn contract_kind_pattern() {
 }
 
 #[test]
+fn numeric_and_indeterminate_contract_patterns() {
+    let numeric = "
+        numeric = (v) => v :: {
+            Numeric => true
+            _ => false
+        }
+        [numeric(3), numeric(1 / 0), numeric(1 % 0), numeric(\"no\")]
+    ";
+    let result = eval(numeric);
+    let items = result.as_tuple().expect("four Boolean results");
+    assert_eq!(
+        items.iter().map(ValueRef::as_boolean).collect::<Vec<_>>(),
+        [Some(true), Some(true), Some(true), Some(false)]
+    );
+
+    let indeterminate = "
+        classify = (v) => v :: {
+            Indeterminate => \"indeterminate\"
+            Number => \"number\"
+        }
+        [classify(2 / 0), classify(2 % 0)]
+    ";
+    let result = eval(indeterminate);
+    let items = result.as_tuple().expect("two classification results");
+    assert!(items.iter().all(|v| v.as_string_lossy().as_deref() == Some("indeterminate")));
+}
+
+#[test]
 fn indeterminate_discharge_by_pattern() {
-    // Indeterminate(_/0) => fallback is an ordinary arm (E9).
+    // Indeterminate is the ordinary umbrella contract arm (E9).
     let src = "
         safe = (a, b) => (a / b) :: {
             Indeterminate => \"undefined\"
@@ -335,6 +402,8 @@ fn pr04_functions_and_indeterminates_render_non_parseably() {
     assert_eq!(eval_str("`${1/0}`"), "<Indeterminate _/0>");
     assert_eq!(eval_str("`${2/0}`"), "<Indeterminate _/0>");
     assert_eq!(eval_str("`${0/0}`"), "<Indeterminate 0/0>");
+    assert_eq!(eval_str("`${1%0}`"), "<Indeterminate _%0>");
+    assert_eq!(eval_str("`${0%0}`"), "<Indeterminate 0%0>");
 }
 
 #[test]
@@ -422,8 +491,16 @@ fn equal_values_are_pointer_equal_after_eval() {
 #[test]
 fn indeterminate_value_debug_shape() {
     // Sanity on the value kind itself.
-    let v = eval("1 / 0");
-    assert!(matches!(v.data(), ValueData::Indeterminate(_)));
+    let div = eval("1 / 0");
+    assert!(matches!(
+        div.data(),
+        ValueData::Indeterminate(IndeterminateForm::DivZero(_))
+    ));
+    let rem = eval("1 % 0");
+    assert!(matches!(
+        rem.data(),
+        ValueData::Indeterminate(IndeterminateForm::ModZero(_))
+    ));
 }
 
 // ── Mutator staging (B5/B7) ──────────────────────────────────────────────────

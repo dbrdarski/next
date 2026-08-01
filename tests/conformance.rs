@@ -686,6 +686,8 @@ mod phase3 {
         assert_eq!(str_of(&eval("f = x => x\n`${f}`")), "<Function>");
         assert_eq!(str_of(&eval("`${1/0}`")), "<Indeterminate _/0>");
         assert_eq!(str_of(&eval("`${2/0}`")), "<Indeterminate _/0>");
+        assert_eq!(str_of(&eval("`${1%0}`")), "<Indeterminate _%0>");
+        assert_eq!(str_of(&eval("`${0%0}`")), "<Indeterminate 0%0>");
     }
 
     #[test]
@@ -1116,7 +1118,8 @@ mod phase_a {
         // destructuring irrefutability (implemented at expression level) ·
         // data.body on Union(Response, Failure) → REJECT until narrowed ·
         // Failure-overlap wrapper demand · act-kind admission over a union of
-        // callees · the E5 discharge: Indeterminate(_/0) arm ACCEPTs the division
+        // callees · the E5 discharge: the Indeterminate contract arm
+        // ACCEPTs the division
         // consumer.
         unreachable!("activates with the program-level analyzer");
     }

@@ -89,17 +89,42 @@ fn closed_type_error_is_operation_safety() {
 }
 
 #[test]
-fn division_is_total_but_comparison_forces_the_indeterminate() {
+fn division_is_total_but_comparison_forces_indeterminate_discharge() {
     let mut i = Interner::new();
-    // 1 / 0 alone is safe (produces Indeterminate).
+    // 1 / 0 alone is safe (produces a specific Indeterminate value).
     let div = prim(PrimOp::Div, vec![konst(i.integer(1)), konst(i.integer(0))]);
     assert!(analyze(&div, &empty(), &nc(), &mut i).accepted());
 
-    // (1 / 0) < 2 traps undischarged-Indeterminate.
+    // (1 / 0) < 2 traps at the strict Number seat.
     let cmp = prim(PrimOp::Lt, vec![div.clone(), konst(i.integer(2))]);
     let a = analyze(&cmp, &empty(), &nc(), &mut i);
     assert!(!a.accepted());
     assert_eq!(a.findings[0].class, TrapClass::UndischargedIndeterminate);
+}
+
+#[test]
+fn numeric_is_an_umbrella_while_arithmetic_still_demands_number() {
+    let mut i = Interner::new();
+    let mut numbers = empty();
+    numbers.insert("x".into(), Contract::Kind(Kind::Number));
+    numbers.insert("y".into(), Contract::Kind(Kind::Number));
+
+    let div = prim(PrimOp::Div, vec![name("x"), name("y")]);
+    let result = analyze(&div, &numbers, &nc(), &mut i);
+    assert!(result.accepted(), "Number / Number is total: {:?}", result.findings);
+    let numeric = Contract::numeric(&mut i);
+    assert!(matches!(subcontract(&result.contract, &numeric, &mut i), Verdict::Proven));
+    let div_zero = i.div_zero(Rational::from(1));
+    let mod_zero = i.mod_zero(Rational::from(1));
+    assert!(result.contract.contains(&div_zero));
+    assert!(!result.contract.contains(&mod_zero));
+
+    let mut indeterminate = empty();
+    indeterminate.insert("z".into(), Contract::indeterminate(&mut i));
+    let consume = prim(PrimOp::Add, vec![name("z"), konst(i.integer(1))]);
+    let rejected = analyze(&consume, &indeterminate, &nc(), &mut i);
+    assert!(!rejected.accepted());
+    assert_eq!(rejected.findings[0].class, TrapClass::UndischargedIndeterminate);
 }
 
 #[test]
@@ -153,9 +178,9 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
     c.push(prim(PrimOp::Div, vec![n(i, 1), n(i, 0)]));
     c.push(prim(PrimOp::Div, vec![n(i, 0), n(i, 0)]));
     let dz = prim(PrimOp::Div, vec![n(i, 1), n(i, 0)]);
-    c.push(prim(PrimOp::Lt, vec![dz.clone(), n(i, 2)])); // trap: undischarged Indeterminate
+    c.push(prim(PrimOp::Lt, vec![dz.clone(), n(i, 2)])); // trap: Indeterminate needs discharge
     let dz2 = prim(PrimOp::Div, vec![n(i, 1), n(i, 0)]);
-    c.push(prim(PrimOp::Add, vec![dz2, n(i, 2)])); // safe: Indeterminate propagates
+    c.push(prim(PrimOp::Add, vec![dz2, n(i, 2)])); // trap: Indeterminate needs discharge
     // Type errors.
     let (p, q) = (n(i, 1), s(i, "x"));
     c.push(prim(PrimOp::Add, vec![p, q])); // trap
@@ -1806,12 +1831,9 @@ mod inference {
     fn infers_factorial_returns_number_over_its_domain() {
         // No supplied claim: the base `1` generalizes to Number, and the induction
         // proves `n * f(n-1)`'s return under it. Over the **untyped (Top) accepted
-        // domain** the sound return is Number *together with the arithmetic
-        // Indeterminate-passthrough* — an Indeterminate `n` (which the bare pattern
-        // admits) propagates, so `factorial(1/0)` really returns an Indeterminate. So
-        // the fact contains Number and is strictly tighter than Top (String excluded);
-        // a call site that constrains `n : Number` sharpens it to pure Number (the
-        // analyze_apply wiring).
+        // domain**, the successful arithmetic paths still produce Number; non-Number
+        // inputs are rejected by the separate safety fact rather than becoming return
+        // alternatives. The inferred return is therefore tighter than Top.
         let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf")
             .unwrap()
             .0;
@@ -1895,8 +1917,7 @@ mod apply_wiring {
     #[ignore = "FALSE POSITIVE exposed by the 2026-07-31 ruling (safety-unproven -> Error). These were green only because the finding was a Warning that analyze_apply's errors() filter discarded. Root: bodycheck.rs:213 computes the recursive target under the ROW REGION, which grows the reaching domain back up to Top, so `n - 1` can no longer be proven a Number. SAME ROOT AS BLOCKER 1b (parked). The programs are safe; the analyzer cannot currently prove it. Un-ignore when 1b's root is fixed. Do NOT fix by reverting the severity or by widening/reaching machinery."]
     fn a_recursive_call_infers_its_return_over_the_argument() {
         // `f(x)` with `x : Number` — `analyze_apply` now infers f's return over the
-        // call-site argument, giving pure Number (not Top, not the untyped-domain
-        // Number ∪ Indeterminate).
+        // call-site argument, giving pure Number rather than Top.
         let mut i = Interner::new();
         let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
         let mut env = empty();
@@ -1933,9 +1954,8 @@ mod apply_wiring {
 
     #[test]
     fn an_unconstrained_argument_stays_sound() {
-        // `f(x)` with `x : Top` — no call-site constraint, so the inferred return keeps
-        // the arithmetic Indeterminate-passthrough (or coarsens), but is always sound:
-        // Number is admitted and the call is not falsely rejected.
+        // `f(x)` with `x : Top` — no call-site constraint. The successful return
+        // over-approximation still admits Number; body safety is a separate judgment.
         let mut i = Interner::new();
         let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
         let mut env = empty();

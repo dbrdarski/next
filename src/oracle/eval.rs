@@ -250,17 +250,17 @@ impl<'a> Oracle<'a> {
     /// value-level truth source the analyzer's operation rules (C§7) are tested
     /// against — see [`eval_prim`].
     pub(crate) fn apply_prim(&mut self, op: PrimOp, vals: &[ValueRef]) -> EvalResult {
-        // Indeterminate propagation: arithmetic with an Indeterminate operand
-        // yields the left-most Indeterminate unchanged. Ordering/numeric-demand
-        // ops instead trap; `==`/`!=` treat it as an ordinary value.
-        let is_arith = matches!(
-            op,
-            PrimOp::Add | PrimOp::Sub | PrimOp::Mul | PrimOp::Div | PrimOp::Rem | PrimOp::Pow | PrimOp::Neg
-        );
-        let arith_indeterminate =
-            is_arith.then(|| vals.iter().find(|v| v.as_indeterminate().is_some())).flatten();
-        if let Some(ind) = arith_indeterminate {
-            return Ok(Outcome::Produced(ind.clone()));
+        // Part XII fixes specific Indeterminate identity but leaves its consuming
+        // algebra open. Until that algebra is ruled, every consuming numeric seat
+        // must demand an ordinary Number. Equality remains total because these are
+        // ordinary values.
+        if !matches!(op, PrimOp::Eq | PrimOp::Ne)
+            && vals.iter().any(|value| value.as_indeterminate().is_some())
+        {
+            return Self::trap(
+                TrapClass::UndischargedIndeterminate,
+                "a strict Number operation received an Indeterminate value",
+            );
         }
 
         let result = match op {
@@ -328,9 +328,8 @@ impl<'a> Oracle<'a> {
         let x = self.demand_number(a)?;
         let y = self.demand_number(b)?;
         if y.is_zero() {
-            // Total division: x/0 ⇒ Indeterminate.
-            let form = if x.is_zero() { IndetForm::ZeroOverZero } else { IndetForm::DivByZero };
-            return Ok(self.interner.indeterminate(form));
+            // Total division: the form tag and canonical operand retain identity.
+            return Ok(self.interner.div_zero(x));
         }
         Ok(self.interner.number(x / y))
     }
@@ -339,8 +338,7 @@ impl<'a> Oracle<'a> {
         let x = self.demand_number(a)?;
         let y = self.demand_number(b)?;
         if y.is_zero() {
-            let form = if x.is_zero() { IndetForm::ZeroOverZero } else { IndetForm::DivByZero };
-            return Ok(self.interner.indeterminate(form));
+            return Ok(self.interner.mod_zero(x));
         }
         // Exact rational remainder: x - y*trunc(x/y) (truncation toward zero).
         let xr = x.as_ratio().clone();
@@ -369,12 +367,6 @@ impl<'a> Oracle<'a> {
     }
 
     fn eval_compare(&mut self, op: PrimOp, a: &ValueRef, b: &ValueRef) -> Result<ValueRef, Trap> {
-        if a.as_indeterminate().is_some() || b.as_indeterminate().is_some() {
-            return Self::trap(
-                TrapClass::UndischargedIndeterminate,
-                "an ordering comparison received an Indeterminate operand",
-            );
-        }
         let x = self.demand_number(a)?;
         let y = self.demand_number(b)?;
         let ord = x.as_ratio().cmp(y.as_ratio());
@@ -608,10 +600,10 @@ impl<'a> Oracle<'a> {
     /// **Structure interpolation is total** [user, 2026-07-18]: every value renders.
     /// A top-level String interpolates raw; strings *inside* structures are quoted
     /// and escaped, so literal-formed values round-trip (`parse ∘ print = identity`,
-    /// the PR-05 harness law). Functions and Indeterminates render as visibly
-    /// non-parseable angle-bracket forms — the Indeterminate shows only its *form*,
-    /// never its operands (interning forbids remembering them), so `1/0` and `2/0`
-    /// render identically (PR-04).
+    /// the PR-05 harness law). Functions and Indeterminate values render as visibly
+    /// non-parseable angle-bracket forms. The frozen renderer intentionally hides a
+    /// nonzero numerator even though the value retains it, so `1/0` and `2/0` render
+    /// identically while remaining distinct (PR-04 / R-1).
     fn stringify(&self, v: &ValueRef) -> String {
         render_value(v, false)
     }
@@ -830,9 +822,10 @@ fn render_value(v: &ValueRef, nested: bool) -> String {
         }
         // Visibly non-parseable forms.
         ValueData::Function(_) | ValueData::Native(_) => "<Function>".to_string(),
-        // The *form* only — never the operands (interning forbids remembering them),
-        // so `1/0` and `2/0` render identically (PR-04).
-        ValueData::Indeterminate(f) => format!("<Indeterminate {}>", f.label()),
+        // The display is form-only even though the operand remains in identity.
+        ValueData::Indeterminate(form) => {
+            format!("<Indeterminate {}>", form.label())
+        }
     }
 }
 

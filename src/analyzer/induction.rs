@@ -153,6 +153,14 @@ pub(crate) fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R
     out
 }
 
+/// Whether a safety-component verification is currently in progress. During that
+/// pass, a call not covered by an installed safety fact is an unresolved graph
+/// dependency (for example a shape-cutoff node); recursively launching the legacy
+/// body summary would silently bypass the graph's `Unproven` verdict.
+pub(crate) fn safety_context_active() -> bool {
+    HYPOTHESES.with(|h| h.borrow().iter().any(|hyp| matches!(hyp.claim, Claim::Safety)))
+}
+
 /// A return candidate: the closure `callee`, applied over arguments described by
 /// `args`, claimed to return values in `contract`.
 #[derive(Clone)]
@@ -326,7 +334,7 @@ pub fn settle_components(
 ///
 /// **`root_args`** are the root callee's argument contracts — the **call-site**
 /// domain: `Some([Number])` for `factorial(k)` with `k : Number` sharpens the fact to
-/// pure `Number` (no Indeterminate-passthrough); `None` proposes over the root's
+/// pure `Number`; `None` proposes over the root's
 /// accepted domain too (the autonomous, call-site-independent form). The reachable
 /// helpers/mutual members always use their accepted domains.
 ///
@@ -418,7 +426,7 @@ fn domain_args(
 /// Every function reachable from `callee` paired with the domain it is analyzed over.
 /// The root takes the call-site domain (`root_args` when supplied); so do **same-arity
 /// partners**, so a mutual group is analyzed over one consistent domain (else a partner
-/// over its wider accepted domain feeds the root `Top`-domain Indeterminate-passthrough
+/// over its wider accepted domain feeds the root wider-domain
 /// args that the domain-indexed hypothesis then declines — the [interim] same-arity
 /// propagation, to be replaced by call-edge-derived domains, v0.8.1 §5). A function with
 /// no sound domain (a rest param) drops out — a call to it coarsens to `Top`, sound.

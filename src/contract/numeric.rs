@@ -98,7 +98,7 @@ fn sign_class(iv: &Interval) -> SignClass {
 }
 
 /// Whether `0 ∈ ⟦iv⟧` — a divisor containing zero has no numeric bound (and yields
-/// Indeterminate, handled by the caller).
+/// an Indeterminate value, handled by the caller).
 fn contains_zero(iv: &Interval) -> bool {
     let zero = Rational::from(0);
     let above_low = match &iv.low {
@@ -551,7 +551,7 @@ fn mul_iv(a: &Interval, b: &Interval) -> Interval {
 }
 
 /// `/` — the numeric part of the image. A divisor that may be zero has no bound (the
-/// caller adds the Indeterminate forms; division itself is total).
+/// caller adds the operation's Indeterminate form; division itself is total).
 pub(crate) fn abs_div(x: &NumAbs, y: &NumAbs) -> NumAbs {
     if contains_zero(&y.iv) {
         return NumAbs::of(Interval::unbounded());

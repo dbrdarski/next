@@ -3994,3 +3994,34 @@ later strict-`Number`-seat rule remains until that algebra is ruled separately.
 `HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md`, and its manifest hash was advanced as an
 author design action before the implementation refactor. The rendering remains the frozen form-only
 surface, extended analogously for remainder: `_/0`, `0/0`, `_%0`, `0%0`.
+
+## 2026-08-01 — Recovery slice 2: tagged arithmetic Indeterminates
+
+**Built:** the oracle value is now `Indeterminate(IndeterminateForm)`, with current variants
+`DivZero(NumberRef)` and `ModZero(NumberRef)`. Typed interner constructors canonicalize the Number
+operand first, so the ordinary structural interning key is exactly `(form tag, canonical operand
+pointer)`. Division and remainder by zero construct their respective forms, including distinct
+zero-operand forms; equality remains universal pointer equality. Rendering intentionally projects
+that richer identity back to the frozen form-only labels.
+
+**Contracts:** `Contract::Indeterminate(F)` projects a concrete value to its form tag, the prelude
+`Indeterminate` name is the union of both current forms, and `Numeric = Number ∪ Indeterminate`.
+`ZeroDen` was removed entirely and is regression-tested as an unknown contract name. Operation
+transfer adds `DivZero` only for `/` and `ModZero` only for `%` when a zero divisor is possible.
+Specific constant folds retain the exact operand-bearing value. Recursive witnesses,
+subcontract/disjointness, operation samples, runtime contract matching, and canonical constant
+serialization were updated consistently.
+
+**Still open by design:** no algebra for consuming an Indeterminate was invented. Arithmetic and
+ordering continue to require `Number` and therefore trap/reject either form as
+`UndischargedIndeterminate`; equality and contract matching remain total discharge surfaces.
+
+**Graph isolation repaired:** removing the old arithmetic-passthrough behavior exposed a candidate
+graph escape. During a safety-component verification, an unresolved cutoff edge could fall through
+to the quarantined recursive body summary, then a later diagnostic pass could upgrade the graph's
+`Unproven` result to `Proven`. Active safety verification now refuses that fallback, and settlement
+may recover `Refuted`/`Unproven` diagnostics but never promote an unsettled graph component.
+
+**Verification:** 417 lib passed / 10 ignored; 111 conformance passed / 13 ignored; 4 machinery gates
+passed; clippy clean; manifest 19/19 OK. The repository-wide formatting debt remains the separately
+recorded pre-existing gate and was not mixed into this semantic recovery slice.

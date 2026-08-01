@@ -41,7 +41,7 @@ fn assert_normalization_sound(src: &str) {
 /// The corpus: a spread of programs exercising every node kind. Any future rule
 /// that changes what these evaluate to is caught here.
 const CORPUS: &[&str] = &[
-    // arithmetic / exactness / indeterminate
+    // arithmetic / exactness / Indeterminate values
     "0.1 + 0.2 == 0.3",
     "1 / 3 + 1 / 3 + 1 / 3",
     "1 / 0",

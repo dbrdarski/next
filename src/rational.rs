@@ -3,7 +3,7 @@
 //! Numbers are exact arbitrary-precision rationals; decimal literals denote
 //! rationals (`0.5` ≡ 1/2, so `0.1 + 0.2 == 0.3` is **true**). Fixed-precision
 //! "decimal" crates are explicitly rejected (Part I step-0). Division is total
-//! via Indeterminate values — handled at the `PrimOp` layer, not here.
+//! via specific Indeterminate forms — handled at the `PrimOp` layer, not here.
 //!
 //! Printing (B2, corrected 1.0.2): a reduced fraction renders as a **decimal**
 //! iff its reduced denominator's only prime factors are 2 and 5 (i.e. it divides
@@ -24,8 +24,8 @@ pub struct Rational(BigRational);
 impl Rational {
     /// Construct from a numerator/denominator pair. Reduces to canonical form.
     ///
-    /// Panics on a zero denominator: in NEXT `x / 0` is an *Indeterminate value*
-    /// produced by the arithmetic layer, never a rational — so a zero
+    /// Panics on a zero denominator: in NEXT `x / 0` is a specific
+    /// `Indeterminate(DivZero(x))` value produced by the arithmetic layer, never a rational — so a zero
     /// denominator reaching this constructor is a bug, not a language event.
     pub fn new(numer: BigInt, denom: BigInt) -> Self {
         assert!(!denom.is_zero(), "Rational::new called with zero denominator");
@@ -176,7 +176,8 @@ impl fmt::Display for Rational {
 
 // Exact arithmetic. Division here is ordinary rational division and is *not*
 // total — a zero divisor panics. The language's total division (`x/0` ⇒
-// Indeterminate) is a `PrimOp` rule (semantics §3), layered above this type.
+// a specific Indeterminate value) is a `PrimOp` rule (semantics §3), layered
+// above this type.
 impl Add for Rational {
     type Output = Rational;
     fn add(self, rhs: Rational) -> Rational {

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::interner::Interner;
+use crate::value::IndeterminateFormTag;
 
 fn n(i: &mut Interner, v: i64) -> ValueRef {
     i.integer(v)
@@ -12,6 +13,18 @@ fn rat(num: i64, den: i64) -> Rational {
 }
 fn r(x: i64) -> Rational {
     Rational::from(x)
+}
+fn div_zero(i: &mut Interner, operand: i64) -> ValueRef {
+    i.div_zero(r(operand))
+}
+fn mod_zero(i: &mut Interner, operand: i64) -> ValueRef {
+    i.mod_zero(r(operand))
+}
+fn exact_div_zero(i: &mut Interner, operand: i64) -> Contract {
+    Contract::Equals(div_zero(i, operand))
+}
+fn exact_mod_zero(i: &mut Interner, operand: i64) -> Contract {
+    Contract::Equals(mod_zero(i, operand))
 }
 
 #[test]
@@ -35,8 +48,8 @@ fn kind_membership() {
     assert!(Contract::Kind(Kind::Record).contains(&rec));
     // cross-kind is false
     assert!(!Contract::Kind(Kind::Number).contains(&i.string("3")));
-    // Indeterminate is not any Kind
-    let ind = i.indeterminate(crate::value::IndetForm::DivByZero);
+    // Indeterminate is not any Kind.
+    let ind = div_zero(&mut i, 1);
     assert!(!Contract::Kind(Kind::Number).contains(&ind));
 }
 
@@ -189,13 +202,28 @@ fn record_and_tuple_and_field() {
 }
 
 #[test]
-fn indeterminate_contract() {
-    use crate::value::IndetForm;
+fn indeterminate_contracts_preserve_specific_form_and_operand_identity() {
     let mut i = Interner::new();
-    let div0 = i.indeterminate(IndetForm::DivByZero);
-    assert!(Contract::Indeterminate(IndetForm::DivByZero).contains(&div0));
-    assert!(!Contract::Indeterminate(IndetForm::ZeroOverZero).contains(&div0));
-    assert!(!Contract::Indeterminate(IndetForm::DivByZero).contains(&i.integer(5)));
+    let one_over_zero = div_zero(&mut i, 1);
+    let two_over_zero = div_zero(&mut i, 2);
+    let one_mod_zero = mod_zero(&mut i, 1);
+    let div_form = Contract::Indeterminate(IndeterminateFormTag::DivZero);
+    let mod_form = Contract::Indeterminate(IndeterminateFormTag::ModZero);
+
+    assert!(div_form.contains(&one_over_zero));
+    assert!(!mod_form.contains(&one_over_zero));
+    assert!(mod_form.contains(&one_mod_zero));
+    assert!(exact_div_zero(&mut i, 1).contains(&one_over_zero));
+    assert!(!exact_div_zero(&mut i, 2).contains(&one_over_zero));
+    assert!(!exact_mod_zero(&mut i, 1).contains(&one_over_zero));
+    assert!(!Contract::indeterminate(&mut i).contains(&i.integer(5)));
+
+    let numeric = Contract::numeric(&mut i);
+    assert!(numeric.contains(&i.integer(5)));
+    assert!(numeric.contains(&one_over_zero));
+    assert!(numeric.contains(&two_over_zero));
+    assert!(numeric.contains(&one_mod_zero));
+    assert!(!numeric.contains(&i.string("5")));
 }
 
 #[test]
@@ -463,15 +491,18 @@ fn operation_add_type_mismatch_refuted() {
 #[test]
 fn operation_division_is_total() {
     let mut i = Interner::new();
-    // Division by a range spanning zero is *safe* (total) but the image includes
-    // Indeterminate values.
+    // Division by a range spanning zero is safe over Number operands, and its
+    // image is Numeric because every canonical numerator may form `a/0`.
     let a = Contract::Kind(Kind::Number);
     let b = Contract::Range(r(0), r(10));
     let res = analyze_operation(PrimOp::Div, &[a, b], &mut i);
     assert!(matches!(res.safety, OpSafety::Proven), "division never traps");
     let one_over_zero = eval_prim(PrimOp::Div, &[i.integer(1), i.integer(0)], &mut i).unwrap();
-    assert!(res.output.contains(&one_over_zero), "output must cover 1/0 = _/0");
-    // A nonzero divisor drops the Indeterminate from the image.
+    assert!(res.output.contains(&one_over_zero), "output must cover specific 1/0");
+    assert!(res.output.contains(&div_zero(&mut i, 2)), "output must cover specific 2/0");
+    assert!(!res.output.contains(&mod_zero(&mut i, 2)), "division must not produce ModZero");
+    proven(&res.output, &Contract::numeric(&mut i), &mut i);
+    // A nonzero divisor drops Indeterminate from the image.
     let safe = analyze_operation(
         PrimOp::Div,
         &[Contract::Kind(Kind::Number), Contract::Greater(r(0))],
@@ -634,12 +665,19 @@ fn rulebook_comparisons_decide_when_bounds_decide() {
 #[test]
 fn rulebook_division_is_total_and_remainder_is_bounded() {
     let mut i = Interner::new();
-    // Total division: a possibly-zero divisor adds the Indeterminate forms rather
-    // than trapping.
+    // Total division: a possibly-zero divisor widens the Number image to Numeric.
     let res = analyze_operation(PrimOp::Div, &[Contract::Range(r(1), r(4)), Contract::Range(r(0), r(2))], &mut i);
     assert!(matches!(res.safety, OpSafety::Proven), "division never traps");
-    let div0 = i.indeterminate(crate::value::IndetForm::DivByZero);
-    assert!(res.output.contains(&div0), "the image must carry `_/0`");
+    let div0 = div_zero(&mut i, 1);
+    assert!(res.output.contains(&div0), "the image must carry specific `1/0`");
+    assert!(!res.output.contains(&mod_zero(&mut i, 1)), "division has the DivZero form only");
+    let rem_zero = analyze_operation(
+        PrimOp::Rem,
+        &[Contract::Range(r(1), r(4)), Contract::Range(r(0), r(2))],
+        &mut i,
+    );
+    assert!(rem_zero.output.contains(&mod_zero(&mut i, 1)), "the image must carry specific `1%0`");
+    assert!(!rem_zero.output.contains(&div_zero(&mut i, 1)), "remainder has the ModZero form only");
     // `%` is bounded by the divisor's magnitude, with the sign following the dividend.
     let rem = out(PrimOp::Rem, &[Contract::GreaterEq(r(0)), Contract::Range(r(3), r(5))], &mut i);
     for v in [0, 1, 4] {
@@ -651,30 +689,30 @@ fn rulebook_division_is_total_and_remainder_is_bounded() {
 }
 
 #[test]
-fn rulebook_safety_admits_indeterminate_in_arithmetic_but_not_comparisons() {
+fn rulebook_requires_indeterminate_discharge_at_strict_number_seats() {
     let mut i = Interner::new();
-    let indet = Contract::Indeterminate(crate::value::IndetForm::DivByZero);
     let num = Contract::Kind(Kind::Number);
 
-    // Arithmetic *propagates* an Indeterminate (the oracle checks for it first and
-    // returns it unchanged), so this is provably SAFE — it used to read `Unproven`.
-    for op in [PrimOp::Add, PrimOp::Sub, PrimOp::Mul, PrimOp::Div, PrimOp::Rem, PrimOp::Pow] {
-        let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
-        assert!(matches!(res.safety, OpSafety::Proven), "{op:?} on Indeterminate must be Proven");
-    }
-    let res = analyze_operation(PrimOp::Neg, std::slice::from_ref(&indet), &mut i);
-    assert!(matches!(res.safety, OpSafety::Proven), "unary `-` on Indeterminate must be Proven");
+    // The consuming algebra is open, so arithmetic and ordering are strict
+    // Number seats. A represented witness of either form must refute safety.
+    for indet in [exact_div_zero(&mut i, 1), exact_mod_zero(&mut i, 1)] {
+        for op in [PrimOp::Add, PrimOp::Sub, PrimOp::Mul, PrimOp::Div, PrimOp::Rem, PrimOp::Pow] {
+            let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
+            assert!(matches!(res.safety, OpSafety::Refuted(_)), "{op:?} on Indeterminate must be Refuted");
+        }
+        let res = analyze_operation(PrimOp::Neg, std::slice::from_ref(&indet), &mut i);
+        assert!(matches!(res.safety, OpSafety::Refuted(_)), "unary `-` on Indeterminate must be Refuted");
 
-    // An ordering comparison traps `UndischargedIndeterminate` instead — never Proven.
-    for op in [PrimOp::Lt, PrimOp::Le, PrimOp::Gt, PrimOp::Ge] {
-        let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
-        assert!(!matches!(res.safety, OpSafety::Proven), "{op:?} on Indeterminate must not be Proven");
-    }
+        for op in [PrimOp::Lt, PrimOp::Le, PrimOp::Gt, PrimOp::Ge] {
+            let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
+            assert!(matches!(res.safety, OpSafety::Refuted(_)), "{op:?} on Indeterminate must be Refuted");
+        }
 
-    // `==`/`!=` are total on every value, Indeterminate included.
-    for op in [PrimOp::Eq, PrimOp::Ne] {
-        let res = analyze_operation(op, &[indet.clone(), Contract::Top], &mut i);
-        assert!(matches!(res.safety, OpSafety::Proven), "{op:?} is total");
+        // `==`/`!=` are total on every value, Indeterminate included.
+        for op in [PrimOp::Eq, PrimOp::Ne] {
+            let res = analyze_operation(op, &[indet.clone(), Contract::Top], &mut i);
+            assert!(matches!(res.safety, OpSafety::Proven), "{op:?} is total");
+        }
     }
 }
 
@@ -731,9 +769,16 @@ fn operation_soundness_sweep() {
             Contract::Equals(i.integer(5)),
             &mut i,
         ),
-        // Indeterminate — both forms
-        Contract::Indeterminate(crate::value::IndetForm::DivByZero),
-        Contract::Indeterminate(crate::value::IndetForm::ZeroOverZero),
+        // Indeterminate umbrella/forms and distinct specific values.
+        Contract::indeterminate(&mut i),
+        Contract::Indeterminate(IndeterminateFormTag::DivZero),
+        Contract::Indeterminate(IndeterminateFormTag::ModZero),
+        exact_div_zero(&mut i, 0),
+        exact_div_zero(&mut i, 1),
+        exact_div_zero(&mut i, 2),
+        exact_mod_zero(&mut i, 0),
+        exact_mod_zero(&mut i, 1),
+        exact_mod_zero(&mut i, 2),
     ];
 
     let mut pool: Vec<ValueRef> = Vec::new();
@@ -745,8 +790,12 @@ fn operation_soundness_sweep() {
     pool.push(i.string("a"));
     pool.push(i.boolean(true));
     pool.push(i.null());
-    pool.push(i.indeterminate(crate::value::IndetForm::DivByZero));
-    pool.push(i.indeterminate(crate::value::IndetForm::ZeroOverZero));
+    pool.push(div_zero(&mut i, 0));
+    pool.push(div_zero(&mut i, 1));
+    pool.push(div_zero(&mut i, 2));
+    pool.push(mod_zero(&mut i, 0));
+    pool.push(mod_zero(&mut i, 1));
+    pool.push(mod_zero(&mut i, 2));
 
     let binops = [
         PrimOp::Add,
@@ -1539,6 +1588,16 @@ mod contract_expr {
             eval_contract(&cref("Number"), &env, &mut i),
             Some(Contract::Kind(Kind::Number))
         );
+        assert_eq!(eval_contract(&cref("ZeroDen"), &env, &mut i), None);
+        assert_eq!(
+            eval_contract(&cref("Indeterminate"), &env, &mut i),
+            Some(Contract::indeterminate(&mut i))
+        );
+        let numeric = eval_contract(&cref("Numeric"), &env, &mut i).expect("Numeric prelude contract");
+        assert!(numeric.contains(&i.integer(3)));
+        assert!(numeric.contains(&div_zero(&mut i, 1)));
+        assert!(numeric.contains(&mod_zero(&mut i, 1)));
+        assert!(!numeric.contains(&i.string("no")));
         assert_eq!(
             eval_contract(&cref("Top"), &env, &mut i),
             Some(Contract::Top)

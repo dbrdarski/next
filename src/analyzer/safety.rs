@@ -425,11 +425,16 @@ fn settle(
     if settled {
         return BodySafety::Proven;
     }
-    // Not settled. Only a **safety** claim re-verifies to report *why*; re-verifying a
-    // completion claim through the safety check would report `Proven` whenever the body
-    // merely raises no safety finding — a different question, and a wrong answer.
+    // Not settled. A **safety** claim re-verifies only to recover refuting/unproven
+    // diagnostics; that diagnostic pass may never upgrade the graph's `Unproven` to
+    // `Proven` (notably when a shape-cutoff dependency is hidden by a coarser legacy
+    // body summary). Completion/return likewise retain the graph verdict.
     match claim {
-        Claim::Safety => classify(verify(&seed.callee, &seed.input, cenv, interner)),
+        Claim::Safety => match classify(verify(&seed.callee, &seed.input, cenv, interner)) {
+            BodySafety::Refuted(findings) => BodySafety::Refuted(findings),
+            BodySafety::Unproven(findings) => BodySafety::Unproven(findings),
+            BodySafety::Proven => BodySafety::Unproven(Vec::new()),
+        },
         Claim::Completes | Claim::Return(_) => BodySafety::Unproven(Vec::new()),
     }
 }

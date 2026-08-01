@@ -94,9 +94,10 @@ pub enum ValueData {
     /// over the rational tree `node(shape, captures)` — see [`FnValue`] and the
     /// μ-Canonicalization Spec (algorithm B).
     Function(FnValue),
-    /// A total-division / indeterminate arithmetic result (semantics §3). A plain
-    /// interned value, not a trap.
-    Indeterminate(IndetForm),
+    /// An unresolved arithmetic result (Part XII, 2026-08-01): a plain interned
+    /// value, not a trap. The form tag and canonical Number operand together are
+    /// its complete identity key.
+    Indeterminate(IndeterminateForm),
     /// A **host effect** — a native (Rust) callable injected by the harness
     /// (semantics §4): a `println`/`exit` double, "from another dimension" (E13).
     /// Not expressible in NEXT; runs Rust when applied.
@@ -241,20 +242,49 @@ impl std::fmt::Debug for NativeRef {
     }
 }
 
-/// The form label of an Indeterminate value (semantics §3).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum IndetForm {
-    /// `x / 0` for nonzero `x` — printed `_/0`.
-    DivByZero,
-    /// `0 / 0` — printed `0/0`.
-    ZeroOverZero,
+/// The currently ruled unresolved-arithmetic forms. The operand is an already
+/// interned Number value, so derived `Hash`/`Eq` use its canonical pointer.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum IndeterminateForm {
+    DivZero(ValueRef),
+    ModZero(ValueRef),
 }
 
-impl IndetForm {
-    pub fn label(self) -> &'static str {
+/// The form-only projection used by `Contract::Indeterminate(F)`: contracts may
+/// distinguish the unresolved operation without enumerating every operand.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum IndeterminateFormTag {
+    DivZero,
+    ModZero,
+}
+
+impl IndeterminateForm {
+    pub fn tag(&self) -> IndeterminateFormTag {
         match self {
-            IndetForm::DivByZero => "_/0",
-            IndetForm::ZeroOverZero => "0/0",
+            IndeterminateForm::DivZero(_) => IndeterminateFormTag::DivZero,
+            IndeterminateForm::ModZero(_) => IndeterminateFormTag::ModZero,
+        }
+    }
+
+    pub fn operand(&self) -> &ValueRef {
+        match self {
+            IndeterminateForm::DivZero(operand) | IndeterminateForm::ModZero(operand) => operand,
+        }
+    }
+
+    /// The frozen form-only display label. Specific identity retains the operand
+    /// internally even when display deliberately hides a nonzero operand.
+    pub fn label(&self) -> &'static str {
+        let is_zero = self
+            .operand()
+            .as_number()
+            .expect("Indeterminate operands are canonical Numbers")
+            .is_zero();
+        match (self.tag(), is_zero) {
+            (IndeterminateFormTag::DivZero, true) => "0/0",
+            (IndeterminateFormTag::DivZero, false) => "_/0",
+            (IndeterminateFormTag::ModZero, true) => "0%0",
+            (IndeterminateFormTag::ModZero, false) => "_%0",
         }
     }
 }
@@ -330,9 +360,9 @@ impl ValueRef {
         matches!(self.data(), ValueData::Function(_))
     }
 
-    pub fn as_indeterminate(&self) -> Option<IndetForm> {
+    pub fn as_indeterminate(&self) -> Option<&IndeterminateForm> {
         match self.data() {
-            ValueData::Indeterminate(f) => Some(*f),
+            ValueData::Indeterminate(form) => Some(form),
             _ => None,
         }
     }

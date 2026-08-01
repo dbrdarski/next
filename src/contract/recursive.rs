@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::{CRef, Contract, Kind, Verdict};
 use crate::interner::Interner;
 use crate::rational::Rational;
-use crate::value::ValueRef;
+use crate::value::{IndeterminateFormTag, ValueRef};
 
 /// A mutual group of named contracts. `Ref(name)` within a definition resolves
 /// against `defs`.
@@ -363,7 +363,12 @@ fn prod_eval(
         Contract::LessEq(m) => Some(interner.number(m.clone())),
         Contract::Mod { r, .. } => Some(interner.number(Rational::from_integer(r.clone()))),
         Contract::Geo { b, .. } => Some(interner.number(b.clone())),
-        Contract::Indeterminate(f) => Some(interner.indeterminate(*f)),
+        Contract::Indeterminate(IndeterminateFormTag::DivZero) => {
+            Some(interner.div_zero(Rational::from(1)))
+        }
+        Contract::Indeterminate(IndeterminateFormTag::ModZero) => {
+            Some(interner.mod_zero(Rational::from(1)))
+        }
         Contract::HasField(key) => {
             let val = interner.integer(0);
             Some(interner.record_str(vec![(key.as_str(), val)]))
@@ -539,7 +544,7 @@ fn exact_eval(
             _ => E3::Unproven,
         },
         // Every remaining leaf (Top, non-Function Kind, bounds, Mod, Geo, Equals,
-        // Indeterminate, HasField) is inhabited.
+        // Indeterminate(F), HasField) is inhabited.
         _ => E3::NonEmpty,
     }
 }

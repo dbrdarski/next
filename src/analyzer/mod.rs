@@ -665,6 +665,20 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                         });
                         continue;
                     }
+                    // Inside candidate-graph verification, every admissible dependency
+                    // must resolve through a settled/current safety fact. Re-entering the
+                    // legacy body summary here would unfold a cutoff dependency behind the
+                    // graph's back and could turn its required `Unproven` into `Proven`.
+                    if !has_spread && induction::safety_context_active() {
+                        findings.push(Finding {
+                            class: TrapClass::OperationSafety,
+                            severity: Severity::Error,
+                            message: "callee safety is not established by the active fact graph".into(),
+                        });
+                        produced.push(Contract::Top);
+                        completions.push(Completion::MayFallThrough);
+                        continue;
+                    }
                     if has_spread {
                         produced.push(Contract::Top);
                         completions.push(Completion::Produces);
@@ -782,7 +796,7 @@ fn join_completions(cs: &[Completion]) -> Completion {
 /// driver pass) wins directly; otherwise — outside a spread call and outside an
 /// in-progress inference — run [`induction::infer_return_fact`] over the **call-site
 /// argument contracts**, so `factorial(k)` with `k : Number` returns `Number` rather
-/// than the untyped-domain `Number ∪ Indeterminate` (let alone `Top`). Falls back to
+/// rather than the untyped-domain coarse result (let alone `Top`). Falls back to
 /// `Top` when nothing informative is inferred (sound).
 fn call_return(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool, cenv: &ContractEnv, interner: &mut Interner) -> Contract {
     // An active hypothesis applies only to the **same instance over a containing input

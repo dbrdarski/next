@@ -12,7 +12,9 @@ use crate::ast::Lambda;
 use crate::contract::Contract;
 use crate::intern::{EnumInterner, Interned};
 use crate::rational::Rational;
-use crate::value::{FnValue, IndetForm, NativeRef, RecordEntry, ValueData, ValueRef};
+use crate::value::{
+    FnValue, IndeterminateForm, NativeRef, RecordEntry, ValueData, ValueRef,
+};
 
 /// Owns every interned value for a program. Not `Send`/`Sync` (uses `Rc`); the
 /// oracle is sequential (semantics §3).
@@ -106,8 +108,21 @@ impl Interner {
         self.intern(ValueData::Str(units))
     }
 
-    pub fn indeterminate(&mut self, form: IndetForm) -> ValueRef {
+    /// Intern an unresolved arithmetic form whose child is already canonical.
+    fn indeterminate(&mut self, form: IndeterminateForm) -> ValueRef {
         self.intern(ValueData::Indeterminate(form))
+    }
+
+    /// Intern the specific canonical value `Indeterminate(DivZero(operand))`.
+    pub fn div_zero(&mut self, operand: Rational) -> ValueRef {
+        let operand = self.number(operand);
+        self.indeterminate(IndeterminateForm::DivZero(operand))
+    }
+
+    /// Intern the specific canonical value `Indeterminate(ModZero(operand))`.
+    pub fn mod_zero(&mut self, operand: Rational) -> ValueRef {
+        let operand = self.number(operand);
+        self.indeterminate(IndeterminateForm::ModZero(operand))
     }
 
     // ── Compound constructors ────────────────────────────────────────────────

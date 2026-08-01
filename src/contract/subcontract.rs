@@ -21,7 +21,7 @@ use super::numeric::{interval_exact, interval_subset, intervals_disjoint};
 use super::{CRef, Contract, Kind as VKind};
 use crate::interner::Interner;
 use crate::rational::Rational;
-use crate::value::ValueRef;
+use crate::value::{IndeterminateFormTag, ValueRef};
 
 /// The three-valued subcontract verdict.
 #[derive(Clone, Debug)]
@@ -103,7 +103,6 @@ fn atom_provable(a: &Contract, b: &Contract) -> bool {
         (Record(fields), HasField(k)) => fields.iter().any(|(key, _)| key == k),
         (Record(fa), Record(fb)) => record_subset(fa, fb),
         (Tuple(ea), Tuple(eb)) => ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| provable(x, y)),
-        (Indeterminate(f1), Indeterminate(f2)) => f1 == f2,
         _ => match (interval_exact(a), interval_exact(b)) {
             (Some(ia), Some(ib)) => interval_subset(&ia, &ib),
             _ => false,
@@ -139,6 +138,23 @@ pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
         (Bottom, _) | (_, Bottom) => true,
         (Equals(v), other) | (other, Equals(v)) => !other.contains(v),
         (Kind(k1), Kind(k2)) => k1 != k2,
+        // Indeterminate values are outside the closed Kind universe. Specific
+        // values use the ordinary `Equals` contract and are handled above.
+        (Kind(_), Indeterminate(_)) | (Indeterminate(_), Kind(_)) => true,
+        (Indeterminate(f1), Indeterminate(f2)) => f1 != f2,
+        (Indeterminate(_), other) | (other, Indeterminate(_))
+            if is_numeric(other)
+                || matches!(
+                    other,
+                    Record(_)
+                        | HasField(_)
+                        | Tuple(_)
+                        | Concat(_)
+                        | LengthRestricted(_, _)
+                ) =>
+        {
+            true
+        }
         // A numeric interval is disjoint from a non-numeric kind.
         (Kind(k), other) | (other, Kind(k)) if *k != VKind::Number && is_numeric(other) => true,
         // A record contract is disjoint from any non-Record kind.
@@ -243,7 +259,13 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
         Geo { b, r } => {
             vec![interner.number(b.clone()), interner.number(b.clone() * r.clone())]
         }
-        Indeterminate(f) => vec![interner.indeterminate(*f)],
+        Indeterminate(form) => [0, 1, -1]
+            .into_iter()
+            .map(|n| match form {
+                IndeterminateFormTag::DivZero => interner.div_zero(Rational::from(n)),
+                IndeterminateFormTag::ModZero => interner.mod_zero(Rational::from(n)),
+            })
+            .collect(),
         // A Concat sample is the concatenation of one sample per segment.
         Concat(segs) => {
             let mut items: Vec<ValueRef> = Vec::new();

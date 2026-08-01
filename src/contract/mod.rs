@@ -18,7 +18,7 @@ use num_traits::Zero;
 use crate::interner::Interner;
 use crate::oracle::values_equal;
 use crate::rational::Rational;
-use crate::value::{ValueData, ValueRef};
+use crate::value::{IndeterminateFormTag, ValueData, ValueRef};
 
 mod expr;
 pub mod grapheme;
@@ -43,7 +43,8 @@ pub fn disjoint(a: &Contract, b: &Contract) -> bool {
 mod tests;
 
 /// The seven value kinds a `Kind` contract can name (C§4). Indeterminate values
-/// are matched by [`Contract::Indeterminate`], not by a `Kind`.
+/// are matched by [`Contract::Indeterminate`], not by a `Kind`; `Numeric` is a
+/// contract union, not an eighth kind.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Kind {
     Number,
@@ -86,6 +87,22 @@ impl Contract {
 
     pub fn difference(a: Contract, b: Contract, i: &mut Interner) -> Contract {
         Contract::Difference(i.contract(a), i.contract(b))
+    }
+
+    /// Every currently admitted unresolved-arithmetic form.
+    pub fn indeterminate(i: &mut Interner) -> Contract {
+        Contract::union(
+            Contract::Indeterminate(IndeterminateFormTag::DivZero),
+            Contract::Indeterminate(IndeterminateFormTag::ModZero),
+            i,
+        )
+    }
+
+    /// The ruled `Numeric` umbrella: ordinary Numbers plus every Indeterminate.
+    /// This is deliberately a union, never a `Kind`.
+    pub fn numeric(i: &mut Interner) -> Contract {
+        let indeterminate = Contract::indeterminate(i);
+        Contract::union(Contract::Kind(Kind::Number), indeterminate, i)
     }
 
     /// `NotEquals(v) ≡ Difference(Top, Equals(v))` (C§6) — the sole negative form, spelled
@@ -154,8 +171,10 @@ pub enum Contract {
     /// segment is uninhabited (erasing an uninhabited segment would turn an empty
     /// contract into an inhabited one).
     Concat(Vec<CRef>),
-    /// An Indeterminate value of a given form.
-    Indeterminate(crate::value::IndetForm),
+    /// Every Indeterminate value with the named unresolved-operation form. The
+    /// operand remains part of concrete value identity; this contract projects
+    /// only the form tag (`Indeterminate(F)` in C§4).
+    Indeterminate(IndeterminateFormTag),
     /// A late-bound reference to a named contract in the ambient recursive group
     /// (C§9). Meaningful only relative to a [`recursive::RecGroup`]; bare, it
     /// denotes nothing (`contains` is `false`) — recursive code resolves it first.
@@ -204,7 +223,7 @@ impl Contract {
 
     /// The contract's abstraction into the **finite Kind basis** — a *total* widening
     /// (`self ⊑ kind_abstraction(self)` always) whose range is the seven `Kind`s plus
-    /// `Top`/`Bottom`/`Indeterminate`. Unlike [`Contract::generalize`] (which only widens
+    /// `Top`/`Bottom`/`Indeterminate(F)`. Unlike [`Contract::generalize`] (which only widens
     /// singletons) this is defined on every form, so iterating it reaches a fixed point
     /// in one step — the property that bounds the analyzer's recursive state universe
     /// when a *computed* domain escapes the program's finite literal vocabulary
@@ -213,7 +232,10 @@ impl Contract {
     pub fn kind_abstraction(&self) -> Contract {
         let num = Contract::Kind(Kind::Number);
         match self {
-            Contract::Top | Contract::Bottom | Contract::Kind(_) | Contract::Indeterminate(_) => self.clone(),
+            Contract::Top
+            | Contract::Bottom
+            | Contract::Kind(_)
+            | Contract::Indeterminate(_) => self.clone(),
             Contract::Equals(v) => value_kind(v).map(Contract::Kind).unwrap_or_else(|| self.clone()),
             Contract::Range(..)
             | Contract::Greater(_)
@@ -348,7 +370,9 @@ impl Contract {
                 Some(items) => concat_matches(segs, items),
                 None => false,
             },
-            Contract::Indeterminate(f) => v.as_indeterminate() == Some(*f),
+            Contract::Indeterminate(form) => {
+                v.as_indeterminate().is_some_and(|value| value.tag() == *form)
+            }
             // A bare reference has no ambient group to resolve against; recursive
             // membership goes through `recursive::contains`.
             Contract::Ref(_) => false,

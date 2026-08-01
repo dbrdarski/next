@@ -22,23 +22,33 @@ complete named-contract environment as a canonical interned key argument, and bo
 regression-tested. This was an **incomplete pure-memoization key**, not a mutable-cache or
 cache-lifetime problem. Clearing the memo between compilations only hid the missing dependency.
 
-Other measured P0 implementation drift, to be recovered in authority order:
+The second repair is also complete under the 2026-08-01 Part XII ruling. Runtime unresolved
+arithmetic is represented as `Indeterminate(DivZero(a))` or `Indeterminate(ModZero(a))`, with the
+form tag and canonical Number operand together forming the interning key. Thus `1/0 != 2/0`,
+`(2-1)/0 == 1/0`, and `1/0 != 1%0` by ordinary pointer equality. `Numeric` is the contract union
+`Number ∪ Indeterminate` (not a `Kind`), while form-sensitive contracts retain the distinction
+between `DivZero` and `ModZero`. Division and remainder transfer add only their own form when a zero
+divisor is possible. `Indeterminate` and `Numeric` work as source contract patterns; `ZeroDen` has
+been removed and is not an alias. Arithmetic/ordering that consumes either form traps/rejects as
+undischarged until its algebra is ruled. Removing fake arithmetic propagation also exposed and
+closed a fact-graph leak: an unresolved cutoff dependency can no longer be recursively proved by the
+quarantined body summary or upgraded from graph-`Unproven` during diagnostic rechecking.
+
+Remaining measured P0 implementation drift, to be recovered in authority order:
 
 1. `--check` asks only the demands created by `where`; executable top-level statements are not checked.
 2. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
-3. Runtime division still constructs the old generic `_ / 0` form. The 2026-07-27 ruling requires
-   specific `a/0` identity and the umbrella `Numeric = Number ∪ ZeroDen` contract.
-4. Recursive application is still wired through the quarantined `bodycheck` path even though the fact
+3. Recursive application is still wired through the quarantined `bodycheck` path even though the fact
    graph exists.
-5. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
+4. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
    remaining typed verdicts until policy is applied.
-6. The repository-wide formatting gate is red (8,602 diff lines on 2026-08-01).
+5. The repository-wide formatting gate is red (8,602 diff lines on 2026-08-01).
 
-**Recovery order:** complete and test the memo key; restore the ruled oracle/value semantics; add typed
-program demands (including executable statements); wire ordinary application to settled facts and retire
-the quarantined checker; only then advance Phase A. Normative files remain manifest-protected and are not
-edited by these implementation slices.
+**Recovery order:** memo-key completeness and ruled Indeterminate-form/Numeric semantics are complete.
+Next, add typed program demands (including executable statements); then wire ordinary application to
+settled facts and retire the quarantined checker; only then advance Phase A. Normative files remain
+manifest-protected and are not edited by these implementation slices.
 
 ---
 
@@ -64,7 +74,7 @@ noted so no one implements a phantom; correcting them is an author/design action
 |---|---|---|
 | region-table §6 / §11 | describes a "separate, deliberately small specification" deriving `InferredAcceptedDomain` | **Dissolved** by the 2026-07-24 erratum (compendium Appendix M): no accepted-domain object exists |
 | region-table header | title says patch 0.3.1; body describes 0.3.2 | body is the later text |
-| compendium C§7 | generic `x/0 → Indeterminate(_/0)` marker model | the later manifest-governed ruling (`HANDOVER-indeterminate-…-2026-07-24.md` Part XI, 2026-07-27) adopts specific `a/0` identity + the umbrella `Numeric` contract. The core text is stale; the ruling is settled and implementation drift must follow it |
+| compendium C§7 | generic `x/0 → Indeterminate(_/0)` marker model | the later manifest-governed rulings (`HANDOVER-indeterminate-…-2026-07-24.md` Parts XI–XII, 2026-07-27/2026-08-01) adopt specific `Indeterminate(DivZero(a))` / `Indeterminate(ModZero(a))` identity and `Numeric = Number ∪ Indeterminate`. The core text is stale; the ruling is settled and implementation drift must follow it |
 | grounding v0.5 header | "DRAFT … nothing herein is closed until stamped" | compendium 1.0.18 records it DESIGN-CLOSED; the stamp record itself is **not present** — author-owned |
 
 ---

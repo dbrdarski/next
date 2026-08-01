@@ -8,10 +8,10 @@
 //! never trap" becomes the executable soundness claim.
 //!
 //! This module currently covers the pure fragment: constants, references (late
-//! binding), primitive operations (exact rationals, total division via
-//! Indeterminate), construction, access, templates, `Match` (the sole control
-//! node), and pure application. Worlds, mutator staging, and effects arrive next
-//! (build-order step 3c).
+//! binding), primitive operations (exact rationals, total division/remainder via
+//! specific Indeterminate forms), construction, access, templates, `Match` (the sole
+//! control node), and pure application. Worlds, mutator staging, and effects arrive
+//! next (build-order step 3c).
 
 use std::collections::HashMap;
 
@@ -23,7 +23,7 @@ use crate::ast::*;
 use crate::env::{Binding, Env, Scope, SlotId};
 use crate::interner::Interner;
 use crate::rational::Rational;
-use crate::value::{Closure, FnValue, IndetForm, ValueData, ValueRef};
+use crate::value::{Closure, FnValue, ValueData, ValueRef};
 
 mod canon;
 mod equal;

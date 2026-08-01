@@ -68,6 +68,8 @@ fn ref_contract(name: &str, env: &ContractEnv, i: &mut Interner) -> Option<Contr
         "Tuple" => Contract::Kind(Kind::Tuple),
         "Record" => Contract::Kind(Kind::Record),
         "Function" => Contract::Kind(Kind::Function),
+        "Indeterminate" => Contract::indeterminate(i),
+        "Numeric" => Contract::numeric(i),
         "Top" => Contract::Top,
         "Bottom" => Contract::Bottom,
         // The one prelude Failure shape (B6/E9): a record with `path` and `reason`.

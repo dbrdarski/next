@@ -25,9 +25,9 @@
 //! but ~all of those arms say the same thing, because the numeric forms are
 //! projections onto two facets. So:
 //!
-//! 1. **Algebraic plumbing, uniform across every operation** — `Indeterminate`
-//!    propagation ([`with_indet_passthrough`]) and the total-division forms. Handled
-//!    once, for all ops.
+//! 1. **Algebraic plumbing, uniform across every operation** — strict Number
+//!    demands and the `Numeric = Number ∪ Indeterminate` output of total
+//!    division/remainder.
 //! 2. **Exact fold** — all-singleton operands run through the oracle itself
 //!    (`analyzer`'s constant-fold path), so exactness costs nothing here.
 //! 3. **The leaf rules** ([`base_output`]) — ordered *specific → general* per
@@ -70,7 +70,7 @@ use crate::ast::PrimOp;
 use crate::interner::Interner;
 use crate::oracle::eval_prim;
 use crate::rational::Rational;
-use crate::value::{IndetForm, ValueRef};
+use crate::value::{IndeterminateFormTag, ValueRef};
 
 /// The operation-safety verdict — a subcontract carrying an *n-ary* witness.
 #[derive(Clone, Debug)]
@@ -113,56 +113,41 @@ fn analyze_safety(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> O
 /// The complete safety-demand table (C§7), read off the oracle's `apply_prim`.
 /// Sound: `true` only when *no* operand tuple can trap.
 ///
-/// **The Indeterminate rule is the load-bearing subtlety.** `apply_prim` checks for an
-/// Indeterminate operand **first**: an *arithmetic* op propagates it unchanged and
-/// never traps, while an *ordering comparison* traps `UndischargedIndeterminate`.
-/// So arithmetic's operand demand is `Number ∪ Indeterminate`, not `Number` —
-/// `Indeterminate + 1` is provably **safe**, and reading it as merely unproven (as
-/// this table previously did) understated what the analyzer knows.
+/// Indeterminate values are ordinary values for equality and matching, but their
+/// algebra is still open. Every arithmetic or ordering operation is therefore a
+/// strict `Number` seat: admitting one would be unsound because the oracle traps
+/// `UndischargedIndeterminate`. Division/remainder of two proven Numbers remain
+/// total; a zero divisor constructs a specific Indeterminate form.
 fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bool {
     let sub = |a: &Contract, b: &Contract, i: &mut Interner| {
         matches!(subcontract(a, b, i), Verdict::Proven)
     };
-    // The operand kinds arithmetic tolerates: a Number, or any Indeterminate (which
-    // short-circuits the whole operation to itself).
-    let any_indet = any_indeterminate(interner);
-    let arith_operand = |c: &Contract, i: &mut Interner| {
-        sub(c, &Contract::Kind(Kind::Number), i) || sub(c, &any_indet, i)
-    };
-    // An operand that provably *is* an Indeterminate makes an arithmetic op total
-    // regardless of what the other operand is (it never gets evaluated numerically).
-    let short_circuits = |c: &Contract, i: &mut Interner| sub(c, &any_indet, i);
+    let number = Contract::Kind(Kind::Number);
+    let is_number = |c: &Contract, i: &mut Interner| sub(c, &number, i);
 
     match op {
         // `==`/`!=` accept any values and never trap.
         PrimOp::Eq | PrimOp::Ne => true,
 
         PrimOp::Neg => match inputs {
-            [a] => arith_operand(a, interner),
+            [a] => is_number(a, interner),
             _ => false,
         },
 
-        // `+` is numeric addition or String concatenation; either operand being
-        // Indeterminate short-circuits it.
+        // `+` is numeric addition or String concatenation.
         PrimOp::Add => match inputs {
             [a, b] => {
                 let string = Contract::Kind(Kind::String);
-                short_circuits(a, interner)
-                    || short_circuits(b, interner)
-                    || (arith_operand(a, interner) && arith_operand(b, interner))
+                (is_number(a, interner) && is_number(b, interner))
                     || (sub(a, &string, interner) && sub(b, &string, interner))
             }
             _ => false,
         },
 
-        // `-` `*` `/` `%` are arithmetic. Division stays **total** (a zero divisor
-        // yields an Indeterminate, not a trap), so it threatens no safety demand.
+        // `-` `*` `/` `%` require Number operands. Division/remainder stay total
+        // within that domain: a zero divisor constructs an Indeterminate.
         PrimOp::Sub | PrimOp::Mul | PrimOp::Div | PrimOp::Rem => match inputs {
-            [a, b] => {
-                short_circuits(a, interner)
-                    || short_circuits(b, interner)
-                    || (arith_operand(a, interner) && arith_operand(b, interner))
-            }
+            [a, b] => is_number(a, interner) && is_number(b, interner),
             _ => false,
         },
 
@@ -170,8 +155,7 @@ fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bo
         // operand traps (`UndischargedIndeterminate`), so it is *not* admitted here.
         PrimOp::Lt | PrimOp::Le | PrimOp::Gt | PrimOp::Ge => match inputs {
             [a, b] => {
-                let num = Contract::Kind(Kind::Number);
-                sub(a, &num, interner) && sub(b, &num, interner)
+                is_number(a, interner) && is_number(b, interner)
             }
             _ => false,
         },
@@ -180,25 +164,13 @@ fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bo
         // negative power.
         PrimOp::Pow => match inputs {
             [a, b] => {
-                if short_circuits(a, interner) || short_circuits(b, interner) {
-                    return true;
-                }
-                arith_operand(a, interner)
+                is_number(a, interner)
                     && sub(b, &integers(), interner)
                     && (nonzero(a, interner) || sub(b, &Contract::GreaterEq(Rational::from(0)), interner))
             }
             _ => false,
         },
     }
-}
-
-/// Either Indeterminate form — the operand set arithmetic short-circuits on.
-fn any_indeterminate(i: &mut Interner) -> Contract {
-    Contract::union(
-        Contract::Indeterminate(IndetForm::DivByZero),
-        Contract::Indeterminate(IndetForm::ZeroOverZero),
-        i,
-    )
 }
 
 /// Sound: `true` only when `0 ∉ ⟦c⟧`.
@@ -263,36 +235,11 @@ fn find_trap(
 // ── Output (image over-approximation) ────────────────────────────────────────
 
 fn analyze_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Contract {
-    let base = base_output(op, inputs, interner);
-    // Arithmetic passes an Indeterminate operand through unchanged (the oracle's
-    // arith-Indeterminate rule), so if any operand can be Indeterminate the image
-    // includes that form.
-    if is_arith(op) {
-        return with_indet_passthrough(inputs, base, interner);
-    }
-    base
-}
-
-fn is_arith(op: PrimOp) -> bool {
-    matches!(
-        op,
-        PrimOp::Add | PrimOp::Sub | PrimOp::Mul | PrimOp::Div | PrimOp::Rem | PrimOp::Pow | PrimOp::Neg
-    )
-}
-
-fn with_indet_passthrough(inputs: &[Contract], out: Contract, interner: &mut Interner) -> Contract {
-    let mut result = out;
-    for form in [IndetForm::DivByZero, IndetForm::ZeroOverZero] {
-        let iv = interner.indeterminate(form);
-        if inputs.iter().any(|c| c.contains(&iv)) {
-            result = Contract::union(result, Contract::Indeterminate(form), interner);
-        }
-    }
-    result
+    base_output(op, inputs, interner)
 }
 
 /// The **leaf** image rules (Layer 3) — every operand here is already free of
-/// `Union`/`Bottom`/`Indeterminate` (Layer 1 handled those). Ordered specific →
+/// `Union`/`Bottom` (Layer 1 handled those). Ordered specific →
 /// general per operation: a form-preserving rule gets first refusal, and the numeric
 /// abstraction is the total fallback.
 fn base_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Contract {
@@ -318,8 +265,8 @@ fn base_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Cont
             _ => Contract::Kind(Kind::Number),
         },
         PrimOp::Div | PrimOp::Rem => match inputs {
-            // Division/remainder are **total**: a possibly-zero divisor yields an
-            // Indeterminate rather than trapping, so the image gains those forms.
+            // Division/remainder are total over Number operands: a possibly-zero
+            // divisor means the image is Numeric rather than strictly Number.
             [a, b] => {
                 let numeric_part = match (num_abs(a), num_abs(b)) {
                     (Some(x), Some(y)) => {
@@ -332,7 +279,7 @@ fn base_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Cont
                     }
                     _ => Contract::Kind(Kind::Number),
                 };
-                with_zero_divisor_forms(a, b, numeric_part, interner)
+                with_zero_divisor_form(op, b, numeric_part, interner)
             }
             _ => Contract::Kind(Kind::Number),
         },
@@ -407,10 +354,12 @@ fn string_or_mixed(a: &Contract, b: &Contract, interner: &mut Interner) -> Contr
     }
 }
 
-/// `/` and `%` are total: when `0` is possible in the divisor the image gains the
-/// Indeterminate forms (`0/0` only when the dividend may also be zero).
-fn with_zero_divisor_forms(
-    a: &Contract,
+/// `/` and `%` are total over Numbers: when `0` is possible in the divisor the
+/// image gains the operation's Indeterminate form. Exact operands are
+/// constant-folded by the analyzer, so this form contract is the sound
+/// non-singleton approximation over every retained operand.
+fn with_zero_divisor_form(
+    op: PrimOp,
     b: &Contract,
     numeric_part: Contract,
     interner: &mut Interner,
@@ -419,15 +368,12 @@ fn with_zero_divisor_forms(
     if !b.contains(&zero) {
         return numeric_part;
     }
-    let mut out = numeric_part;
-    if a.contains(&zero) {
-        out = Contract::union(
-            out,
-            Contract::Indeterminate(IndetForm::ZeroOverZero),
-            interner,
-        );
-    }
-    Contract::union(out, Contract::Indeterminate(IndetForm::DivByZero), interner)
+    let form = match op {
+        PrimOp::Div => IndeterminateFormTag::DivZero,
+        PrimOp::Rem => IndeterminateFormTag::ModZero,
+        _ => unreachable!("zero-divisor forms exist only for division and remainder"),
+    };
+    Contract::union(numeric_part, Contract::Indeterminate(form), interner)
 }
 
 /// An ordering comparison whose operands' bounds settle it — `Range(0,5) < GreaterEq(10)`
@@ -459,7 +405,4 @@ fn decide_equality(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Intern
 fn is_str(c: &Contract, interner: &mut Interner) -> bool {
     matches!(subcontract(c, &Contract::Kind(Kind::String), interner), Verdict::Proven)
 }
-
-
-
 

@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::*;
-use crate::value::{ValueData, ValueRef};
+use crate::value::{IndeterminateForm, ValueData, ValueRef};
 
 /// Content-based serialization of a constant value — stable across interners (so
 /// canonical codes from different programs compare equal). Desugared `Const`s are
@@ -41,7 +41,12 @@ fn const_repr(v: &ValueRef) -> String {
         ValueData::Boolean(b) => format!("B{b}"),
         ValueData::Null => "Z".to_string(),
         ValueData::Str(u) => format!("S{:?}", String::from_utf16_lossy(u)),
-        ValueData::Indeterminate(f) => format!("I{}", f.label()),
+        ValueData::Indeterminate(IndeterminateForm::DivZero(operand)) => {
+            format!("ID({})", const_repr(operand))
+        }
+        ValueData::Indeterminate(IndeterminateForm::ModZero(operand)) => {
+            format!("IM({})", const_repr(operand))
+        }
         ValueData::Tuple(items) => {
             format!("T[{}]", items.iter().map(const_repr).collect::<Vec<_>>().join(","))
         }
