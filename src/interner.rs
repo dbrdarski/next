@@ -6,10 +6,11 @@
 //! hit, or installs a fresh one on a miss. Because children are already
 //! canonical, this is exact structural deduplication.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::Lambda;
 use crate::contract::Contract;
+use crate::env::{Binding, SlotId};
 use crate::intern::{EnumInterner, Interned};
 use crate::rational::Rational;
 use crate::value::{
@@ -21,12 +22,35 @@ use crate::value::{
 #[derive(Default)]
 pub struct Interner {
     table: HashMap<ValueData, ValueRef>,
+    /// Resolved closure construction key: canonical code plus canonical capture
+    /// pointers/location atoms. This is the acyclic shallow fast path from μ §6.
+    function_keys: HashMap<FunctionKey, ValueRef>,
+    /// Coarse fingerprint buckets used when a just-closed recursive graph has a
+    /// different provisional capture-pointer key. A bucket hit is verified by
+    /// exact value-graph bisimulation before reuse; the fingerprint alone never
+    /// establishes equality.
+    function_buckets: HashMap<usize, Vec<ValueRef>>,
+    /// Provisional construction handles that collapsed when their graph closed.
+    /// Constructor inputs are normalized through this map before hash-consing.
+    redirects: HashMap<usize, ValueRef>,
     /// Hash-consing for the tagged data the implementation is built from — canonical
     /// function code and contracts today, NEXT's enum values when that feature lands
     /// (author ruling 2026-08-01: NEXT enums map to Rust enums directly, so one mechanism
     /// serves both). These are not NEXT values, so they cannot live in `table`; they need
     /// the same treatment for the same reason — identity must be a pointer test.
     enums: EnumInterner,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct FunctionKey {
+    shape: usize,
+    captures: Vec<FunctionCapture>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum FunctionCapture {
+    Value(ValueRef),
+    Location(SlotId),
 }
 
 impl Interner {
@@ -129,6 +153,7 @@ impl Interner {
 
     /// Intern a tuple from already-interned elements (order preserved).
     pub fn tuple(&mut self, items: Vec<ValueRef>) -> ValueRef {
+        let items = items.into_iter().map(|item| self.canonical_ref(item)).collect();
         self.intern(ValueData::Tuple(items))
     }
 
@@ -138,6 +163,7 @@ impl Interner {
     pub fn record(&mut self, fields: Vec<(Vec<u16>, ValueRef)>) -> ValueRef {
         let mut entries: Vec<RecordEntry> = Vec::with_capacity(fields.len());
         for (key, value) in fields {
+            let value = self.canonical_ref(value);
             match entries.iter_mut().find(|e| e.key == key) {
                 Some(e) => e.value = value, // later-wins
                 None => entries.push(RecordEntry { key, value }),
@@ -158,11 +184,125 @@ impl Interner {
     }
 
     pub fn function(&mut self, f: FnValue) -> ValueRef {
-        self.intern(ValueData::Function(f))
+        let value = self.intern(ValueData::Function(f));
+        self.close_function(value)
     }
 
     pub fn native(&mut self, native: NativeRef) -> ValueRef {
         self.intern(ValueData::Native(native))
+    }
+
+    /// Whether every edge reachable from `value` is resolved. A revisit is a
+    /// rational-graph back-edge and therefore closed; an `Open`, `UnderInit`, or
+    /// absent capture is not.
+    pub(crate) fn value_is_closed(&self, value: &ValueRef) -> bool {
+        fn visit(value: &ValueRef, seen: &mut HashSet<usize>) -> bool {
+            if !seen.insert(value.addr()) {
+                return true;
+            }
+            match value.data() {
+                ValueData::Function(function) => function.free_vars().iter().all(|name| {
+                    match function.closure().env.lookup(name) {
+                        Some(Binding::Value(capture)) => visit(&capture, seen),
+                        Some(Binding::Slot(_)) => true,
+                        Some(Binding::Open(_)) | Some(Binding::UnderInit) | None => false,
+                    }
+                }),
+                ValueData::Tuple(items) => items.iter().all(|item| visit(item, seen)),
+                ValueData::Record(fields) => fields.iter().all(|field| visit(&field.value, seen)),
+                _ => true,
+            }
+        }
+
+        visit(value, &mut HashSet::new())
+    }
+
+    /// Close a finite stored value graph bottom-up. Cycles pass through closure
+    /// environments, so stored tuple/record edges remain acyclic; recursive
+    /// closure equality is settled inside [`close_function`].
+    pub(crate) fn close_value_graph(&mut self, value: ValueRef) -> ValueRef {
+        let value = self.canonical_ref(value);
+        let closed = match value.data() {
+            ValueData::Function(_) => self.close_function(value.clone()),
+            ValueData::Tuple(items) => {
+                let items = items.clone();
+                let closed = items.into_iter().map(|item| self.close_value_graph(item)).collect();
+                self.tuple(closed)
+            }
+            ValueData::Record(fields) => {
+                let fields = fields.clone();
+                let closed = fields
+                    .into_iter()
+                    .map(|field| (field.key, self.close_value_graph(field.value)))
+                    .collect();
+                self.record(closed)
+            }
+            _ => value.clone(),
+        };
+        if !value.ptr_eq(&closed) {
+            self.redirects.insert(value.addr(), closed.clone());
+        }
+        closed
+    }
+
+    fn close_function(&mut self, value: ValueRef) -> ValueRef {
+        let Some(function) = value.as_fn() else {
+            return value;
+        };
+        let Some(key) = self.function_key(function) else {
+            return value;
+        };
+        if let Some(existing) = self.function_keys.get(&key) {
+            let existing = existing.clone();
+            if !value.ptr_eq(&existing) {
+                self.redirects.insert(value.addr(), existing.clone());
+            }
+            return existing;
+        }
+
+        let fingerprint = key.shape;
+        let candidates = self.function_buckets.get(&fingerprint).cloned().unwrap_or_default();
+        if let Some(existing) = candidates
+            .into_iter()
+            .find(|existing| crate::oracle::equal::canonical_graphs_equal(&value, existing))
+        {
+            self.function_keys.insert(key, existing.clone());
+            if !value.ptr_eq(&existing) {
+                self.redirects.insert(value.addr(), existing.clone());
+            }
+            return existing;
+        }
+
+        self.function_keys.insert(key, value.clone());
+        self.function_buckets.entry(fingerprint).or_default().push(value.clone());
+        value
+    }
+
+    fn function_key(&self, function: &FnValue) -> Option<FunctionKey> {
+        let mut captures = Vec::with_capacity(function.free_vars().len());
+        for name in function.free_vars() {
+            let capture = match function.closure().env.lookup(name)? {
+                Binding::Value(value) => FunctionCapture::Value(self.canonical_ref(value)),
+                Binding::Slot(slot) => FunctionCapture::Location(slot),
+                Binding::Open(_) | Binding::UnderInit => return None,
+            };
+            captures.push(capture);
+        }
+        Some(FunctionKey {
+            shape: function.shape_rc().as_ptr() as usize,
+            captures,
+        })
+    }
+
+    fn canonical_ref(&self, mut value: ValueRef) -> ValueRef {
+        let mut seen = HashSet::new();
+        while let Some(next) = self.redirects.get(&value.addr()) {
+            if !seen.insert(value.addr()) {
+                break;
+            }
+            value = next.clone();
+        }
+        value
     }
 }
 

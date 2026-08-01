@@ -1,24 +1,8 @@
-//! Value equality — Algorithm B (μ-Canonicalization Spec **v0.5**, where it is
-//! rescoped as *canonicalization-internal*; see the architecture note below).
+//! Function/value identity support (μ-Canonicalization Specification v0.5 §7).
 //!
-//! `==` on values is a **bisimulation over value graphs** with a visited-pair
-//! set: node labels are canonical-code (shape) and atom labels; children are
-//! compared positionally; a **revisited pair is assumed equal** (the coinductive
-//! step that terminates `y == z` and makes `a == y` true).
-//!
-//! Data `==` stays a pure pointer test (interned values): only comparisons that
-//! transitively involve a function ever walk. Locations are **nominal** atoms
-//! (binding identity) — same-body closures over distinct slots stay distinct.
-//!
-//! **Architecture note (known interim deviation, logged in DECISIONS):** μ v0.5 §6
-//! rules *universal interning* — closures intern shallowly (key = canonical-code
-//! pointer + capture pointers) and runtime `==` is a pointer test, with Algorithm B
-//! running only inside the canonicalizer. This module instead runs Algorithm B at
-//! compare time over plainly-allocated closures. The two agree on every `==`
-//! *result* (bisimulation equality coincides with canonical-form pointer equality);
-//! they differ only in harness-level pointer observability for functions. The
-//! re-architecture lands with the §5 canonicalizer wiring (suite register
-//! PENDING-§5).
+//! Runtime [`values_equal`] is universally a pointer test. Algorithm B lives in
+//! [`canonical_graphs_equal`] only: the function interner uses it to verify a
+//! recursive fingerprint-bucket candidate before reusing the candidate pointer.
 
 use std::collections::HashSet;
 
@@ -27,6 +11,12 @@ use crate::value::{FnValue, ValueData, ValueRef};
 
 /// Whether two values are equal (the language's `==`).
 pub fn values_equal(a: &ValueRef, b: &ValueRef) -> bool {
+    a.ptr_eq(b)
+}
+
+/// Algorithm B — exact bisimulation over provisional/closed value graphs. This
+/// is canonicalization- and conformance-internal; language `==` never calls it.
+pub(crate) fn canonical_graphs_equal(a: &ValueRef, b: &ValueRef) -> bool {
     let mut visited: HashSet<(usize, usize)> = HashSet::new();
     equal(a, b, &mut visited)
 }
@@ -92,6 +82,7 @@ fn capture_equal(
 ) -> bool {
     match (f.closure().env.lookup(fname), g.closure().env.lookup(gname)) {
         (Some(Binding::Value(fv)), Some(Binding::Value(gv))) => equal(&fv, &gv, visited),
+        (Some(Binding::Open(_)), _) | (_, Some(Binding::Open(_))) => false,
         // Locations are nominal (fork 13 split rule): equal iff the same slot.
         (Some(Binding::Slot(fs)), Some(Binding::Slot(gs))) => fs == gs,
         // Open-value edge (§4C): a still-unresolved capture compares as its
@@ -145,6 +136,7 @@ mod tests {
                         (Some(Binding::Value(fv)), Some(Binding::Value(gv))) => {
                             equal_unfold(&fv, &gv, depth - 1)
                         }
+                        (Some(Binding::Open(_)), _) | (_, Some(Binding::Open(_))) => false,
                         (Some(Binding::Slot(fs)), Some(Binding::Slot(gs))) => fs == gs,
                         (Some(Binding::UnderInit), Some(Binding::UnderInit)) | (None, None) => {
                             fname == gname
@@ -186,7 +178,7 @@ mod tests {
         for src in cases {
             let (a, b) = pair(src);
             assert_eq!(
-                values_equal(&a, &b),
+                canonical_graphs_equal(&a, &b),
                 equal_unfold(&a, &b, 30),
                 "B disagrees with bounded unfolding for:\n{src}",
             );

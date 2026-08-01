@@ -26,7 +26,7 @@ use crate::rational::Rational;
 use crate::value::{Closure, FnValue, ValueData, ValueRef};
 
 mod canon;
-mod equal;
+pub(crate) mod equal;
 mod eval;
 pub mod harness;
 mod mtch;
@@ -138,6 +138,13 @@ pub struct Oracle<'a> {
     out_of_fuel: bool,
     call_depth: u32,
     max_call_depth: Option<u32>,
+    pending_values: Vec<PendingValue>,
+}
+
+struct PendingValue {
+    name: String,
+    env: Env,
+    value: ValueRef,
 }
 
 /// The recursion-depth bound for a fueled run. A loop-free functional program can only
@@ -157,6 +164,7 @@ impl<'a> Oracle<'a> {
             out_of_fuel: false,
             call_depth: 0,
             max_call_depth: None,
+            pending_values: Vec::new(),
         }
     }
 
@@ -171,6 +179,7 @@ impl<'a> Oracle<'a> {
             out_of_fuel: false,
             call_depth: 0,
             max_call_depth: Some(FUELED_MAX_CALL_DEPTH),
+            pending_values: Vec::new(),
         }
     }
 

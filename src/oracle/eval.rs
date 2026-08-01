@@ -1,6 +1,7 @@
 //! Per-node evaluation rules (Semantics Companion §3).
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use super::canon;
 use super::*;
@@ -98,10 +99,25 @@ impl<'a> Oracle<'a> {
     /// As [`run_module`], but in a caller-supplied environment (so the harness can
     /// pre-install host effects / prelude bindings).
     pub fn run_module_in(&mut self, module: &Module, env: &Env) -> Result<ValueRef, Trap> {
+        let groups = module_group_windows(module);
         let mut last = None;
-        for item in &module.items {
-            last = self.eval_item(item, env, World::Effect)?;
+        for (index, item) in module.items.iter().enumerate() {
+            for group in groups.iter().filter(|group| group.start == index) {
+                self.begin_group(group, env);
+            }
+            last = if groups
+                .iter()
+                .any(|group| group.members.iter().any(|(member, _)| *member == index))
+            {
+                self.eval_open_item(item, env, World::Effect)?
+            } else {
+                self.eval_item(item, env, World::Effect)?
+            };
+            for group in groups.iter().filter(|group| group.end == index).rev() {
+                self.close_group(group, env)?;
+            }
         }
+        self.ensure_scope_closed(env)?;
         // An entry program need not end in a value (it may end in an effect
         // statement); report null in that case.
         Ok(last.unwrap_or_else(|| self.interner.null()))
@@ -118,11 +134,12 @@ impl<'a> Oracle<'a> {
                 let init = self.eval_value(&s.init, env, World::Pure)?;
                 let slot = self.store.alloc(init);
                 env.define(&s.name, Binding::Slot(slot));
+                self.retry_pending_values();
                 Ok(None)
             }
             Item::ActBind(ab) => {
                 let closure = self.make_closure(&ab.lambda, env);
-                env.define(&ab.name, Binding::Value(closure));
+                self.finish_binding(&ab.name, closure, env);
                 Ok(None)
             }
             Item::Stmt(e) => match self.eval(e, env, world)? {
@@ -133,6 +150,33 @@ impl<'a> Oracle<'a> {
         }
     }
 
+    /// Evaluate one member of a recursive construction group without exposing
+    /// the provisional graph as a value. Observation remains illegal because
+    /// ordinary references to `Binding::Open` trap until [`close_group`].
+    fn eval_open_item(&mut self, item: &Item, env: &Env, world: World) -> Result<Option<ValueRef>, Trap> {
+        match item {
+            Item::Bind(binding @ Bind { target: BindTarget::Name(_), .. }) => {
+                self.eval_open_bind(binding, env, world)?;
+                Ok(None)
+            }
+            Item::ActBind(ab) => {
+                let raw = self.make_closure(&ab.lambda, env);
+                env.define(&ab.name, Binding::Open(raw));
+                Ok(None)
+            }
+            _ => self.eval_item(item, env, world),
+        }
+    }
+
+    pub(super) fn eval_open_bind(&mut self, binding: &Bind, env: &Env, world: World) -> Result<(), Trap> {
+        let BindTarget::Name(name) = &binding.target else {
+            return self.eval_bind(binding, env, world);
+        };
+        let raw = self.eval_value(&binding.value, env, world)?;
+        env.define(name, Binding::Open(raw));
+        Ok(())
+    }
+
     /// A binding: mark the name under-initialization, evaluate, then bind. The
     /// under-init marker makes an eager self-reference (`x = x`) trap, while a
     /// lambda that refers to itself is fine (its body is not evaluated yet).
@@ -140,7 +184,7 @@ impl<'a> Oracle<'a> {
         if let BindTarget::Name(name) = &b.target {
             env.define(name, Binding::UnderInit);
             let v = self.eval_value(&b.value, env, world)?;
-            env.define(name, Binding::Value(v));
+            self.finish_binding(name, v, env);
             Ok(())
         } else {
             let v = self.eval_value(&b.value, env, world)?;
@@ -214,9 +258,9 @@ impl<'a> Oracle<'a> {
             Ref::Immutable(BindingRef::Name(name)) => match env.lookup(name) {
                 Some(Binding::Value(v)) => Ok(Outcome::Produced(v)),
                 Some(Binding::Slot(slot)) => Ok(Outcome::Produced(self.read_slot(slot))),
-                Some(Binding::UnderInit) => Self::trap(
+                Some(Binding::Open(_)) | Some(Binding::UnderInit) => Self::trap(
                     TrapClass::UnboundEvaluation,
-                    format!("`{name}` is referenced during its own initialization"),
+                    format!("`{name}` is observed before its construction window closes"),
                 ),
                 None => Self::trap(
                     TrapClass::UnboundEvaluation,
@@ -234,6 +278,95 @@ impl<'a> Oracle<'a> {
 
     fn make_closure(&mut self, lambda: &Lambda, env: &Env) -> ValueRef {
         make_closure_in(lambda, env, self.interner)
+    }
+
+    pub(super) fn begin_group(&self, group: &mu::GroupWindow, env: &Env) {
+        for (_, name) in &group.members {
+            env.define(name, Binding::UnderInit);
+        }
+    }
+
+    pub(super) fn close_group(&mut self, group: &mu::GroupWindow, env: &Env) -> Result<(), Trap> {
+        let mut roots = Vec::with_capacity(group.members.len());
+        for (_, name) in &group.members {
+            let value = match env.lookup(name) {
+                Some(Binding::Open(value)) | Some(Binding::Value(value)) => value,
+                _ => {
+                    return Self::trap(
+                        TrapClass::UnboundEvaluation,
+                        format!("recursive member `{name}` did not finish construction"),
+                    );
+                }
+            };
+            roots.push((name.clone(), value));
+        }
+
+        // Resolve every internal marker simultaneously before probing the
+        // interner. No member is observable between this promotion and the
+        // canonical rebinding below.
+        for (name, value) in &roots {
+            env.define(name, Binding::Value(value.clone()));
+        }
+        if roots
+            .iter()
+            .any(|(_, value)| !self.interner.value_is_closed(value))
+        {
+            for (name, value) in roots {
+                env.define(&name, Binding::Open(value));
+            }
+            return Self::trap(
+                TrapClass::UnboundEvaluation,
+                "a recursive construction window closed with an unresolved capture",
+            );
+        }
+        for (name, value) in roots {
+            let canonical = self.interner.close_value_graph(value);
+            env.define(&name, Binding::Value(canonical));
+        }
+        self.retry_pending_values();
+        Ok(())
+    }
+
+    fn finish_binding(&mut self, name: &str, value: ValueRef, env: &Env) {
+        if self.interner.value_is_closed(&value) {
+            let canonical = self.interner.close_value_graph(value);
+            env.define(name, Binding::Value(canonical));
+            self.retry_pending_values();
+        } else {
+            env.define(name, Binding::Open(value.clone()));
+            self.pending_values.push(PendingValue {
+                name: name.to_string(),
+                env: env.clone(),
+                value,
+            });
+        }
+    }
+
+    fn retry_pending_values(&mut self) {
+        while let Some(index) = self
+            .pending_values
+            .iter()
+            .position(|pending| self.interner.value_is_closed(&pending.value))
+        {
+            let pending = self.pending_values.remove(index);
+            pending.env.define(&pending.name, Binding::Value(pending.value.clone()));
+            let canonical = self.interner.close_value_graph(pending.value);
+            pending.env.define(&pending.name, Binding::Value(canonical));
+        }
+    }
+
+    pub(super) fn ensure_scope_closed(&self, env: &Env) -> Result<(), Trap> {
+        if self
+            .pending_values
+            .iter()
+            .any(|pending| Rc::ptr_eq(&pending.env, env))
+        {
+            return Self::trap(
+                TrapClass::UnboundEvaluation,
+                "an open value escaped its construction scope",
+            );
+        }
+        Ok(())
     }
 
     // ── Primitive operations (§3) ────────────────────────────────────────────
@@ -885,11 +1018,32 @@ fn push_escaped(out: &mut String, c: char) {
     }
 }
 
+fn module_group_windows(module: &Module) -> Vec<mu::GroupWindow> {
+    let bindings: Vec<(usize, String, Expr)> = module
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            Item::Bind(Bind { target: BindTarget::Name(name), value, .. }) => {
+                Some((index, name.clone(), value.clone()))
+            }
+            Item::ActBind(binding) => Some((
+                index,
+                binding.name.clone(),
+                Expr::Lambda(binding.lambda.clone()),
+            )),
+            _ => None,
+        })
+        .collect();
+    mu::group_windows(&bindings)
+}
+
 /// Build a closure value from a lambda and its defining environment.
 ///
-/// Compute the canonical shape (α + capture slots + polynomial NF); captures are resolved
-/// lazily at comparison time (algorithm B). Closures are plain allocations, never
-/// hash-consed.
+/// Compute the canonical shape (α + capture slots + polynomial NF). A closure
+/// whose captures are resolved takes the interner's shallow fast path
+/// immediately; an open closure receives a provisional construction handle and
+/// is canonicalized when its dependency/group window closes.
 ///
 /// Free-standing (rather than an `Oracle` method) because the **analyzer** needs closures
 /// too — `analyze_program` must reach a top-level function's value to verify its `where`

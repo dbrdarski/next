@@ -303,3 +303,30 @@ fn safety_discovery_uses_the_joint_application_operand() {
         "safety discovery restored the direct-captured-name-only callee resolver"
     );
 }
+
+/// Universal interning makes runtime equality a pointer test. Algorithm B may
+/// remain only as the interner's exact recursive-bucket verifier; routing
+/// language `==` through it would restore the split identity implementation.
+#[test]
+fn runtime_value_equality_is_pointer_only() {
+    let equality =
+        std::fs::read_to_string(root().join("src/oracle/equal.rs")).expect("readable equality");
+    let runtime = equality
+        .split_once("pub fn values_equal")
+        .expect("runtime equality exists")
+        .1
+        .split_once("pub(crate) fn canonical_graphs_equal")
+        .expect("canonicalization verifier follows runtime equality")
+        .0;
+    assert!(
+        has_ident(runtime, "ptr_eq") && !has_ident(runtime, "equal"),
+        "language value equality is no longer the universal pointer test"
+    );
+
+    let interner =
+        std::fs::read_to_string(root().join("src/interner.rs")).expect("readable interner");
+    assert!(
+        interner.contains("equal::canonical_graphs_equal"),
+        "the recursive interner no longer performs exact verification after its fingerprint probe"
+    );
+}

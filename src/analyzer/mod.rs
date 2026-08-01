@@ -327,7 +327,8 @@ pub(crate) fn analyze_in_world(
         }
         Expr::Write { slot, value } => analyze_write(slot, value, env, cenv, world, interner),
 
-        // Function construction still lacks its universal interning/contract path.
+        // A bare lambda expression has no first-class function contract here;
+        // enclosing source/program adapters construct and intern its closure.
         Expr::Lambda(_) => exact(Contract::Top),
     }
 }

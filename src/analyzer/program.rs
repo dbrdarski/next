@@ -455,6 +455,20 @@ fn collect(
             _ => {}
         }
     }
+
+    // Every sibling is now present in the shared late-binding scope. Close the
+    // captured graphs in a stable order so analyzer-created function values obey
+    // the same universal interning invariant as oracle-created values.
+    let mut names: Vec<String> = values.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let raw = values[&name].clone();
+        if interner.value_is_closed(&raw) {
+            let canonical = interner.close_value_graph(raw);
+            scope.define(&name, Binding::Value(canonical.clone()));
+            values.insert(name, canonical);
+        }
+    }
     (values, cenv, contract_names)
 }
 

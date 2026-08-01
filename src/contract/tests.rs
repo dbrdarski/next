@@ -557,11 +557,11 @@ fn operation_equality_agrees_with_oracle_for_equal_function_singletons() {
 
     assert!(
         crate::oracle::values_equal(&left, &right),
-        "the oracle's coinductive value equality recognizes the recursive functions"
+        "the oracle recognizes the canonical recursive-function pointer"
     );
     assert!(
-        !left.ptr_eq(&right),
-        "this regression remains meaningful until universal function interning lands"
+        left.ptr_eq(&right),
+        "closed equal recursive values must already be one canonical singleton"
     );
 
     let eq = analyze_operation(

@@ -16,9 +16,22 @@ impl<'a> Oracle<'a> {
         // Binds and statements accumulate in a shared frame; each arm tests in a
         // child of it so its bindings are dropped on a miss.
         let body_env = Scope::child(env);
-        for item in &m.items {
+        let groups = match_group_windows(m);
+        for (index, item) in m.items.iter().enumerate() {
+            for group in groups.iter().filter(|group| group.start == index) {
+                self.begin_group(group, &body_env);
+            }
             match item {
-                MatchItem::Bind(b) => self.eval_bind(b, &body_env, world)?,
+                MatchItem::Bind(b) => {
+                    if groups
+                        .iter()
+                        .any(|group| group.members.iter().any(|(member, _)| *member == index))
+                    {
+                        self.eval_open_bind(b, &body_env, world)?;
+                    } else {
+                        self.eval_bind(b, &body_env, world)?;
+                    }
+                }
                 MatchItem::Stmt(e) => {
                     self.eval(e, &body_env, world)?; // value discarded (goes-nowhere)
                 }
@@ -52,10 +65,24 @@ impl<'a> Oracle<'a> {
                         }
                     }
                     // The arm exits the node with its result's outcome.
+                    if groups
+                        .iter()
+                        .any(|group| group.start <= index && index < group.end)
+                    {
+                        return Self::trap(
+                            TrapClass::UnboundEvaluation,
+                            "a value escaped before its recursive construction window closed",
+                        );
+                    }
+                    self.ensure_scope_closed(&body_env)?;
                     return self.eval(&arm.result, &arm_env, world);
                 }
             }
+            for group in groups.iter().filter(|group| group.end == index).rev() {
+                self.close_group(group, &body_env)?;
+            }
         }
+        self.ensure_scope_closed(&body_env)?;
         Ok(Outcome::CompletedWithoutValue)
     }
 
@@ -200,4 +227,19 @@ impl<'a> Oracle<'a> {
         };
         Ok(matched)
     }
+}
+
+fn match_group_windows(m: &Match) -> Vec<super::mu::GroupWindow> {
+    let bindings: Vec<(usize, String, Expr)> = m
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            MatchItem::Bind(Bind { target: BindTarget::Name(name), value, .. }) => {
+                Some((index, name.clone(), value.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    super::mu::group_windows(&bindings)
 }

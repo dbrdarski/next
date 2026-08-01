@@ -4363,3 +4363,45 @@ does not relabel Algorithm B as the final runtime mechanism. **`// [ask-author]`
 **Verification:** 428 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 9 machinery gates
 passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide formatting remains
 the separately recorded pre-existing gate.
+
+## 2026-08-01 — Recovery slice 11: universal function construction interning
+
+**Three red boundaries:** resolved `makeAdder(1)` closures with identical captures were distinct
+pointers; the ruled recursive values `y = [() => y]` / `z = [() => z]` were distinct pointers even
+though runtime equality walked them as equal; and live MU-18 observed `a == a` inside the still-open
+`a`/`b` window instead of trapping. The first two regressions and the formerly ignored stable suite
+row were observed red before the representation changed.
+
+**Resolved shallow path:** `Interner` now keys a closed acyclic function by its interned canonical-code
+pointer plus canonical capture pointers or nominal `SlotId` atoms. A direct key hit reuses the existing
+`ValueRef`; equal captures therefore cost a small pointer tuple, while different captures, act kinds,
+and box locations remain distinct. Calls are still never memoized. Compound constructors normalize
+any redirected provisional child before ordinary tuple/record hash-consing.
+
+**Late binding and recursive close:** the reference-SCC walk now derives construction windows for
+module and block binding sequences, extending a component's close point through later outside
+declaration dependencies. Members are predeclared at window start, stored as `Binding::Open`, and
+cannot be observed or escape the scope. At close, internal markers resolve simultaneously; stored
+tuple/record children close bottom-up, and each function probes a canonical-shape fingerprint bucket.
+Algorithm B performs the required exact graph comparison after the probe — a fingerprint never proves
+equality — and a match reuses the canonical pointer. Late-bound acyclic closures use the same close
+path when their dependency arrives. Analyzer-created sibling closures are closed through this interner
+after its non-executing late-binding collection pass.
+
+**One formation bug exposed:** a local mutual group made the enclosing closure capture its later block
+sibling because `canon::match_expr` assigned a positional name only after canonicalizing that sibling's
+initializer. Named block siblings are now prebound before any initializer; pattern bindings remain
+sequential. This is the late-binding formation rule, not declaration-time body analysis.
+
+**Pointer equality restored universally at runtime:** `values_equal` is now exactly `ValueRef::ptr_eq`.
+Algorithm B is private to canonicalization/conformance and the machinery suite pins that boundary. The
+pointer corpus covers alpha and frozen-polynomial spelling variants, equal resolved captures, forward
+captures, FE-04/05/06, mixed tuple/record cycles, local groups, nominal locations, and MU-14/15/16's
+capture routing, value-level slot collapse, and cross-construction collapse. MU-18 is live and green.
+The prior operation-transfer bridge now naturally observes the same canonical pointer. The broader
+layer-2 GroupTemplate artifact remains catalogued separately; this slice closes layer-1 value
+construction/identity. **`// [ask-author]`: none.**
+
+**Verification:** 437 lib passed / 1 ignored; 113 conformance passed / 11 ignored; 10 machinery gates
+passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide formatting remains
+the final measured P0 gate.

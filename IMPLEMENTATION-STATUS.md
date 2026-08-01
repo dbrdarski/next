@@ -125,17 +125,32 @@ equality and inequality transfer now use the same oracle value-equality relation
 red-first recursive-function regression pins both `==` and `!=`; it also asserts that the two inputs
 are still different pointers so the test cannot accidentally hide the outstanding construction fix.
 
+The eleventh repair completes that construction fix and supersedes the tenth repair's temporary
+bridge description. Resolved acyclic closures intern immediately by canonical code plus capture
+pointers/location atoms. A late-bound acyclic closure stays `Open` until its dependency arrives.
+Recursive binding SCCs receive one construction window: every member is under initialization at the
+window start, provisional roots are not observable, and all internal markers resolve together at
+close. Stored tuple/record children then close bottom-up; function candidates probe a shape
+fingerprint bucket and Algorithm B verifies an exact graph match before reuse. Redirected provisional
+handles are normalized at every compound constructor. The analyzer's non-executing closure collector
+closes sibling graphs through the same interner after its late-binding pass.
+
+Runtime `==` is now only `ValueRef::ptr_eq`; Algorithm B is canonicalization-internal. Equal resolved
+captures, alpha/polynomial source variants, self/mutual recursion, symmetric-group collapse, and mixed
+tuple/record cycles all produce one exposed pointer. Distinct captures, act kinds, and box locations
+remain distinct. MU-18 is live: an interleaved `a == a` inside `a`/`b`'s open window traps
+`unbound-evaluation`. A machinery gate prevents routing runtime equality back through Algorithm B.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
-1. Function construction is not universally interned, while equality uses a separate coinductive path.
-2. The repository-wide formatting gate is red (measured separately below).
+1. The repository-wide formatting gate is red (measured separately below).
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
-demand's realized-refutation consumer and source-level AP-29 operand propagation are complete. Next
-is repairing universal function construction/interning; operation transfer's singleton-function
-assumption is complete. Normative files remain manifest-protected and are not edited by these
+demand's realized-refutation consumer, source-level AP-29 operand propagation, exact function
+operation transfer, and universal function construction/interning are complete. Next is the measured
+repository formatting debt. Normative files remain manifest-protected and are not edited by these
 implementation slices.
 
 ---
@@ -232,7 +247,7 @@ Resolved by the 2026-08-01 wiring:
 - Direct tests of the deleted checker were removed with it. They tested implementation internals,
   not stable language IDs; their live application/graph counterparts remain.
 
-Conformance holds 12 `#[ignore]`s (6 Phase A · 4 module/linking · MU-18 · M-04).
+Conformance holds 11 `#[ignore]`s (6 Phase A · 4 module/linking · M-04). MU-18 is live and green.
 
 ---
 

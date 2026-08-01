@@ -489,6 +489,139 @@ fn equal_values_are_pointer_equal_after_eval() {
 }
 
 #[test]
+fn acyclic_closures_with_equal_resolved_captures_share_one_pointer() {
+    let mut i = Interner::new();
+    let pair = eval_in(
+        &mut i,
+        "makeAdder = n => x => x + n\n[makeAdder(1), makeAdder(1)]",
+    );
+    let values = pair.as_tuple().expect("closure pair");
+    assert!(
+        values[0].ptr_eq(&values[1]),
+        "resolved closures intern shallowly by shape and capture pointers"
+    );
+}
+
+#[test]
+fn recursive_function_values_share_pointers_after_their_windows_close() {
+    let mut i = Interner::new();
+    let pair = eval_in(&mut i, "y = [() => y]\nz = [() => z]\n[y, z]");
+    let values = pair.as_tuple().expect("recursive value pair");
+    assert!(
+        values[0].ptr_eq(&values[1]),
+        "equal closed rational graphs must leave construction as one value pointer"
+    );
+    let left_fn = values[0].as_tuple().unwrap()[0].clone();
+    let right_fn = values[1].as_tuple().unwrap()[0].clone();
+    assert!(left_fn.ptr_eq(&right_fn), "congruence must hold for group children");
+}
+
+#[test]
+fn alpha_equivalent_source_closures_share_one_pointer() {
+    let mut i = Interner::new();
+    let pair = eval_in(&mut i, "f = x => x + 1\ng = y => y + 1\n[f, g]");
+    let values = pair.as_tuple().expect("closure pair");
+    assert!(values[0].ptr_eq(&values[1]));
+}
+
+#[test]
+fn forward_capture_closes_when_its_dependency_arrives() {
+    let mut i = Interner::new();
+    let pair = eval_in(&mut i, "f = () => g\ng = () => 1\nh = () => g\n[f, h]");
+    let values = pair.as_tuple().expect("closure pair");
+    assert!(values[0].ptr_eq(&values[1]));
+}
+
+#[test]
+fn symmetric_recursive_members_and_self_loop_share_one_pointer() {
+    let mut i = Interner::new();
+    let triple = eval_in(
+        &mut i,
+        "a = [() => b]\nb = [() => a]\ny = [() => y]\n[a, b, y]",
+    );
+    let values = triple.as_tuple().expect("recursive value triple");
+    assert!(values[0].ptr_eq(&values[1]));
+    assert!(values[0].ptr_eq(&values[2]));
+}
+
+#[test]
+fn ruled_function_identity_corpus_is_pointer_canonical() {
+    let equal_pairs = [
+        "f = x => x + 1\ng = y => y + 1\n[f, g]",
+        "f = x => x + x\ng = x => 2 * x\n[f, g]",
+        "a = [() => b]\nb = [() => a]\na2 = [() => b]\n[a, a2]",
+        "r = {f: () => r}\ns = {f: () => s}\n[r, s]",
+        "make = n => x => x + n\n[make(1), make(1)]",
+    ];
+    for source in equal_pairs {
+        let mut i = Interner::new();
+        let pair = eval_in(&mut i, source);
+        let values = pair.as_tuple().expect("identity pair");
+        assert!(
+            values[0].ptr_eq(&values[1]),
+            "ruled equal values were allocated separately for {source}"
+        );
+    }
+}
+
+#[test]
+fn function_pointer_identity_retains_capture_and_location_distinctions() {
+    let mut i = Interner::new();
+    let captures = eval_in(&mut i, "make = n => x => x + n\n[make(1), make(2)]");
+    let values = captures.as_tuple().unwrap();
+    assert!(!values[0].ptr_eq(&values[1]));
+
+    let mut i = Interner::new();
+    let locations = eval_in(
+        &mut i,
+        "@state x = 1\n@state y = 1\nf = () => x\ng = () => y\n[f, g]",
+    );
+    let values = locations.as_tuple().unwrap();
+    assert!(!values[0].ptr_eq(&values[1]));
+}
+
+#[test]
+fn local_recursive_group_closes_before_its_block_result() {
+    let mut i = Interner::new();
+    let pair = eval_in(
+        &mut i,
+        "make = () => {\na = [() => b]\nb = [() => a]\n=> [a, b]\n}\nmake()",
+    );
+    let values = pair.as_tuple().expect("local recursive pair");
+    assert!(values[0].ptr_eq(&values[1]));
+}
+
+#[test]
+fn mu14_mu15_mu16_capture_routing_and_value_level_collapse() {
+    let make_pair = "makePair = (x, y) => {\n\
+        a = n => n == 0 ? x : b(n - 1)\n\
+        b = n => n == 0 ? y : a(n - 1)\n\
+        => [a, b]\n\
+    }\n";
+
+    let mut i = Interner::new();
+    let routed = eval_in(
+        &mut i,
+        &format!("{make_pair}pair = makePair(1, 2)\n[pair[0](0), pair[0](1), pair[1](0), pair[1](1), pair[0] == pair[1]]"),
+    );
+    let routed = routed.as_tuple().unwrap();
+    assert_eq!(routed[0].as_number(), Some(&Rational::from(1)));
+    assert_eq!(routed[1].as_number(), Some(&Rational::from(2)));
+    assert_eq!(routed[2].as_number(), Some(&Rational::from(2)));
+    assert_eq!(routed[3].as_number(), Some(&Rational::from(1)));
+    assert_eq!(routed[4].as_boolean(), Some(false));
+
+    let mut i = Interner::new();
+    let collapsed = eval_in(
+        &mut i,
+        &format!("{make_pair}pair = makePair(5, 5)\nv = 5\nself = n => n == 0 ? v : self(n - 1)\n[pair[0], pair[1], self]"),
+    );
+    let collapsed = collapsed.as_tuple().unwrap();
+    assert!(collapsed[0].ptr_eq(&collapsed[1]), "MU-15 value-level slot collapse");
+    assert!(collapsed[0].ptr_eq(&collapsed[2]), "MU-16 cross-construction collapse");
+}
+
+#[test]
 fn indeterminate_value_debug_shape() {
     // Sanity on the value kind itself.
     let div = eval("1 / 0");
@@ -717,7 +850,7 @@ fn same_function_value_is_equal_to_itself() {
 #[test]
 fn self_referential_values_intern_equal() {
     // FE-04 / the §7 seed: `y = [() => y]` and `z = [() => z]` are equal — their
-    // rational trees coincide (bisimulation with the coinductive step).
+    // rational trees coincide and close to one canonical pointer.
     assert!(is_true(&eval("y = [() => y]\nz = [() => z]\ny == z")));
 }
 

@@ -392,10 +392,7 @@ fn decide_comparison(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Inte
 /// `==`/`!=` decide on proven-equal singletons or proven-disjoint operands.
 fn decide_equality(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Interner) -> Contract {
     let equal = match (a, b) {
-        // ValueRef pointer equality is the final runtime rule, but closure
-        // construction has not yet completed the universal-interner migration.
-        // Use the oracle's current value equality here so operation transfer
-        // cannot disagree with concrete execution during that recovery.
+        // Same value = same pointer, including closed function graphs.
         (Contract::Equals(x), Contract::Equals(y)) => Some(values_equal(x, y)),
         _ if super::disjoint(a, b) => Some(false),
         _ => None,

@@ -90,9 +90,9 @@ pub enum ValueData {
     /// `{b:2,a:1}` are the same value.
     Record(Vec<RecordEntry>),
     /// A function value: `(body, captured environment, actKind)` (semantics §1).
-    /// A plain allocation (never hash-consed); value equality is a bisimulation
-    /// over the rational tree `node(shape, captures)` — see [`FnValue`] and the
-    /// μ-Canonicalization Spec (algorithm B).
+    /// Construction canonicalizes it through the function interner: an acyclic
+    /// shallow key when captures are resolved, or a verified rational-graph
+    /// bucket at recursive-window close.
     Function(FnValue),
     /// An unresolved arithmetic result (Part XII, 2026-08-01): a plain interned
     /// value, not a trap. The form tag and canonical Number operand together are
@@ -121,10 +121,8 @@ pub struct Closure {
     pub env: Env,
 }
 
-/// A function value (μ-Canonicalization Spec, the interning amendment): a **plain
-/// allocation**, never hash-consed. Its identity is its rational tree
-/// `node(shape, captures)` — compared lazily by bisimulation (algorithm B), *not*
-/// by the interner's pointer test. It carries:
+/// A function payload (μ-Canonicalization Specification §6). The enclosing
+/// [`ValueRef`] is canonicalized by the interner; this payload carries:
 ///
 /// - `shape` — the canonical code (α/capture-normalized; finite), the node label
 ///   for equality and the layer-2 cache key;
@@ -132,9 +130,10 @@ pub struct Closure {
 ///   against `closure.env` at comparison time to get the capture children;
 /// - `closure` — lambda + captured environment, for evaluation.
 ///
-/// `Hash`/`Eq` are **pointer identity** so the interner treats functions (and any
-/// structure transitively containing one) as distinct allocations; value equality
-/// goes through algorithm B instead.
+/// `Hash`/`Eq` here identify the provisional closure allocation only. They keep a
+/// half-built graph out of the ordinary bottom-up table; [`Interner`] applies the
+/// actual shallow/group key and returns the canonical `ValueRef` before exposure.
+/// Language equality compares canonical `ValueRef` pointers, never payloads.
 #[derive(Clone)]
 pub struct FnValue {
     shape: crate::intern::Interned<Lambda>,

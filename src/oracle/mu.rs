@@ -5,9 +5,9 @@
 //! **canonical code**: mutual references become positional **μ-refs**, the
 //! recursion structure is grouped by strongly-connected components, and each
 //! group is serialized in a canonical slot order — so the result is invariant
-//! under renaming and member permutation. This is the layer-2 shape used by
-//! C§13.4 cache keys and recursive contracts (C§9); it has no runtime consumer
-//! yet (layer-1 `==` is algorithm B).
+//! under renaming and member permutation. The reference-SCC walk also derives
+//! runtime construction windows; the serialized layer-2 group key remains the
+//! analyzer-facing canonicalization artifact.
 //!
 //! Scope of this implementation (the testable core):
 //! - **Law 3 / minimal group + law 1 / no vacuous binder:** only genuine SCCs
@@ -422,6 +422,70 @@ fn free_group_refs(e: &Expr, group: &HashSet<String>) -> HashSet<String> {
     let mut bound: Vec<String> = Vec::new();
     collect_refs(e, group, &mut bound, &mut found);
     found
+}
+
+/// A recursive construction window over one lexical item sequence. `members`
+/// are the SCC's own declarations; `end` also covers any later declaration the
+/// component needs as an external capture before it can become a closed value.
+#[derive(Clone, Debug)]
+pub(super) struct GroupWindow {
+    pub start: usize,
+    pub end: usize,
+    pub members: Vec<(usize, String)>,
+}
+
+/// Derive recursive construction windows from `(item index, binding name,
+/// initializer)` triples. Group identity is the minimal reference SCC; a
+/// window's lifetime extends through later declaration dependencies so closing
+/// never exposes a group with an unresolved outside capture.
+pub(super) fn group_windows(bindings: &[(usize, String, Expr)]) -> Vec<GroupWindow> {
+    let names: Vec<String> = bindings.iter().map(|(_, name, _)| name.clone()).collect();
+    let name_set: HashSet<String> = names.iter().cloned().collect();
+    let index: HashMap<String, usize> = names.iter().cloned().zip(0..).collect();
+    let graph: Vec<HashSet<usize>> = bindings
+        .iter()
+        .map(|(_, _, initializer)| {
+            free_group_refs(initializer, &name_set)
+                .into_iter()
+                .filter_map(|name| index.get(&name).copied())
+                .collect()
+        })
+        .collect();
+
+    let mut windows = Vec::new();
+    for component in tarjan_scc(&graph) {
+        let cyclic = component.len() > 1
+            || component
+                .first()
+                .is_some_and(|member| graph[*member].contains(member));
+        if !cyclic {
+            continue;
+        }
+
+        let mut reachable: HashSet<usize> = component.iter().copied().collect();
+        let mut stack = component.clone();
+        while let Some(member) = stack.pop() {
+            for dependency in &graph[member] {
+                if reachable.insert(*dependency) {
+                    stack.push(*dependency);
+                }
+            }
+        }
+
+        let members: Vec<(usize, String)> = component
+            .iter()
+            .map(|member| (bindings[*member].0, bindings[*member].1.clone()))
+            .collect();
+        let start = members.iter().map(|(item, _)| *item).min().unwrap();
+        let end = reachable
+            .iter()
+            .map(|member| bindings[*member].0)
+            .max()
+            .unwrap();
+        windows.push(GroupWindow { start, end, members });
+    }
+    windows.sort_by_key(|window| (window.start, window.end));
+    windows
 }
 
 fn collect_refs(e: &Expr, group: &HashSet<String>, bound: &mut Vec<String>, found: &mut HashSet<String>) {

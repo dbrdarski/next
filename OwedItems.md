@@ -273,11 +273,12 @@ built in code, §16 proofs owed**.
   The `AnalysisContract` domain exists (`analyzer/domain.rs`); the **primitive**
   `analyze_operation` still returns the pre-upgrade `OpResult { safety, output }`. The
   reshape lands with the region-table/demand-core rebuild.
-- **Universal interning (μ v0.5 §6)** — closures should intern shallowly
-  (canonical-code + capture pointers), `==` a pointer test. I run Algorithm B at
-  compare-time over plain allocations. All `==` results conform (FE rows green); only
-  harness pointer-observability differs. Scoped to the **§5 canonicalizer wiring**.
-  Consequence: **MU-18** `#[ignore]` PENDING-§5.
+- **Universal interning (μ v0.5 §6) — DISCHARGED 2026-08-01.** Resolved closures
+  use the shallow `(canonical-code pointer, capture pointers/location atoms)` key;
+  recursive SCCs stay unobservable through their construction window and close by
+  fingerprint-bucket probe plus exact Algorithm-B verification. Runtime `==` is a
+  pointer test. MU-18 is live and green. The broader layer-2 GroupTemplate work in
+  §1 remains separately owed; this item no longer belongs to implementation drift.
 - **`Record(fields, Exact | Open)`** — openness is a Record-contract parameter
   (`HasField(k) ≡ Record({k: Top}, Open)`). I model exact `Record` + separate
   `HasField`; membership coincides, but open-record patterns lose per-field contracts.

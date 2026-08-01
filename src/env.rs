@@ -20,11 +20,17 @@ use crate::value::ValueRef;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SlotId(pub u32);
 
-/// What a name is bound to (semantics §1): an immutable value, a Box location, or
-/// an *under-initialization* marker (evaluating a reference to which traps).
+/// What a name is bound to (semantics §1): an immutable value, a Box location,
+/// an open construction graph, or an *under-initialization* marker. Observing
+/// either construction state traps; only group construction may retain it.
 #[derive(Clone, Debug)]
 pub enum Binding {
     Value(ValueRef),
+    /// A value graph still inside its construction window. It may be captured
+    /// by another member of that window, but observing it is an unbound-value
+    /// trap until the whole graph closes and the interner returns canonical
+    /// handles for every exposed root.
+    Open(ValueRef),
     Slot(SlotId),
     UnderInit,
 }

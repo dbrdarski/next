@@ -216,7 +216,6 @@ mod phase0 {
     }
 
     #[test]
-    #[ignore = "PENDING-§5: MU-18 (open-member observation traps unbound-evaluation, Option A) needs the group-construction-window mechanism — the §5 canonicalizer. Without windows, `a` closes at its own statement and `a == a` is reflexively true."]
     fn mu18_open_member_observation_traps() {
         // a = [() => b]; seen = a == a; b = [() => a]  → TRAP unbound-evaluation.
         assert_eq!(

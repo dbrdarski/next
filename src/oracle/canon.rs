@@ -6,15 +6,15 @@
 //! with bound variables α-renamed to positional canonical names (`$0`, `$1`, … —
 //! de-Bruijn order) and free variables replaced by positional **capture slots**
 //! (`@cap0`, `@cap1`, …, first-occurrence order). Captures are *not* inlined — the
-//! shape is capture-independent; the actual captured values are compared
-//! separately by bisimulation (algorithm B, `equal.rs`).
+//! shape is capture-independent; actual captured pointers form the interner's
+//! value-level key.
 //!
 //! The shape is a finite term (recursion lives in the captures, never in the
 //! code), so shape identity is ordinary structural equality of the canonical
 //! `Lambda`. The full μ-binder minimization (SCC grouping, laws 1–5) refines the
-//! *code* identity used by layer-2 cache keys and ships with the analyzer; layer-1
-//! `==` needs only this shape plus algorithm B, which already collapses symmetric
-//! recursion coinductively.
+//! *code* identity used by layer-2 cache keys and ships with the analyzer. At
+//! value level, Algorithm B is only the recursive bucket's exact verifier; the
+//! resulting runtime identity is one canonical pointer.
 
 use std::collections::HashMap;
 
@@ -153,12 +153,32 @@ impl Canon {
     fn match_expr(&mut self, m: &Match) -> Match {
         let scrutinee = m.scrutinee.as_ref().map(|e| Box::new(self.expr(e)));
         self.scopes.push(HashMap::new());
+        // Named block bindings are late-bound siblings: assign every sibling's
+        // positional identity before canonicalizing any initializer, so
+        // `a = () => b; b = () => a` does not misclassify `b` as an outer
+        // capture of the enclosing lambda. Pattern bindings remain sequential;
+        // they are established only by a successful match.
+        let prebound: Vec<Option<String>> = m
+            .items
+            .iter()
+            .map(|item| match item {
+                MatchItem::Bind(Bind { target: BindTarget::Name(name), .. }) => {
+                    Some(self.bind(name))
+                }
+                _ => None,
+            })
+            .collect();
         let mut items = Vec::with_capacity(m.items.len());
-        for item in &m.items {
+        for (index, item) in m.items.iter().enumerate() {
             items.push(match item {
                 MatchItem::Bind(b) => {
                     let value = self.expr(&b.value);
-                    let target = self.bind_target(&b.target);
+                    let target = match (&b.target, &prebound[index]) {
+                        (BindTarget::Name(_), Some(canonical)) => {
+                            BindTarget::Name(canonical.clone())
+                        }
+                        _ => self.bind_target(&b.target),
+                    };
                     MatchItem::Bind(Bind { target, value, exported: b.exported })
                 }
                 MatchItem::Stmt(e) => MatchItem::Stmt(self.expr(e)),
