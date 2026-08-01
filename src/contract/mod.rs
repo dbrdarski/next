@@ -54,6 +54,9 @@ pub enum Kind {
     Record,
 }
 
+/// An interned contract handle: pointer identity, exactly as values and canonical code.
+pub type CRef = crate::intern::Interned<Contract>;
+
 /// A contract — a bounded algebraic property of values (C§4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Contract {
@@ -79,24 +82,24 @@ pub enum Contract {
     /// normalizes to `Equals(0)`).
     Geo { b: Rational, r: Rational },
     /// Union / Intersection / Difference (the sole negative form, C§6).
-    Union(Box<Contract>, Box<Contract>),
-    Intersection(Box<Contract>, Box<Contract>),
-    Difference(Box<Contract>, Box<Contract>),
+    Union(CRef, CRef),
+    Intersection(CRef, CRef),
+    Difference(CRef, CRef),
     /// A record having **exactly** the named fields (no others), each satisfying
     /// its contract (exact — matching exact-by-default patterns, E9). The open
     /// "has at least this field" case is [`HasField`].
-    Record(Vec<(String, Contract)>),
+    Record(Vec<(String, CRef)>),
     /// A record having a given field (any value) — the open partial form.
     HasField(String),
     /// A tuple of exactly these element contracts, positionally.
-    Tuple(Vec<Contract>),
+    Tuple(Vec<CRef>),
     /// **Tuple concatenation** — a tuple that splits into consecutive segments,
     /// each satisfying its segment contract (tuple-length family §1). Positive in
     /// every segment. `Concat()` denotes the empty tuple; normal forms flatten
     /// nested Concats, erase the empty-tuple segment, and Bottom-normalize when any
     /// segment is uninhabited (erasing an uninhabited segment would turn an empty
     /// contract into an inhabited one).
-    Concat(Vec<Contract>),
+    Concat(Vec<CRef>),
     /// An Indeterminate value of a given form.
     Indeterminate(crate::value::IndetForm),
     /// A late-bound reference to a named contract in the ambient recursive group
@@ -108,7 +111,7 @@ pub enum Contract {
     /// **Analyzer-derived, never user syntax** (so the C§9 admissibility perimeter
     /// is untouched); positive in `T`, monotone in `D`. Build via
     /// [`Contract::length_restricted`], which applies the canonical rows.
-    LengthRestricted(Box<Contract>, Box<Contract>),
+    LengthRestricted(CRef, CRef),
 }
 
 /// The kind of a value, or `None` for an Indeterminate value.
