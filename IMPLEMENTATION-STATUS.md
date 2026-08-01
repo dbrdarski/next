@@ -116,19 +116,27 @@ live analyzer and threads block-local bindings in source order. The represented 
 is needed. Discovery keeps the safety-context guard active while contract-evaluating those operands,
 so it does not settle nested facts during the discovery phase.
 
+The tenth repair closes the operation-transfer half of the function-identity drift. Exact equality
+transfer had compared two `Equals(function)` operands with `ValueRef` pointer equality even though
+closure construction is not yet universally interned and the oracle still uses the temporary
+coinductive equality path. Two extensionally equal recursive closures at different allocations
+therefore made the analyzer produce exact `false` while the oracle produced `true`. Exact singleton
+equality and inequality transfer now use the same oracle value-equality relation as execution. A
+red-first recursive-function regression pins both `==` and `!=`; it also asserts that the two inputs
+are still different pointers so the test cannot accidentally hide the outstanding construction fix.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
-1. Function construction is not universally interned, while equality uses a separate coinductive path;
-   operation transfer also assumes an unsound singleton function instance.
+1. Function construction is not universally interned, while equality uses a separate coinductive path.
 2. The repository-wide formatting gate is red (measured separately below).
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
 demand's realized-refutation consumer and source-level AP-29 operand propagation are complete. Next
-is repairing universal function construction/interning and the operation transfer's singleton-function
-assumption. Normative files remain manifest-protected and are not edited by these implementation
-slices.
+is repairing universal function construction/interning; operation transfer's singleton-function
+assumption is complete. Normative files remain manifest-protected and are not edited by these
+implementation slices.
 
 ---
 

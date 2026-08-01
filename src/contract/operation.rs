@@ -68,7 +68,7 @@ use super::numeric::{self, num_abs};
 use super::{Contract, Kind, Verdict, subcontract};
 use crate::ast::PrimOp;
 use crate::interner::Interner;
-use crate::oracle::eval_prim;
+use crate::oracle::{eval_prim, values_equal};
 use crate::rational::Rational;
 use crate::value::{IndeterminateFormTag, ValueRef};
 
@@ -392,7 +392,11 @@ fn decide_comparison(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Inte
 /// `==`/`!=` decide on proven-equal singletons or proven-disjoint operands.
 fn decide_equality(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Interner) -> Contract {
     let equal = match (a, b) {
-        (Contract::Equals(x), Contract::Equals(y)) => Some(x == y),
+        // ValueRef pointer equality is the final runtime rule, but closure
+        // construction has not yet completed the universal-interner migration.
+        // Use the oracle's current value equality here so operation transfer
+        // cannot disagree with concrete execution during that recovery.
+        (Contract::Equals(x), Contract::Equals(y)) => Some(values_equal(x, y)),
         _ if super::disjoint(a, b) => Some(false),
         _ => None,
     };
@@ -405,4 +409,3 @@ fn decide_equality(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Intern
 fn is_str(c: &Contract, interner: &mut Interner) -> bool {
     matches!(subcontract(c, &Contract::Kind(Kind::String), interner), Verdict::Proven)
 }
-

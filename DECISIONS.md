@@ -4343,3 +4343,23 @@ runtime code analysis, or new language semantics were added. **`// [ask-author]`
 **Verification:** 427 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 9 machinery gates
 passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
 `cargo fmt --check` remains the separately recorded pre-existing gate (8,695 output lines).
+
+## 2026-08-01 — Recovery slice 10: exact function equality transfer follows the oracle
+
+**Measured red before implementation:** `analyze_operation(Eq, [Equals(y), Equals(z)])` returned
+exact `false` for the ruled recursive pair `y = [() => y]`, `z = [() => z]`, while concrete oracle
+evaluation returned `true`. The transfer compared `ValueRef`s directly. That comparison is valid
+only after universal construction interning; the current runtime still allocates those closures
+separately and obtains the right language answer through its temporary coinductive equality path.
+
+**Sound bridge, not a representation claim:** exact singleton `==` / `!=` transfer now calls the
+same `values_equal` relation used by the oracle. The red-first regression checks both operators and
+explicitly checks that the recursive values remain different pointers, so it will keep exercising
+the bridge until the outstanding μ-group construction/interner migration makes pointer identity
+canonical. No operation can now prove the opposite Boolean from the oracle merely because two equal
+functions were allocated separately. Universal function interning remains the next P0; this slice
+does not relabel Algorithm B as the final runtime mechanism. **`// [ask-author]`: none.**
+
+**Verification:** 428 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 9 machinery gates
+passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide formatting remains
+the separately recorded pre-existing gate.

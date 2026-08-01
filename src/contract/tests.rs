@@ -27,6 +27,20 @@ fn exact_mod_zero(i: &mut Interner, operand: i64) -> Contract {
     Contract::Equals(mod_zero(i, operand))
 }
 
+/// Evaluate in the operation rule's interner so an exact function contract and
+/// the oracle result inhabit the same value namespace.
+fn eval_in(i: &mut Interner, src: &str) -> ValueRef {
+    use crate::desugar::Desugarer;
+    use crate::lex::lex;
+    use crate::oracle::Oracle;
+    use crate::parse::parse_program;
+
+    let tokens = lex(src).expect("lex ok");
+    let surface = parse_program(tokens).expect("parse ok");
+    let module = Desugarer::new(i).program(&surface).expect("desugar ok");
+    Oracle::new(i).run_module(&module).expect("evaluated without trapping")
+}
+
 #[test]
 fn top_and_bottom() {
     let mut i = Interner::new();
@@ -532,6 +546,36 @@ fn operation_comparison_and_neg() {
         &mut i,
     );
     assert!(matches!(bad.safety, OpSafety::Refuted(_)));
+}
+
+#[test]
+fn operation_equality_agrees_with_oracle_for_equal_function_singletons() {
+    let mut i = Interner::new();
+    let pair = eval_in(&mut i, "y = [() => y]\nz = [() => z]\n[y, z]");
+    let values = pair.as_tuple().expect("function pair");
+    let (left, right) = (values[0].clone(), values[1].clone());
+
+    assert!(
+        crate::oracle::values_equal(&left, &right),
+        "the oracle's coinductive value equality recognizes the recursive functions"
+    );
+    assert!(
+        !left.ptr_eq(&right),
+        "this regression remains meaningful until universal function interning lands"
+    );
+
+    let eq = analyze_operation(
+        PrimOp::Eq,
+        &[Contract::Equals(left.clone()), Contract::Equals(right.clone())],
+        &mut i,
+    );
+    let ne = analyze_operation(
+        PrimOp::Ne,
+        &[Contract::Equals(left), Contract::Equals(right)],
+        &mut i,
+    );
+    assert_eq!(eq.output, Contract::Equals(i.boolean(true)));
+    assert_eq!(ne.output, Contract::Equals(i.boolean(false)));
 }
 
 // ── The rulebook's precision claims (C§7 / C§17 per-pair tables) ─────────────
