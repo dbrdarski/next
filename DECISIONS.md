@@ -4133,3 +4133,48 @@ blocker 3. Neither is addressed by reaching domains or widening.
 **Verification:** 414 lib passed / 2 ignored; 112 conformance passed / 12 ignored; 3 machinery gates
 passed; clippy clean; normative manifest 19/19 OK. Repository-wide `cargo fmt --check` remains the
 separately recorded pre-existing formatting gate.
+
+## 2026-08-01 — Recovery slice 5: structured completion evidence at the consumer
+
+**Measured red before implementation:** all three boundaries failed independently. The completion
+fact claimed `f(0)` produced for `f = (x) => x :: { 0 => f(1) }`; a Match statement whose selected
+arm called a partial producer was rejected because `analyze_match` demanded the arm result itself;
+and `summarize_instance(f, Equals(1))` returned `UnprovenPossible` despite the concrete represented
+call completing without a value.
+
+**Typed evidence:** expression completion's proven-present voice now carries a
+`CompletionWitness`. Applications retain the normative `ApplicationWitness { callee, arguments }`;
+Match remainder and Write retain their own structural evidence. Completion joins preserve the first
+present witness, then the unproven voice, then absence. `ExecutableDemand` therefore retains the
+actual nested application pair after the outcome crosses Match, even when a statement seat accepts
+it.
+
+**AP-30 realization and the live `refute` consumer:** `realized_completion` samples only genuine
+contract members, applies the concrete Pure closure under the existing bounded oracle, and mints
+`ApplicationWitness` only for `BoundedOutcome::CompletedWithoutValue`. `Produced`, `Trapped`, and
+`OutOfFuel` mint nothing. Effect execution is forbidden during analysis; Mutator's represented
+completion form comes from its settled return-discard law rather than running its body. This is a
+narrow witness/refutation probe, not execution as the transfer rule: safety and return inference
+remain symbolic and fact-driven.
+
+**Formation versus judgment at Match:** an arm exports its result's whole completion outcome; Match
+does not demand that result while forming its reusable core. If the arm's own selection is not
+represented (opaque guard / no row witness), a nested present witness weakens to possible rather
+than becoming a false AP-30 refutation. The enclosing consumer alone applies the expecting-seat
+demand. Consequently the statement form accepts and the binding form rejects without two analyses
+or a seat-dependent cache key.
+
+**Completion induction keeps its partition:** the first propagation attempt correctly released the
+partial recursion but made the `countDown` converse fail because whole-body analysis forgot the
+else-row narrowing and missed the active fact for `n - 1`. Completion verification now consumes the
+same source-ordered region partition as discovery, safety, and return facts: each selected result is
+checked under its effective region, and the exact rows must cover the input. `countDown` proves;
+the recursive partial producer does not. No reaching domains, widening, or manufactured candidate
+was introduced.
+
+**Released:** blocker 3 is no longer ignored. Blocker 1b's exact-singleton chain is the sole ignored
+library test and remains correctly assigned to grounding §4. **`// [ask-author]`: none.**
+
+**Verification:** 419 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 3 machinery gates
+passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
+`cargo fmt --check` remains the separately recorded pre-existing gate (8,519 diff lines).

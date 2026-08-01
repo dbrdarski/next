@@ -11,12 +11,14 @@
 //! statement is also a compulsory fixed-rule demand: operation safety fires even when a
 //! result is discarded, while completion is demanded only at expecting seats.
 //!
-//! **Analysis never evaluates the program.** The oracle's module runner evaluates items
+//! **Analysis never runs the program.** The oracle's module runner evaluates items
 //! eagerly in effect world; calling it here would execute the program at compile time.
 //! Instead the pass builds closures ([`make_closure_in`]) without touching their bodies,
-//! then analyzes executable expressions symbolically in item order. Named contract
-//! expressions are statically evaluated by the contract layer rather than mistaken for
-//! runtime constructor calls.
+//! then analyzes executable expressions symbolically in item order. The narrow AP-30
+//! exception is a fuel-bounded Pure call used only to certify a represented completion
+//! witness; Effect/Mutator bodies are never run by this pass. Named contract expressions
+//! are statically evaluated by the contract layer rather than mistaken for runtime
+//! constructor calls.
 
 use std::collections::{HashMap, HashSet};
 
@@ -435,6 +437,7 @@ fn malformed(name: &str, why: &str) -> Finding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyzer::CompletionWitness;
 
     /// Through the shared front end (`check_source`), so these tests exercise the same
     /// lex/parse/desugar path the CLI does.
@@ -613,6 +616,47 @@ mod tests {
         let (binding, _) = check("x = 1 :: { 2 => 3 }\n");
         assert!(!binding.accepted(), "a binding demands a produced value: {:?}", binding.findings);
         assert!(binding.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat));
+    }
+
+    /// A selected arm returns its result's whole outcome. The Match itself does not
+    /// demand that result: only the Match's consumer does. This is the recursive form
+    /// of the same E10 seat distinction exercised above.
+    #[test]
+    fn selected_arm_completion_is_demanded_only_by_the_match_consumer() {
+        let source = "partial = (n) => n :: { 0 => 1 }\n\
+                      1 :: { 1 => partial(1) }\n";
+        let (statement, mut interner) = check(source);
+        assert!(
+            statement.accepted(),
+            "the selected arm's completion is legal when the enclosing Match is a statement: {:?}",
+            statement.findings
+        );
+        match &statement
+            .executable_demands
+            .last()
+            .expect("the statement demand is retained")
+            .completion
+        {
+            Completion::FallsThrough(CompletionWitness::Application(witness)) => {
+                assert_eq!(witness.arguments, vec![interner.integer(1)]);
+            }
+            other => panic!("the Match must retain the arm's application witness, got {other:?}"),
+        }
+
+        let source = "partial = (n) => n :: { 0 => 1 }\n\
+                      result = 1 :: { 1 => partial(1) }\n";
+        let (binding, _) = check(source);
+        assert!(
+            !binding.accepted(),
+            "the same selected-arm completion must reject when the enclosing Match is expected: {:?}",
+            binding.findings
+        );
+        assert!(
+            binding
+                .findings
+                .iter()
+                .any(|f| f.class == TrapClass::ExpectingSeat)
+        );
     }
 
     /// Static binding still applies at the entry: earlier values feed later statements,

@@ -1550,14 +1550,18 @@ mod outcome {
     }
 
     #[test]
-    fn a_partial_match_body_may_fall_through() {
+    fn a_partial_match_body_carries_a_realized_fall_through() {
         // (n) => n :: { 0 => 1 } — over a Number the single arm is non-exhaustive, so
-        // the body may complete without a value: UnprovenPossible.
+        // a sampled Number outside the arm realizes `CompletedWithoutValue`.
         let mut i = Interner::new();
         let (zero, one) = (i.integer(0), i.integer(1));
         let body = matchx(
             Some(name("n")),
-            vec![arm(Some(Pat::Const(zero)), None, konst(one.clone()))],
+            vec![arm(
+                Some(Pat::Const(zero.clone())),
+                None,
+                konst(one.clone()),
+            )],
         );
         let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
         let o = summarize_instance(&f, &[num()], &cenv(), &mut i).unwrap();
@@ -1566,10 +1570,36 @@ mod outcome {
             Contract::Equals(one),
             "the matching arm produces 1"
         );
-        assert!(
-            matches!(o.completion, C::UnprovenPossible),
-            "may fall through"
+        match o.completion {
+            C::ProvenPresent(witness) => {
+                assert_eq!(witness.callee, f);
+                assert_eq!(witness.arguments.len(), 1);
+                assert!(num().contains(&witness.arguments[0]));
+                assert_ne!(witness.arguments[0], zero);
+            }
+            other => panic!("expected a realized fall-through witness, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ap30_exact_partial_call_has_a_structural_completion_witness() {
+        // The represented application `(f, [1])` reaches the uncovered row. This is
+        // the positive AP-30 half: it is ProvenPresent only with that joint witness.
+        let mut i = Interner::new();
+        let (zero, one) = (i.integer(0), i.integer(1));
+        let body = matchx(
+            Some(name("n")),
+            vec![arm(Some(Pat::Const(zero)), None, konst(i.integer(2)))],
         );
+        let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
+        let o = summarize_instance(&f, &[Contract::Equals(one.clone())], &cenv(), &mut i).unwrap();
+        match o.completion {
+            C::ProvenPresent(witness) => {
+                assert_eq!(witness.callee, f);
+                assert_eq!(witness.arguments, vec![one]);
+            }
+            other => panic!("expected a represented completing witness, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1970,7 +2000,9 @@ mod apply_wiring {
 // ── Realized-witness refutation §6 — the permanent third voice (tail) ──────────
 
 mod refute {
-    use crate::analyzer::refute::{ClaimVerdict, check_return_claim, realized_refutation};
+    use crate::analyzer::refute::{
+        ClaimVerdict, check_return_claim, realized_completion, realized_refutation,
+    };
     use crate::ast::{Arg, Expr};
     use crate::contract::{Contract, ContractEnv, Kind};
     use crate::interner::Interner;
@@ -2014,6 +2046,39 @@ mod refute {
         let mut i = Interner::new();
         let f = factorial(&mut i);
         assert!(realized_refutation(&f, &[num()], &num(), &mut i).is_none());
+    }
+
+    #[test]
+    fn completion_witness_is_a_real_completed_without_value_call() {
+        let mut i = Interner::new();
+        let f = run_source_in("f = (n) => n :: { 0 => 1 }\nf", &mut i)
+            .unwrap()
+            .0;
+        let one = i.integer(1);
+        let witness = realized_completion(&f, &[Contract::Equals(one.clone())], &mut i)
+            .expect("f(1) completes without a value");
+        assert_eq!(witness.callee, f);
+        assert_eq!(witness.arguments, vec![one]);
+        let outcome = eval_expr_bounded(
+            &call(witness.callee, witness.arguments[0].clone()),
+            200_000,
+            &mut i,
+        );
+        assert!(matches!(outcome, BoundedOutcome::CompletedWithoutValue));
+    }
+
+    #[test]
+    fn producing_trapping_and_diverging_calls_are_not_completion_witnesses() {
+        let mut i = Interner::new();
+        let produced = run_source_in("f = () => 1\nf", &mut i).unwrap().0;
+        let trapped = run_source_in("f = () => 1 + \"x\"\nf", &mut i).unwrap().0;
+        let diverges = run_source_in("f = () => f()\nf", &mut i).unwrap().0;
+        for callee in [produced, trapped, diverges] {
+            assert!(
+                realized_completion(&callee, &[], &mut i).is_none(),
+                "only CompletedWithoutValue can mint an application witness"
+            );
+        }
     }
 
     #[test]

@@ -5,8 +5,9 @@
 >
 > **Progress delta 2026-08-01:** the program checker now originates executable and `where` demands;
 > the memo key is dependency-complete; grounding's T2.1 corrections are complete but unwired; T1.3
-> and T1.4 are complete; the reaching checker is deleted. The remaining lib pins are 1b
-> (exact-singleton chains) and 3 (structured recursive completion). T2.2 is next. Older scan counts
+> and T1.4 are complete; the reaching checker is deleted; T2.2 carries realized structural
+> completion witnesses through Match to the consuming seat. The only remaining lib pin is 1b
+> (exact-singleton chains). T2.3 is next. Older scan counts
 > and “no top / bodycheck live” passages below are historical where this delta supersedes them.
 
 # NEXT — Feature-by-feature completion plan
@@ -177,8 +178,8 @@ Ordinary application consumes domain-indexed safety/completion/return facts. `bo
 `check_recursive_body`, `reachable_rows`, and `grow` are deleted; a machinery gate requires their
 absence. Blockers 2a/2b no longer false-accept: an unsupported changed-domain repeated-shape fact is
 Unproven and blocks at the seat. Later diagnosis split 1b and 3 from this wiring gate: 1b requires
-T3.2's exact-singleton chains, while 3 requires T2.2's structured completion evidence. Keeping them
-ignored is therefore the honest completion of T1.4, not a relaxation of it.
+T3.2's exact-singleton chains, while 3 required T2.2's structured completion evidence. Both remained
+honestly pinned at T1.4; T2.2 has since released 3.
 
 ---
 
@@ -187,7 +188,7 @@ ignored is therefore the honest completion of T1.4, not a relaxation of it.
 | Feature | What it is | Pulled by |
 |---|---|---|
 | **T2.1 Grounding corrections — COMPLETE; still unwired** | The three prerequisite corrections are complete: forced recursive transitions, witness-bearing refutation, and the behavioural-judgment header correction. Wiring remains consumer-gated; do not wire merely because the implementation exists. | T1.3, A-NEG |
-| **T2.2 AP-30 + `refute`** | The structured `ProvenPresent` witness — the concrete blocker that killed F1 twice (`Completion` has no witness; `CompletionWithoutValue` requires one). Wires the entirely-dead `refute` module as the claim consumer. | T1.2 (seat demands), T1.4 |
+| **T2.2 AP-30 + `refute` — COMPLETE 2026-08-01** | Expression completion carries structured evidence; bounded Pure-call realization mints `ApplicationWitness` only on actual `CompletedWithoutValue`; Match preserves selected-arm outcomes for the enclosing consumer; completion claims use the row partition. Blocker 3 is live. | T1.2 (seat demands), T1.4 |
 | **T2.3 Application path unification** | Choose **one**: wire `application.rs`'s driver into `analyze_apply`, or delete it and keep the inline version. Today both exist; `analyze_apply` reimplements `live_alternatives`/`admit_callee`/`join`/`seat_demand` inline. Note the driver's admission is *weaker* (never refutes) than the live inline one — reconcile, don't blindly swap. | T1.2 |
 | **T2.4 Recursive source contracts → `RecGroup`** | Nothing live constructs `Contract::Ref`, so `contract::recursive` (and via it `length`) is dead. Building named recursive *source* contracts gives it its first real consumer. | T1.1 (`where`/named contracts) |
 | **T2.5 String-length contract form** | Tuple-family §5 lift. No string-length contract exists — this is what F0's `Add(String,String)` length lift is blocked on, and it gives `contract::length` + `grapheme` their consumer. | F0 residual |
@@ -266,7 +267,6 @@ synthesis — *may not be resurrected by any reading*) · **Part D** (candidate,
 | Ignored tests | Count | Released by |
 |---|---|---|
 | Blocker 1b exact-singleton chain (lib) | 1 | **T3.2** |
-| Blocker 3 recursive completion witness (lib) | 1 | **T2.2** |
 | Phase A (A-VER, A-ACC, A-SND, verdicts, A-LNT, A-WRK) | 6 | **T1.1** (+ T3.6 for lints, T5 for A-SND) |
 | MOD-03/04/05, P-27b | 4 | **T3.4** |
 | MU-18 | 1 | **T3.3** |
@@ -276,10 +276,8 @@ synthesis — *may not be resurrected by any reading*) · **Part D** (candidate,
 
 ## Recommended immediate order
 
-1. **T2.2** — carry structured `ProvenPresent(witness)` through the outcome/consumer boundary; this
-   is the direct blocker for recursive arm completion.
-2. **T2.3** — reconcile the still-duplicated application driver with the now-live inline path.
-3. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
+1. **T2.3** — reconcile the still-duplicated application driver with the now-live inline path.
+2. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
 
 *The remaining T1.2 breadth is pulled by these consumers; it is not a licence for a standalone
 backward-analysis rebuild.*

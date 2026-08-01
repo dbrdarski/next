@@ -16,13 +16,15 @@
 //! `Template` (E11), `Access` (E6), `Match` (E9/E10), and `Apply` (C§7/B5/E10).
 //! Closed **primitive** operations and **accesses** fold through the finite oracle
 //! kernel (`eval_prim` / `eval_expr` on a `Const` target) for an exact verdict; a
-//! **closed function call is never executed** — a callee's traps come from the
-//! domain-indexed candidate graph (`safety` + `induction`), completion from its settled
-//! completion fact, and return from the coarse shape-bounded outcome projection sharpened
-//! by return facts. The source seat supplies its actual world; a function body instead owns
-//! the world declared by its `ActKind` (B5/E14). Index/slice bounds await C§17 (see
-//! `OwedItems.md`). `Write` checks world admission and its right-hand expression; resolving
-//! and validating the target slot remains owed.
+//! **closed function calls are not executed as the transfer rule** — a callee's traps
+//! come from the domain-indexed candidate graph (`safety` + `induction`), completion
+//! from its settled completion fact plus AP-30's bounded pure-call witness refutation,
+//! and return from the coarse shape-bounded outcome projection sharpened by return
+//! facts. The source seat supplies its actual world; a function body instead owns the
+//! world declared by its `ActKind` (B5/E14). Index/slice bounds await C§17 (see
+//! `OwedItems.md`). `Write` checks
+//! world admission and its right-hand expression; resolving and validating the target
+//! slot remains owed.
 //!
 //! Analysis carries a **named-contract environment** ([`ContractEnv`]) alongside the
 //! value-contract [`TypeEnv`]: user contracts (`Percent = Range(0, 100)`, C§12.2)
@@ -42,6 +44,8 @@ use crate::contract::{
 use crate::interner::Interner;
 use crate::oracle::{Outcome, TrapClass, World, eval_expr, eval_prim};
 use crate::value::ValueRef;
+
+use self::application::ApplicationWitness;
 
 pub mod demand;
 pub(crate) mod factcache;
@@ -82,7 +86,7 @@ pub struct Finding {
 /// Whether an expression completes **without** producing a value (E10 — a `Match`
 /// that may fall through), three-voiced (the application spec's `CompletionWithoutValue`
 /// at the expression layer): the seat demand's compile-time face.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug)]
 pub enum Completion {
     /// Every path produces a value (`ProvenAbsent`) — an expecting seat is satisfied.
     Produces,
@@ -91,7 +95,17 @@ pub enum Completion {
     MayFallThrough,
     /// A fall-through is **proven reachable** (`ProvenPresent`) — a represented input
     /// completes without a value, so an expecting seat is *refuted* (an error).
-    FallsThrough,
+    FallsThrough(CompletionWitness),
+}
+
+/// Evidence retained by a proven completed-without-value outcome. Applications carry
+/// the normative joint `(callee, arguments)` witness (AP-30); other kernel operations
+/// retain the structural reason their own execution completes without a value.
+#[derive(Clone, Debug)]
+pub enum CompletionWitness {
+    Application(ApplicationWitness),
+    MatchRemainder { scrutinee: Option<ValueRef> },
+    Write { slot: SlotRef },
 }
 
 /// The result of analyzing an expression: the inferred contract, any findings
@@ -116,7 +130,7 @@ impl Analysis {
 
     /// Whether evaluation may complete without a value (either voice of fall-through).
     pub fn may_complete(&self) -> bool {
-        !matches!(self.completion, Completion::Produces)
+        !matches!(&self.completion, Completion::Produces)
     }
 }
 
@@ -125,9 +139,9 @@ impl Analysis {
 /// fall-through refutes (error); a merely **possible** one is unproven (warning); a
 /// guaranteed producer is fine.
 fn demand(a: &Analysis, findings: &mut Vec<Finding>) {
-    let (severity, message) = match a.completion {
+    let (severity, message) = match &a.completion {
         Completion::Produces => return,
-        Completion::FallsThrough => (
+        Completion::FallsThrough(_) => (
             Severity::Error,
             "a value is demanded here, but this expression completes without one on some input",
         ),
@@ -635,7 +649,7 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
 /// evaluating the RHS, so an illegal write reports that trap alone. A legal write
 /// evaluates its RHS at an expecting seat and completes without producing a value.
 fn analyze_write(
-    _slot: &SlotRef,
+    slot: &SlotRef,
     value: &Expr,
     env: &TypeEnv,
     cenv: &ContractEnv,
@@ -660,13 +674,16 @@ fn analyze_write(
     Analysis {
         contract: Contract::Bottom,
         findings,
-        completion: Completion::FallsThrough,
+        completion: Completion::FallsThrough(CompletionWitness::Write { slot: slot.clone() }),
     }
 }
 
 // ── Apply (C§7 / B5 / E10) — application ──────────────────────────────────────
 
-/// Analyze an application — **without executing the callee** (Archive6 §8/§9). Each
+/// Analyze an application without using execution as its transfer rule (Archive6
+/// §8/§9). AP-30's realized-witness refutation is the narrow exception: a bounded
+/// concrete Pure call may certify `CompletedWithoutValue`, but never infer safety or a
+/// return contract. Each
 /// argument spread must be a Tuple (`spread-kind`); the callee must be a function (else
 /// operation-safety); and when the callee value is known, its act-kind is checked
 /// against the analysis world (`world-admission`), the argument tuple against its
@@ -784,11 +801,12 @@ fn analyze_apply(
                                 &arg_contracts,
                                 interner,
                             ) || safety::completes(cv, &arg_contracts, cenv, interner);
-                            completions.push(if completes {
-                                Completion::Produces
-                            } else {
-                                Completion::MayFallThrough
-                            });
+                            completions.push(callee_completion(
+                                cv,
+                                &arg_contracts,
+                                completes,
+                                interner,
+                            ));
                         } else {
                             let observed = outcome::analyze_instance_body(
                                 cv,
@@ -797,8 +815,14 @@ fn analyze_apply(
                                 interner,
                             )
                             .expect("a known closure has a body outcome");
+                            let completes = matches!(&observed.completion, Completion::Produces);
                             produced.push(observed.contract);
-                            completions.push(observed.completion);
+                            completions.push(callee_completion(
+                                cv,
+                                &arg_contracts,
+                                completes,
+                                interner,
+                            ));
                         }
                         continue;
                     }
@@ -845,7 +869,7 @@ fn analyze_apply(
                     // Completion comes from the **fact** (settled over the candidate
                     // graph), not from a coarse whole-body pass.
                     let completes = safety::completes(cv, &arg_contracts, cenv, interner);
-                    completions.push(callee_completion(cv, completes, observed.completion));
+                    completions.push(callee_completion(cv, &arg_contracts, completes, interner));
                     // A recursive/mutual return needs the induction (`call_return`
                     // sharpens the coarse cycle assumption); a non-recursive return is its
                     // body's **exact** contract, so `always() → Equals(true)` and the
@@ -896,26 +920,35 @@ fn discharge_body_safety(verdict: safety::BodySafety, findings: &mut Vec<Finding
     }
 }
 
-/// The callee's completion (E10) at a call site. A **mutator** discards its return, so it
-/// always completes without a value (proven by law, B5). Otherwise the verdict is the
-/// settled completion fact: `Produces` when proven, else the honest third voice —
-/// `MayFallThrough`, never an assertion that it does fall through (that needs AP-30's
-/// witness).
-fn callee_completion(cv: &ValueRef, completes: bool, observed: Completion) -> Completion {
-    if cv.as_closure().is_some_and(|c| matches!(c.lambda.act_kind, ActKind::Mutator)) {
-        return Completion::FallsThrough; // the return is discarded — always without a value
+/// The callee's completion (E10) at a call site. A **mutator's completing outcome** is
+/// always without a value by the return-discard law (B5), so a represented input tuple
+/// supplies its structural witness. Otherwise the settled fact supplies `Produces`; a
+/// failed proof stays the third voice unless AP-30 realizes a completing-without-value
+/// Pure execution.
+fn callee_completion(
+    cv: &ValueRef,
+    args: &[Contract],
+    completes: bool,
+    interner: &mut Interner,
+) -> Completion {
+    if cv
+        .as_closure()
+        .is_some_and(|c| matches!(c.lambda.act_kind, ActKind::Mutator))
+    {
+        return refute::represented_application(cv, args, interner)
+            .map_or(Completion::MayFallThrough, |witness| {
+                Completion::FallsThrough(CompletionWitness::Application(witness))
+            });
     }
     if completes {
         return Completion::Produces;
     }
-    // The fact did not prove completion. A **proven** fall-through still refutes (it
-    // carries a sampled witness); anything else is the third voice. `Produces` is
-    // deliberately unreachable here — it may only come from the settled fact, never from
-    // a coarse body pass.
-    match observed {
-        Completion::FallsThrough => Completion::FallsThrough,
-        Completion::Produces | Completion::MayFallThrough => Completion::MayFallThrough,
-    }
+    // Failure to prove universal production is not itself a fall-through witness.
+    // AP-30 promotes the third voice only when the bounded oracle realizes one
+    // represented `(callee, arguments)` execution that completes without a value.
+    refute::realized_completion(cv, args, interner).map_or(Completion::MayFallThrough, |witness| {
+        Completion::FallsThrough(CompletionWitness::Application(witness))
+    })
 }
 
 /// One live alternative of a callee contract (Archive9 §9–§11). The enumeration is
@@ -974,8 +1007,11 @@ fn callee_alternatives(cc: &Contract, interner: &mut Interner) -> Vec<CalleeAlt>
 /// any alternative dominates (the represented execution may complete without a value);
 /// else a **possible** one; else every alternative produces.
 fn join_completions(cs: &[Completion]) -> Completion {
-    if cs.iter().any(|c| matches!(c, Completion::FallsThrough)) {
-        Completion::FallsThrough
+    if let Some(witness) = cs.iter().find_map(|c| match c {
+        Completion::FallsThrough(witness) => Some(witness.clone()),
+        Completion::Produces | Completion::MayFallThrough => None,
+    }) {
+        Completion::FallsThrough(witness)
     } else if cs.iter().any(|c| matches!(c, Completion::MayFallThrough)) {
         Completion::MayFallThrough
     } else {
@@ -1149,6 +1185,7 @@ fn analyze_match(
     let mut body_env = env.clone();
     let mut remainder = scrut.clone();
     let mut results: Vec<Contract> = Vec::new();
+    let mut completions: Vec<Completion> = Vec::new();
     // Any guarded arm makes the remainder an *over*-approximation (a guard, not the
     // pattern, decides, and guards consume nothing) — so an inhabited remainder no
     // longer *proves* a fall-through: at most `MayFallThrough`.
@@ -1212,11 +1249,19 @@ fn analyze_match(
                     any_guarded |= opaque_guard;
                 }
 
-                // Arm result — an expecting seat.
+                // The arm exits the Match with its result's whole outcome. The result
+                // is demanded only if the enclosing Match's consumer is expecting;
+                // demanding here would falsely reject the same Match in a statement
+                // seat (E10 / compendium 1.0.8).
                 let ra = analyze_in_world(&arm.result, &arm_env, cenv, world, interner);
-                demand(&ra, &mut findings);
                 findings.extend(ra.findings);
                 results.push(ra.contract);
+                let arm_is_represented = !opaque_guard && narrowed.has_proven_inhabitant(interner);
+                completions.push(if arm_is_represented {
+                    ra.completion
+                } else {
+                    weaken_completion(ra.completion)
+                });
 
                 // A non-opaque arm (unguarded or proven-true guard) consumes its whole
                 // pattern region — emptying the remainder when the pattern covers all of
@@ -1234,10 +1279,16 @@ fn analyze_match(
     }
 
     let contract = union_of(results, interner);
+    completions.push(classify_remainder(
+        &remainder,
+        any_guarded,
+        m.scrutinee.is_some(),
+        interner,
+    ));
     Analysis {
         contract,
         findings,
-        completion: classify_remainder(&remainder, any_guarded, interner),
+        completion: join_completions(&completions),
     }
 }
 
@@ -1247,14 +1298,34 @@ fn analyze_match(
 ///   remainder → `FallsThrough` (that witness is a represented input that falls
 ///   through — a real expecting-seat trap);
 /// - otherwise (not proven empty, no witness, or guards present) → `MayFallThrough`.
-fn classify_remainder(remainder: &Contract, any_guarded: bool, interner: &mut Interner) -> Completion {
-    if matches!(subcontract(remainder, &Contract::Bottom, interner), Verdict::Proven) {
+fn classify_remainder(
+    remainder: &Contract,
+    any_guarded: bool,
+    has_scrutinee: bool,
+    interner: &mut Interner,
+) -> Completion {
+    if matches!(
+        subcontract(remainder, &Contract::Bottom, interner),
+        Verdict::Proven
+    ) {
         return Completion::Produces;
     }
-    if !any_guarded && remainder.has_proven_inhabitant(interner) {
-        return Completion::FallsThrough;
+    if !any_guarded && let Some(witness) = remainder.proven_members(interner).into_iter().next() {
+        return Completion::FallsThrough(CompletionWitness::MatchRemainder {
+            scrutinee: has_scrutinee.then_some(witness),
+        });
     }
     Completion::MayFallThrough
+}
+
+/// A branch whose selection is not itself represented may contribute possibility,
+/// but never export another operation's refutation witness as though the branch were
+/// known reachable (AP-30's joint-membership discipline).
+fn weaken_completion(completion: Completion) -> Completion {
+    match completion {
+        Completion::Produces => Completion::Produces,
+        Completion::MayFallThrough | Completion::FallsThrough(_) => Completion::MayFallThrough,
+    }
 }
 
 /// The contract of values a pattern matches — a **superset** of the true match set

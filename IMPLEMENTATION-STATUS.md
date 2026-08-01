@@ -41,10 +41,10 @@ world, inferred contract, completion voice, and findings. Fixed operation-safety
 fire even when a statement discards its result, while only expecting seats demand a produced value.
 Headerless entry items are checked in Effect world, named-module items in Pure world, slot
 initializers in Pure world, and function bodies in the world owned by their `ActKind`; writes are
-admitted only in Mutator bodies. This is symbolic analysis only: no executable expression or
-function body is run at compile time. Check mode starts with the same inert harness values as run
-mode (`String`, `println`, `exit`, `readFile`), so prelude use is resolved rather than falsely
-reported unbound.
+admitted only in Mutator bodies. Transfer remains symbolic and never runs the module; T2.2 adds the
+narrow bounded-Pure-call exception used solely to realize a completion witness. Check mode starts
+with the same inert harness values as run mode (`String`, `println`, `exit`, `readFile`), so prelude
+use is resolved rather than falsely reported unbound.
 
 The fourth repair wires ordinary application to the settled candidate graph and deletes the
 quarantined recursive checker. `analyze_apply` now requires `BodySafe(instance, I) = Proven`, reads
@@ -57,19 +57,27 @@ safe divergent recursion is analyzed coarsely and terminates rather than overflo
 `bodycheck.rs` file, module export, reaching primitives, and implementation-specific tests are gone;
 the machinery gate requires them to remain absent.
 
+The fifth repair completes T2.2's completion evidence path. A proven application fall-through now
+carries the represented `(callee, arguments)` pair; Pure calls mint that evidence only when the
+fuel-bounded oracle actually returns `CompletedWithoutValue`. Produced values, traps, and fuel
+exhaustion mint nothing. Match carries a selected arm's whole outcome upward and the enclosing
+consumer applies the completion demand, preserving the statement-vs-expecting distinction. The
+completion fact uses the existing region-table partition, so exhaustive recursion such as
+`countDown` keeps its narrowed recursive fact while the recursive partial-producer regression is
+live and rejecting. Effect/Mutator bodies are not run to hunt for witnesses.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
 1. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
    remaining typed verdicts until policy is applied.
 2. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
-3. The repository-wide formatting gate is red (8,560 diff lines on 2026-08-01).
+3. The repository-wide formatting gate is red (8,519 diff lines on 2026-08-01).
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
-executable program demands, and ordinary-application fact wiring are complete. The next analyzer
-slice is the structured completion witness / typed seat boundary (T2.2), which is also the direct
-blocker for the remaining recursive fall-through pin. Normative files remain manifest-protected and
-are not edited by these implementation slices.
+executable program demands, ordinary-application fact wiring, and the structured completion witness
+/ typed seat boundary (T2.2) are complete. T2.3 application-path unification is next. Normative files
+remain manifest-protected and are not edited by these implementation slices.
 
 ---
 
@@ -138,15 +146,14 @@ value/interner layer, and the contract algebra including `contract::numeric` + `
 
 ---
 
-## 4. Known analyzer pins — 2 `#[ignore]`d in lib
+## 4. Known analyzer pins — 1 `#[ignore]`d in lib
 
-These are independent precision/completion gaps. Both block acceptance where proof is absent; neither
-is permission to reintroduce reaching domains, widening, or manufactured witnesses.
+This precision gap blocks acceptance where proof is absent; it is not permission to reintroduce
+reaching domains, widening, or manufactured witnesses.
 
 | Gate | Current behavior | Actual blocker |
 |---|---|---|
 | **1b** exact recursive singleton chain | `f(0) → f(1) → 1` is safe, but the second `f` repeats a shape and §4a admits no new node through that path; the seat rejects safety-unproven | grounding §4 exact-singleton fact chains. A row-wide fact is insufficient because the same row also contains trapping inputs |
-| **3** recursive arm fall-through | the completion fact exists, but `analyze_match` derives completion from uncovered scrutinee remainder and does not propagate a selected arm result's `CompletedWithoutValue` voice | T2.2's structured `ProvenPresent(witness)` carried through the outcome and demanded by the consumer |
 
 Resolved by the 2026-08-01 wiring:
 
@@ -160,6 +167,9 @@ Resolved by the 2026-08-01 wiring:
 - The broad-domain factorial safety and recursive-return tests are live again. Their `Number` fact
   covers `n - 1`; safety now consults the completion cross-claim and return induction instead of
   treating the recursive operand as a false possible fall-through.
+- **3 recursive arm fall-through:** released by T2.2. The represented Pure call is realized through
+  the bounded oracle, the `ApplicationWitness` survives Match outcome composition, and only the
+  enclosing expecting consumer rejects it. The statement-seat counterpart remains accepted.
 - Direct tests of the deleted checker were removed with it. They tested implementation internals,
   not stable language IDs; their live application/graph counterparts remain.
 
@@ -264,14 +274,14 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **414 passed, 0 failed, 2 ignored** (exact-singleton chain + recursive arm completion) |
+| `cargo test --lib` | **419 passed, 0 failed, 1 ignored** (exact-singleton chain) |
 | `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
 | `cargo test --test machinery_gate` | **3 passed, 0 failed** |
 | `cargo clippy --all-targets` | **0 warnings** |
-| `cargo fmt --check` | **FAILED** — 8,560 formatting diff lines |
+| `cargo fmt --check` | **FAILED** — 8,519 formatting diff lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
 417) are
 **HISTORICAL**; this table is current.
-**Green ≠ complete:** the two §4 gates remain pinned with independent mechanisms.
+**Green ≠ complete:** the §4 exact-singleton fact-chain gate remains pinned.

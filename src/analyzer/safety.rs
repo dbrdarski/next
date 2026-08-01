@@ -562,19 +562,63 @@ fn shape_of(v: &ValueRef) -> crate::ast::Lambda {
         })
 }
 
-/// Verify a **completion** claim: every path through the body over `I` produces a value.
-/// Completion is a property of the whole body (does the match cover `I`?), so this is one
-/// whole-body pass rather than a per-row walk — recursive calls inside resolve through the
-/// assumed completion facts.
+/// Verify a **completion** claim: every completing path through the body over `I`
+/// produces a value. The single-parameter case uses the same §5 partition as safety,
+/// discovery, and return facts: selected results are analyzed under their effective row
+/// regions, and exact rows must cover the input. Whole-body analysis would lose the
+/// guard narrowing (`n != 0` in `countDown`) and miss the active completion fact.
 pub(crate) fn verify_completes(
     callee: &ValueRef,
     args: &[Contract],
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> bool {
+    // A realized completing-without-value execution permanently refutes the universal
+    // completion claim. This is AP-30's positive witness path and is tried before the
+    // abstract proof, just as realized return refutations are.
+    if crate::analyzer::refute::realized_completion(callee, args, interner).is_some() {
+        return false;
+    }
     let Some(closure) = callee.as_closure() else {
         return false;
     };
+    if let (Some(param), [domain]) = (single_param(&closure.lambda.params), args) {
+        let table = region_table(&closure.lambda.body, &param, cenv, interner);
+        let base = capture_env(callee);
+        for sel in select(&table, domain, interner) {
+            let mut env = base.clone();
+            env.insert(param.clone(), sel.region);
+            let selected = analyze_in_world(
+                &sel.result,
+                &env,
+                cenv,
+                world_for_act(closure.lambda.act_kind),
+                interner,
+            );
+            if !matches!(selected.completion, crate::analyzer::Completion::Produces) {
+                return false;
+            }
+        }
+
+        let mut remainder = domain.clone();
+        for row in &table {
+            if row.exact {
+                remainder = if matches!(
+                    subcontract(&remainder, &row.region, interner),
+                    Verdict::Proven
+                ) {
+                    Contract::Bottom
+                } else {
+                    Contract::difference(remainder, row.region.clone(), interner)
+                };
+            }
+        }
+        return matches!(
+            subcontract(&remainder, &Contract::Bottom, interner),
+            Verdict::Proven
+        );
+    }
+
     let mut env = capture_env(callee);
     let arg_tuple = Contract::tuple(args.to_vec(), interner);
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
@@ -905,12 +949,6 @@ mod completion_tests {
     }
 
     #[test]
-    #[ignore = "PARTIAL (2026-07-31): the completion CLAIM (Claim::Completes) and the \
-cycle-assumption fix are built, but a recursive arm's completion still does not reach the \
-enclosing Match — analyze_match derives completion from the uncovered REMAINDER only, so an \
-arm whose *result* completes without a value is not reflected. Propagating it is correct per \
-E10 (a Match exits WITH its arm's result) but needs analyze_apply's completion path routed \
-through the fact first; done naively it breaks countDown. Blocker 3 stays pinned on this."]
     fn recursive_fall_through_is_not_claimed_to_produce() {
         // Blocker 3's shape. `f(0)` matches the only arm and calls `f(1)`; under
         // `Equals(1)` NO arm matches, so the body completes without a value. The old

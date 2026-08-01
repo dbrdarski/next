@@ -181,11 +181,11 @@ Low-stakes / for-info only:
 | **InstanceBodySummary unification** (Archive8): `instance_body_summary` keyed by `(instance, input-domain)` — safety + completion + non-recursive return share one node; instance identity (not shape); exact non-recursive returns | Archive8 | ✅ §11 gate (same-shape/diff-captures; same-instance/diff-domain; multi-callee; return-dependent) |
 | **Finite admitted-domain basis + total alternatives** (Archive9): `domain_admitted` (program literals + Kinds) admits exact recursive domains, computed ones widen via total `kind_abstraction` → advance-bounded state universe; widened findings **downgraded** (no false refutation); `CalleeAlt::{Known,UnknownFunction,NotAFunction}` — no live alternative dropped | Archive9 | ✅ §17 gate (widened-refutation accept; non-function reject; unknown not sharpened; growing-`Range` terminates); 🟡 candidate-graph/SCC proper + memo, joint-operand driver (§12), `may_not_complete` owed |
 | Application & induction §2 — `AnalysisContract` **structural/correlated** domain (Leaf/Tuple/Record/Alt, γ, `intersectA`/`meetInstance`, `proveSubcontractA`) | v0.8.1 | ✅ 8.1a + bridge (AP-27/28, correlation survival) |
-| Application & induction §1 — the outcome algebra + **joint operand driver** (`ApplicationOutcome` tri-state, `analyze_application` per-alternative, structural `ApplicationWitness`/`SeatVerdict`) | v0.8.1 | ✅ 8.1b + bridge-2 (AP-15/17/18/21/23/24/29 + structural witness); **AP-30** ⬜ tail-dependent (row-contribution) |
+| Application & induction §1 — the outcome algebra + **joint operand driver** (`ApplicationOutcome` tri-state, `analyze_application` per-alternative, structural `ApplicationWitness`/`SeatVerdict`) | v0.8.1 | ✅ 8.1b + bridge-2 (AP-15/17/18/21/23/24/29 + structural witness); **AP-30 witness live in the outcome/consumer path via T2.2; T2.3 still unifies this driver with `analyze_apply`** |
 | Application & induction §4a — the constructed instance-chain inventory (traversal-free closure + shape-repeat cutoff) | v0.8.1 | ✅ 8.1c (AP-16 mutual/self/diamond, order-independent set) |
 | Application & induction — μ-aware body walk (call graph off closure values, §4a shape-cutoff over real recursion) | v0.8.1 | ✅ tail step 1 (self / mutual / leaf / chain) |
 | Application & induction §1 step 3 — input obligation (`accepted_domain` from the param pattern, `input_obligation` with structural witness) | v0.8.1 | ✅ tail step 2 (arity / contract / const; rest-domain owed §4) |
-| Application & induction §1 steps 4–5 — outcome contribution (`summarize_instance`: produced + completion off the body, recursion coarse-Top) | v0.8.1 | ✅ tail step 3 (identity / const / partial-match / recursion; AP-30 `ProvenPresent` half owed to §6) |
+| Application & induction §1 steps 4–5 — outcome contribution (`summarize_instance`: produced + completion off the body, recursion coarse-Top) | v0.8.1 | ✅ tail step 3 + T2.2 (identity / const / partial-match / recursion; AP-30 `ProvenPresent` carries a realized application witness) |
 | Application & induction §6 — return induction, the joint vector pass (hypothesis injection in `analyze_apply`; sharpens recursive `Top`) | v0.8.1 | ✅ tail step 4 (factorial → Number; false-claim reject; mutual even/odd + vector failure) |
 | Application & induction §6/§13.2a — multi-SCC driver (call-graph SCC decomposition + reverse-topo; carry each proven component's facts to its dependents) | v0.8.1 | ✅ tail step 5 (dependent-after-dependency; order-independent; mutual-as-one-component; vector-failure isolation) |
 | Application & induction §6 — return-fact **inference** (autonomous claim proposal: `Contract::generalize` over a Bottom-pinned group summary, then the driver) | v0.8.1 | ✅ tail step 6 (factorial→Number over its domain; even/odd→Boolean; identity→sound over-approx; baseless→no fact) |
@@ -193,7 +193,7 @@ Low-stakes / for-info only:
 | C§13.2 domain-indexed facts — **hypotheses keyed by instance + input domain** (`Hypothesis{callee, input, contract}`; `args ⊑ input` guard; mutual groups over a consistent domain) | v0.8.1 | ✅ Archive4 §3/§4 fix (same-shape/diff-captures not aliased; false `h:Number` rejected; `make(1)`/`make("s")` distinct) |
 | E10 / §1.6 — **completion tri-state** (`Completion` on `Analysis`; three-voice `demand`; remainder inhabitance via `has_proven_inhabitant`; callee completion threaded — partial/mutator callee flagged) | v0.8.1 | ✅ tail step 8 (partial callee at expecting seat → error; guarded fall-through → warning; closes the mutator-only gap) |
 | §6 — **realized-witness refutation** (`realized_refutation`/`check_return_claim`, three-voiced: permanent refute vs per-compilation unproven) + the **fuel/call-depth-bounded oracle** (`eval_expr_bounded`, `run_source_in`) | v0.8.1 | ✅ tail step 9 (factorial: Number Proven / String Refuted-with-witness / Greater(0) Unproven; divergence → OutOfFuel, no hang) |
-| Application & induction §6/§5 — **AP-30 `ProvenPresent`** structured witness (outcome algebra), domain-indexed facts, the C§13.4 evaluation cache, `where`/demand consumers of `check_return_claim` | v0.8.1 | ⬜ **next**: the structured ProvenPresent witness + cache + a claim consumer (A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
+| Application & induction §6/§5 — **AP-30 `ProvenPresent`** structured witness (outcome algebra), domain-indexed facts, the C§13.4 evaluation cache, `where`/demand consumers of `check_return_claim` | v0.8.1 | 🟡 **AP-30 structured witness complete via T2.2**; cache and claim consumer remain (A-ACC/A-SND; A-NEG needs the separate C§10 grounding arc) |
 | Module system (linking, module-file top-level world, store modules, duplicate-module error) | E12 | ⬜ (imports parse only) |
 | Reactive layer / concurrency / UI | G1 fence | 🚫 fenced, out of scope |
 
@@ -212,9 +212,9 @@ boolean-DNF, remaining `analyzeOperation` tables, error templates, …).
 1. **Application & induction — the induction tail** (steps 1–9 done: body walk, input
    obligation, outcome contribution, the joint vector pass, the multi-SCC driver,
    autonomous return-fact inference, the `analyze_apply` rewiring, the completion
-   tri-state, **and realized-witness refutation**): next is (a) **AP-30's structured
-   `ProvenPresent` witness** in the outcome algebra (a represented `(callee, args)`
-   fall-through feeding `seat_demand`); (b) a **consumer for `check_return_claim`** — a
+   tri-state, realized-witness refutation, **and AP-30's structured `ProvenPresent`
+   witness feeding the completion consumer**): next is (a) **application path unification
+   (T2.3)**; (b) a **consumer for `check_return_claim`** — a
    `where` return-check (E11) or a demand-driven return obligation, the natural home for
    the three-voiced verdict; (c) the **C§13.4 evaluation cache** (one call site drives
    one bounded inference today); (d) the **program-level bounded run + M-04 wiring**

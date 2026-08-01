@@ -1,4 +1,4 @@
-//! Realized-witness refutation of a return claim — §6, the permanent third voice.
+//! Realized-witness refutation of return and completion claims — §6 / AP-30.
 //!
 //! A return fact `(callee, args, C)` claims "over `args`, the callee returns values in
 //! `C`." The **inductive** proof (the vector pass) is *per-compilation* — an unproven
@@ -18,9 +18,11 @@
 //!   produced)` the oracle actually ran, never a fabricated value.
 //!
 //! Refutation is the **sound ground truth** the abstract vector pass is checked
-//! against: [`check_return_claim`] tries refutation first (permanent), then the
-//! inductive proof (per-compilation) — three-voiced.
+//! against: [`check_return_claim`] tries return refutation first (permanent), then the
+//! inductive proof (per-compilation); [`realized_completion`] supplies the structural
+//! application witness for the completion tri-state.
 
+use crate::analyzer::application::ApplicationWitness;
 use crate::analyzer::induction::{Candidate, joint_vector_pass};
 use crate::ast::{Arg, Expr};
 use crate::contract::{Contract, ContractEnv};
@@ -80,6 +82,62 @@ pub fn realized_refutation(
         }
     }
     None
+}
+
+/// Search for a represented application that genuinely completes without a value
+/// (application §1.5 / AP-30). The oracle is the evidence: contract membership alone
+/// can establish that a tuple is represented, but only a completed bounded run can
+/// establish the row's `CompletedWithoutValue` outcome. Traps, produced values, and
+/// fuel exhaustion are not completion witnesses.
+///
+/// This concrete refutation path is deliberately limited to `Pure` NEXT closures.
+/// Running an Effect body during analysis would perform host effects, and a Mutator
+/// may refer to store locations owned by another oracle. Those cases remain the
+/// honest third voice until their non-executing row evidence is wired.
+pub fn realized_completion(
+    callee: &ValueRef,
+    args: &[Contract],
+    interner: &mut Interner,
+) -> Option<ApplicationWitness> {
+    let closure = callee.as_closure()?;
+    if closure.lambda.act_kind != crate::ast::ActKind::Pure {
+        return None;
+    }
+    for tuple in argument_samples(args, interner) {
+        let node = Expr::Apply {
+            callee: Box::new(Expr::Const(callee.clone())),
+            args: tuple
+                .iter()
+                .cloned()
+                .map(|v| Arg::Expr(Expr::Const(v)))
+                .collect(),
+        };
+        if matches!(
+            eval_expr_bounded(&node, REFUTE_FUEL, interner),
+            BoundedOutcome::CompletedWithoutValue
+        ) {
+            return Some(ApplicationWitness {
+                callee: callee.clone(),
+                arguments: tuple,
+            });
+        }
+    }
+    None
+}
+
+/// A concrete member of the application input product. This does **not** prove an
+/// ordinary callee completes; it is exposed only for outcome laws that establish the
+/// completion form independently (currently Mutator's return-discard law).
+pub(crate) fn represented_application(
+    callee: &ValueRef,
+    args: &[Contract],
+    interner: &mut Interner,
+) -> Option<ApplicationWitness> {
+    let arguments = argument_samples(args, interner).into_iter().next()?;
+    Some(ApplicationWitness {
+        callee: callee.clone(),
+        arguments,
+    })
 }
 
 /// Verify a return claim three-voiced (§6): a realized refutation (permanent) is tried

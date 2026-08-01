@@ -7,10 +7,9 @@
 //! maps its result:
 //!
 //! - **produced** = the body's inferred contract (the union over selected rows);
-//! - **completion** = `ProvenAbsent` when the body always produces, else
-//!   `UnprovenPossible` — **conservative here**: a *proven* fall-through is not yet
-//!   promoted to `ProvenPresent` (the structured AP-30 witness is owed); the call site
-//!   reads the finer three-voice `Completion` off [`analyze_instance_body`] directly.
+//! - **completion** = the evidence-preserving AP-30 tri-state: a represented bounded
+//!   execution that completes without a value supplies `ProvenPresent(witness)`;
+//!   otherwise a non-producing voice remains `UnprovenPossible`.
 //!
 //! **Recursion is coarse and terminating here.** The active shape sequence implements
 //! §4a's shape-repeat cutoff: re-entering a shape contributes the conservative `Top` /
@@ -99,10 +98,8 @@ pub(crate) fn analyze_instance_body(
 }
 
 /// Summarize applying the callee closure to arguments described by `arg_contracts`
-/// (§1 steps 4–5). `None` for a non-function. Completion is **conservative here**: a
-/// proven and a merely-possible fall-through both map to `UnprovenPossible` — the
-/// structured `ProvenPresent` witness (AP-30) is owed, and the call site reads the
-/// finer `Completion` tri-state directly.
+/// (§1 steps 4–5). `None` for a non-function. `ProvenPresent` is minted only from a
+/// represented bounded execution, never from product inhabitance alone (AP-30).
 pub fn summarize_instance(
     callee: &ValueRef,
     arg_contracts: &[Contract],
@@ -110,9 +107,14 @@ pub fn summarize_instance(
     interner: &mut Interner,
 ) -> Option<ApplicationOutcome> {
     let a = analyze_instance_body(callee, arg_contracts, cenv, interner)?;
-    let completion = match a.completion {
+    let completion = match &a.completion {
         Completion::Produces => CompletionWithoutValue::ProvenAbsent,
-        Completion::MayFallThrough | Completion::FallsThrough => CompletionWithoutValue::UnprovenPossible,
+        Completion::MayFallThrough | Completion::FallsThrough(_) => {
+            crate::analyzer::refute::realized_completion(callee, arg_contracts, interner).map_or(
+                CompletionWithoutValue::UnprovenPossible,
+                CompletionWithoutValue::ProvenPresent,
+            )
+        }
     };
     Some(ApplicationOutcome {
         produced: AnalysisContract::of_contract(a.contract),
