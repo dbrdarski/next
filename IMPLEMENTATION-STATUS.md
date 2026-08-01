@@ -164,6 +164,34 @@ obligation, under the standing rule that when a pinned blocker goes green the **
 reported, not merely the outcome. If a check fires, the fix is never to relax it — imprecision
 yields `unproven`, never another prerequisite and never a growth loop.
 
+
+### T1.4 (the wiring) — ATTEMPTED 2026-08-01, REVERTED. Gated on a per-node in-progress key.
+
+The swap of `analyze_apply` off `bodycheck::body_summary` and onto the settled facts was
+attempted and reverted whole. All three inputs now exist (`safety::prove` for findings,
+`safety::completes` for completion, and a partition-based `body_outcome` for `produced`),
+so the blocker is no longer a missing input.
+
+**The blocker is re-entrancy granularity.** A settlement analyzes bodies, whose calls reach
+`analyze_apply`, which would launch a nested settlement. Guarding that with the existing
+**global `SETTLING` boolean is unsound**: during any settlement, *every* nested `prove` gets
+answered from the hypotheses — including callees that are not members of the graph and have
+no hypothesis at all. Those return `Unproven(vec![])`, silently dropping a real transitive
+trap. Measured effect: 10 lib failures, of which
+`safety::graph_tests::mutual_recursion_closes_via_the_joint_vector_pass` reported **Proven
+where it must refute** — a false accept, the dangerous direction.
+
+**What it needs:** the in-progress key must be the fact node `(instance, I)`, not a global
+flag — so a member resolves through its hypothesis (vector induction, correct) while a
+non-member is genuinely verified. That is C§13.4's proven-fact cache keyed
+`(analysis instance, row-set I, demanded C)`, and the quarantined `bodycheck` carried the
+weaker per-callee form of it in its `ACTIVE` stack.
+
+**Consequence for ordering:** C§13.4's fact cache moves *before* T1.4, not after. The
+canonicalizer lands with that cache (it is the key's consumer), so the two travel together.
+No part of the attempt was kept — `body_outcome` included — because unused machinery ahead
+of its consumer is the pattern this project is recovering from.
+
 ## 6a. In progress — `BodySafe(instance, I)` (authorized once §6 completed)
 
 **Landed:** the safety fact keyed `(instance, I)`, `I` taken from the call site (never synthesized),

@@ -3724,3 +3724,38 @@ this pass does not mint. Unproven still rejects, per the safety-unproven discipl
 
 396 lib + 111 conformance + 4 gate green, clippy clean. No pinned blocker flipped — they
 remain gated on T1.4, and were re-checked rather than assumed.
+
+## 2026-08-01 — T1.4 attempted and reverted: the wiring needs a per-node in-progress key
+
+The swap of `analyze_apply` off `bodycheck::body_summary` onto the settled facts was
+attempted and reverted whole. The inputs were all present this time — `safety::prove`,
+`safety::completes`, and a partition-based `body_outcome` for `produced` — so the earlier
+blocker (no fact source for `produced`) was genuinely gone.
+
+**What actually blocks it.** A settlement analyzes bodies; those bodies' calls reach
+`analyze_apply`, which would launch nested settlements. I guarded that with the existing
+global `SETTLING` boolean, which is **unsound at that granularity**: during any settlement
+every nested `prove` is answered from the hypotheses, including for callees that are not
+members of the graph and hold no hypothesis. Those returned `Unproven(vec![])`, dropping
+real transitive traps. Ten lib tests failed; the one that matters is
+`mutual_recursion_closes_via_the_joint_vector_pass`, which reported **Proven where it must
+refute** — a false accept.
+
+**The fix is not a better boolean.** The in-progress key must be the fact node
+`(instance, I)` so that a graph member resolves through its hypothesis (correct vector
+induction) while a non-member is actually verified. That is C§13.4's proven-fact cache; the
+quarantined `bodycheck` carried a weaker per-callee form of it in its `ACTIVE` stack, which
+is why the old path surfaced transitive traps and the new one did not.
+
+**Ordering correction:** C§13.4's fact cache moves *before* T1.4. Canonicalization lands
+with that cache, since it is the cache key's consumer — so the two travel together, earlier
+than planned.
+
+**Nothing was kept.** `body_outcome` was green and reverted with the rest: unused machinery
+ahead of its consumer is the pattern this project is recovering from, and keeping it
+"because it works" is how the last one got in.
+
+Also corrected: I called the first failed run a hang and theorized an exponential blowup
+from per-call-site settlement. It was neither — the suite completes in ~5s. The first
+command timed out during compilation, not execution. The measurement, not the theory, was
+right.
