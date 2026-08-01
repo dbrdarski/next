@@ -20,6 +20,7 @@
 use crate::analyzer::pattern_contract;
 use crate::ast::{BindingRef, Expr, Match, MatchItem, Pat, PatElem, PatField, PrimOp, Ref};
 use crate::contract::{Contract, ContractEnv, disjoint};
+use crate::interner::Interner;
 use crate::rational::Rational;
 
 /// A region-table row (§1): where an input may go, its exactness, and the arm's result.
@@ -46,14 +47,18 @@ pub struct Selected {
 
 /// The region table of `body` over the single parameter `param`. A `Match` body yields
 /// one row per arm; any other body is a single unconditional row `(Top, exact, body)`.
-pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv) -> Vec<Row> {
+pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv, i: &mut Interner) -> Vec<Row> {
     match body {
-        Expr::Match(m) => region_rows(m, param, cenv),
-        other => vec![Row { region: Contract::Top, exact: true, result: other.clone() }],
+        Expr::Match(m) => region_rows(m, param, cenv, i),
+        other => vec![Row {
+            region: Contract::Top,
+            exact: true,
+            result: other.clone(),
+        }],
     }
 }
 
-fn region_rows(m: &Match, param: &str, cenv: &ContractEnv) -> Vec<Row> {
+fn region_rows(m: &Match, param: &str, cenv: &ContractEnv, i: &mut Interner) -> Vec<Row> {
     // Patterns match the scrutinee; they regionalize the parameter only when the
     // scrutinee *is* the parameter (or is absent — a `?:`/tested match carries guards,
     // not patterns). Otherwise the pattern is opaque on the parameter.
@@ -65,15 +70,19 @@ fn region_rows(m: &Match, param: &str, cenv: &ContractEnv) -> Vec<Row> {
     for item in &m.items {
         let MatchItem::Arm(arm) = item else { continue };
         let (pr, pe) = match (&arm.pattern, patterns_on_param) {
-            (Some(p), true) => (pattern_contract(p, cenv), pattern_exact(p)),
+            (Some(p), true) => (pattern_contract(p, cenv, i), pattern_exact(p)),
             (Some(_), false) => (Contract::Top, false),
             (None, _) => (Contract::Top, true),
         };
         let (gr, ge) = match &arm.guard {
-            Some(g) => regionalize_guard(g, param),
+            Some(g) => regionalize_guard(g, param, i),
             None => (Contract::Top, true),
         };
-        rows.push(Row { region: intersect(pr, gr), exact: pe && ge, result: arm.result.clone() });
+        rows.push(Row {
+            region: intersect(pr, gr, i),
+            exact: pe && ge,
+            result: arm.result.clone(),
+        });
     }
     rows
 }
@@ -88,12 +97,16 @@ fn region_rows(m: &Match, param: &str, cenv: &ContractEnv) -> Vec<Row> {
 /// via denotational membership — this avoids the accumulated-`Difference` imprecision
 /// the general algebra cannot always simplify. Open domains use the general walk, where
 /// over-selection is sound (extra branches are carried and joined downstream).
-pub fn select(table: &[Row], arg_domain: &Contract) -> Vec<Selected> {
+pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Selected> {
     if let Contract::Equals(v) = arg_domain {
         let mut out = Vec::new();
         for row in table {
             if row.region.contains(v) {
-                out.push(Selected { region: Contract::Equals(v.clone()), exact: row.exact, result: row.result.clone() });
+                out.push(Selected {
+                    region: Contract::Equals(v.clone()),
+                    exact: row.exact,
+                    result: row.result.clone(),
+                });
                 if row.exact {
                     break; // an exact row containing the point consumes it
                 }
@@ -107,13 +120,13 @@ pub fn select(table: &[Row], arg_domain: &Contract) -> Vec<Selected> {
     for row in table {
         if !disjoint(&remaining, &row.region) {
             out.push(Selected {
-                region: intersect(remaining.clone(), row.region.clone()),
+                region: intersect(remaining.clone(), row.region.clone(), i),
                 exact: row.exact,
                 result: row.result.clone(),
             });
         }
         if row.exact {
-            remaining = Contract::Difference(Box::new(remaining), Box::new(row.region.clone()));
+            remaining = Contract::difference(remaining, row.region.clone(), i);
         }
     }
     out
@@ -124,14 +137,18 @@ pub fn select(table: &[Row], arg_domain: &Contract) -> Vec<Selected> {
 /// Forward-read a guard as a `(region, exact)` constraint on `param`. Case (a): a
 /// supported comparison of `param` against a constant number → exact. Case (d):
 /// anything else → `Top`, non-exact (total fallback).
-fn regionalize_guard(g: &Expr, param: &str) -> (Contract, bool) {
+fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Contract, bool) {
     let opaque = (Contract::Top, false);
-    let Expr::PrimOp { op, args } = g else { return opaque };
+    let Expr::PrimOp { op, args } = g else {
+        return opaque;
+    };
     if args.len() != 2 {
         return opaque;
     }
-    let Some((v, flipped)) = param_vs_const(&args[0], &args[1], param) else { return opaque };
-    match cmp_region(*op, &v, flipped) {
+    let Some((v, flipped)) = param_vs_const(&args[0], &args[1], param) else {
+        return opaque;
+    };
+    match cmp_region(*op, &v, flipped, i) {
         Some(region) => (region, true),
         None => opaque,
     }
@@ -151,11 +168,11 @@ fn param_vs_const(a: &Expr, b: &Expr, param: &str) -> Option<(Rational, bool)> {
 
 /// The region of `param OP v` (or `v OP param` when `flipped`), for the supported
 /// direct comparison forms; `None` for an unsupported operator (→ case d).
-fn cmp_region(op: PrimOp, v: &Rational, flipped: bool) -> Option<Contract> {
+fn cmp_region(op: PrimOp, v: &Rational, flipped: bool, i: &mut Interner) -> Option<Contract> {
     let eq = Contract::Range(v.clone(), v.clone());
     Some(match (op, flipped) {
         (PrimOp::Eq, _) => eq,
-        (PrimOp::Ne, _) => Contract::Difference(Box::new(Contract::Top), Box::new(eq)),
+        (PrimOp::Ne, _) => Contract::difference(Contract::Top, eq, i),
         (PrimOp::Lt, false) | (PrimOp::Gt, true) => Contract::Less(v.clone()),
         (PrimOp::Le, false) | (PrimOp::Ge, true) => Contract::LessEq(v.clone()),
         (PrimOp::Gt, false) | (PrimOp::Lt, true) => Contract::Greater(v.clone()),
@@ -198,9 +215,9 @@ fn const_num(e: &Expr) -> Option<Rational> {
 
 /// `Top ∩ x = x`; otherwise the raw `Intersection` (kept unsimplified — the algebra's
 /// `disjoint`/`subcontract` do the reasoning the walk needs).
-fn intersect(a: Contract, b: Contract) -> Contract {
+fn intersect(a: Contract, b: Contract, i: &mut Interner) -> Contract {
     match (a, b) {
         (Contract::Top, x) | (x, Contract::Top) => x,
-        (a, b) => Contract::Intersection(Box::new(a), Box::new(b)),
+        (a, b) => Contract::intersection(a, b, i),
     }
 }

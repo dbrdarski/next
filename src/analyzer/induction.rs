@@ -130,14 +130,16 @@ pub(crate) fn safety_assumed(callee: &ValueRef, args: &[Contract], interner: &mu
             .map(|hyp| hyp.input.clone())
             .collect()
     });
-    domains.into_iter().any(|input| args_within(args, &input, interner))
+    domains
+        .into_iter()
+        .any(|input| args_within(args, &input, interner))
 }
 
 /// Whether a call's argument domain `args` is contained in a fact's `domain` — the
 /// per-tuple subcontract `Tuple(args) ⊑ Tuple(domain)`.
 fn args_within(args: &[Contract], domain: &[Contract], interner: &mut Interner) -> bool {
-    let call = Contract::Tuple(args.to_vec());
-    let dom = Contract::Tuple(domain.to_vec());
+    let call = Contract::tuple(args.to_vec(), interner);
+    let dom = Contract::tuple(domain.to_vec(), interner);
     matches!(subcontract(&call, &dom, interner), Verdict::Proven)
 }
 
@@ -210,11 +212,13 @@ fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, inte
                 // the body whole loses each row's narrowing, which is exactly what a
                 // recursive return claim needs to stay inside its declared domain.
                 let produced = with_hypotheses(hyps, || {
-                    crate::analyzer::safety::produced_by_partition(&c.callee, &c.args, cenv, interner)
-                        .or_else(|| {
-                            summarize_instance(&c.callee, &c.args, cenv, interner)
-                                .map(|o| o.produced.erase())
-                        })
+                    crate::analyzer::safety::produced_by_partition(
+                        &c.callee, &c.args, cenv, interner,
+                    )
+                    .or_else(|| {
+                        summarize_instance(&c.callee, &c.args, cenv, interner)
+                            .map(|o| o.produced.erase(interner))
+                    })
                 });
                 match produced {
                     Some(p) => matches!(subcontract(&p, want, interner), Verdict::Proven),
@@ -349,7 +353,7 @@ fn infer_inner(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> Option<Contract> {
-    let with_args = group_domains(callee, root_args, cenv);
+    let with_args = group_domains(callee, root_args, cenv, interner);
 
     // Bottom-pin the whole group over their own domains, so a mutual/identity recursive
     // tail call (in-domain) drops out of the base union. The instance+domain key means
@@ -357,36 +361,56 @@ fn infer_inner(
     // proposal then yields no informative claim (sound).
     let bottoms: Vec<Hypothesis> = with_args
         .iter()
-        .map(|(g, args)| Hypothesis { callee: g.clone(), input: args.clone(), claim: Claim::Return(Contract::Bottom) })
+        .map(|(g, args)| Hypothesis {
+            callee: g.clone(),
+            input: args.clone(),
+            claim: Claim::Return(Contract::Bottom),
+        })
         .collect();
 
     let candidates: Vec<Candidate> = with_args
         .iter()
         .filter_map(|(f, args)| {
-            let produced =
-                with_hypotheses(bottoms.clone(), || summarize_instance(f, args, cenv, interner))?.produced.erase();
-            let claim = produced.generalize();
+            let produced = with_hypotheses(bottoms.clone(), || {
+                summarize_instance(f, args, cenv, interner)
+            })?
+            .produced
+            .erase(interner);
+            let claim = produced.generalize(interner);
             // Top proves trivially (no information); Bottom claims no value (a baseless
             // recursion) — neither is an informative fact.
             if matches!(claim, Contract::Top | Contract::Bottom) {
                 return None;
             }
-            Some(Candidate { callee: f.clone(), args: args.clone(), claim: Claim::Return(claim), cutoff: false })
+            Some(Candidate {
+                callee: f.clone(),
+                args: args.clone(),
+                claim: Claim::Return(claim),
+                cutoff: false,
+            })
         })
         .collect();
 
     let result = prove_facts(candidates, cenv, interner);
-    result.proven.iter().find(|c| c.callee == *callee).and_then(|c| match &c.claim {
-        Claim::Return(x) => Some(x.clone()),
-        Claim::Safety | Claim::Completes => None,
-    })
+    result
+        .proven
+        .iter()
+        .find(|c| c.callee == *callee)
+        .and_then(|c| match &c.claim {
+            Claim::Return(x) => Some(x.clone()),
+            Claim::Safety | Claim::Completes => None,
+        })
 }
 
 /// A callee's accepted input domain as per-position argument contracts, or `None` when
 /// no sound domain is derivable (a rest parameter — §4 owed — or a non-tuple domain).
-fn domain_args(callee: &ValueRef, cenv: &ContractEnv) -> Option<Vec<Contract>> {
-    match accepted_domain(callee, cenv)? {
-        Contract::Tuple(parts) => Some(parts),
+fn domain_args(
+    callee: &ValueRef,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Vec<Contract>> {
+    match accepted_domain(callee, cenv, interner)? {
+        Contract::Tuple(parts) => Some(parts.iter().map(|c| (**c).clone()).collect()),
         _ => None,
     }
 }
@@ -402,29 +426,34 @@ fn group_domains(
     callee: &ValueRef,
     root_args: Option<&[Contract]>,
     cenv: &ContractEnv,
+    interner: &mut Interner,
 ) -> Vec<(ValueRef, Vec<Contract>)> {
-    reachable_closures(callee.clone())
-        .iter()
-        .filter_map(|g| {
-            let args = match root_args {
-                Some(a) if g == callee => a.to_vec(),
-                Some(a) => {
-                    let dom = domain_args(g, cenv)?;
-                    if dom.len() == a.len() { a.to_vec() } else { dom }
-                }
-                None => domain_args(g, cenv)?,
-            };
-            Some((g.clone(), args))
-        })
-        .collect()
+    let mut out = Vec::new();
+    for g in reachable_closures(callee.clone()).iter() {
+        let args = match root_args {
+            Some(a) if g == callee => a.to_vec(),
+            Some(a) => match domain_args(g, cenv, interner) {
+                Some(dom) if dom.len() == a.len() => a.to_vec(),
+                Some(dom) => dom,
+                None => continue,
+            },
+            None => match domain_args(g, cenv, interner) {
+                Some(dom) => dom,
+                None => continue,
+            },
+        };
+        out.push((g.clone(), args));
+    }
+    out
 }
-
 
 /// Whether `cv` participates in a call cycle (is recursive/mutual) — a back-edge to `cv`
 /// exists somewhere in its reachable call graph. A recursive return needs the induction
 /// (`call_return`); a non-recursive return is its body's exact contract.
 pub fn is_recursive(cv: &ValueRef) -> bool {
-    reachable_closures(cv.clone()).iter().any(|g| callee_targets(g).contains(cv))
+    reachable_closures(cv.clone())
+        .iter()
+        .any(|g| callee_targets(g).contains(cv))
 }
 
 /// The direct-call adjacency among candidates: `i → j` iff candidate `j`'s closure is

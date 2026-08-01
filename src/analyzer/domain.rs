@@ -149,19 +149,26 @@ impl AnalysisContract {
     }
 
     /// `erase(ac)` — the ordinary contract (the language denotation, metadata dropped).
-    pub fn erase(&self) -> Contract {
+    pub fn erase(&self, i: &mut Interner) -> Contract {
         match self {
             AnalysisContract::Bottom => Contract::Bottom,
             AnalysisContract::Leaf { contract, .. } => contract.clone(),
-            AnalysisContract::Tuple(es) => Contract::Tuple(es.iter().map(AnalysisContract::erase).collect()),
-            AnalysisContract::Record(fs) => {
-                Contract::Record(fs.iter().map(|(k, v)| (k.clone(), v.erase())).collect())
+            AnalysisContract::Tuple(es) => {
+                let elems: Vec<Contract> = es.iter().map(|e| e.erase(i)).collect();
+                Contract::tuple(elems, i)
             }
-            AnalysisContract::Alt(alts) => alts
-                .iter()
-                .map(AnalysisContract::erase)
-                .reduce(|a, b| Contract::Union(Box::new(a), Box::new(b)))
-                .unwrap_or(Contract::Bottom),
+            AnalysisContract::Record(fs) => {
+                let fields: Vec<(String, Contract)> =
+                    fs.iter().map(|(k, v)| (k.clone(), v.erase(i))).collect();
+                Contract::record(fields, i)
+            }
+            AnalysisContract::Alt(alts) => {
+                let parts: Vec<Contract> = alts.iter().map(|a| a.erase(i)).collect();
+                parts
+                    .into_iter()
+                    .reduce(|a, b| Contract::union(a, b, i))
+                    .unwrap_or(Contract::Bottom)
+            }
         }
     }
 
@@ -242,7 +249,9 @@ pub fn gamma_contains(ac: &AnalysisContract, v: &ValueRef, interner: &mut Intern
             }
         }
         AnalysisContract::Tuple(es) => {
-            let Some(items) = v.as_tuple() else { return false };
+            let Some(items) = v.as_tuple() else {
+                return false;
+            };
             if items.len() != es.len() {
                 return false;
             }
@@ -255,15 +264,21 @@ pub fn gamma_contains(ac: &AnalysisContract, v: &ValueRef, interner: &mut Intern
             true
         }
         AnalysisContract::Record(fs) => {
-            let Some(entries) = v.as_record() else { return false };
+            let Some(entries) = v.as_record() else {
+                return false;
+            };
             if entries.len() != fs.len() {
                 return false;
             }
-            let entries: Vec<(Vec<u16>, ValueRef)> =
-                entries.iter().map(|e| (e.key.clone(), e.value.clone())).collect();
+            let entries: Vec<(Vec<u16>, ValueRef)> = entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect();
             for (k, ac) in fs {
                 let ku: Vec<u16> = k.encode_utf16().collect();
-                let Some((_, xv)) = entries.iter().find(|(ek, _)| *ek == ku) else { return false };
+                let Some((_, xv)) = entries.iter().find(|(ek, _)| *ek == ku) else {
+                    return false;
+                };
                 let xv = xv.clone();
                 if !gamma_contains(ac, &xv, interner) {
                     return false;
@@ -315,17 +330,26 @@ pub fn intersect_a(a: &AnalysisContract, b: &AnalysisContract, interner: &mut In
             AnalysisContract::record(fields)
         }
         (
-            AnalysisContract::Leaf { contract: ca, metadata: ma },
-            AnalysisContract::Leaf { contract: cb, metadata: mb },
+            AnalysisContract::Leaf {
+                contract: ca,
+                metadata: ma,
+            },
+            AnalysisContract::Leaf {
+                contract: cb,
+                metadata: mb,
+            },
         ) => {
-            let contract = Contract::Intersection(Box::new(ca.clone()), Box::new(cb.clone()));
+            let contract = Contract::intersection(ca.clone(), cb.clone(), interner);
             let metadata = meet_metadata(ma, mb, interner);
             AnalysisContract::leaf(contract, metadata)
         }
-        _ => AnalysisContract::leaf(
-            Contract::Intersection(Box::new(a.erase()), Box::new(b.erase())),
-            InstanceMetadata::Unknown,
-        ),
+        _ => {
+            let (ea, eb) = (a.erase(interner), b.erase(interner));
+            AnalysisContract::leaf(
+                Contract::intersection(ea, eb, interner),
+                InstanceMetadata::Unknown,
+            )
+        }
     }
 }
 
@@ -433,10 +457,17 @@ pub fn prove_subcontract_a(a: &AnalysisContract, b: &AnalysisContract, interner:
 /// The leaf/mixed path: refute through the erased contracts (γ-representable witness
 /// only), else prove when erased inclusion holds and the target is metadata-free or
 /// both sides are leaves with covering metadata.
-fn prove_by_erasure(a: &AnalysisContract, b: &AnalysisContract, interner: &mut Interner) -> Verdict {
-    let base = subcontract(&a.erase(), &b.erase(), interner);
+fn prove_by_erasure(
+    a: &AnalysisContract,
+    b: &AnalysisContract,
+    interner: &mut Interner,
+) -> Verdict {
+    let (ea, eb) = (a.erase(interner), b.erase(interner));
+    let base = subcontract(&ea, &eb, interner);
     match &base {
-        Verdict::Refuted(w) if gamma_contains(a, w, interner) => return Verdict::Refuted(w.clone()),
+        Verdict::Refuted(w) if gamma_contains(a, w, interner) => {
+            return Verdict::Refuted(w.clone());
+        }
         _ => {}
     }
     if matches!(base, Verdict::Proven) {

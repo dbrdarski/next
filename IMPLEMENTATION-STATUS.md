@@ -234,14 +234,16 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 ---
 
-## 7. Test baseline (measured 2026-07-31, not inherited)
+## 7. Test baseline (measured 2026-08-01, not inherited)
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **383 passed, 0 failed, 9 ignored** (4 parked blockers + 5 remaining false positives) |
+| `cargo test --lib` | **410 passed, 0 failed, 10 ignored** (4 parked blockers + 6 pinned false positives) |
 | `cargo test --test conformance` | **111 passed, 0 failed, 13 ignored** |
+| `cargo test --test machinery_gate` | **4 passed, 0 failed** |
 | `cargo clippy --all-targets` | **0 warnings** |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
-Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 384) are **HISTORICAL**; this table is current.
+Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409) are
+**HISTORICAL**; this table is current.
 **Green ≠ sound:** the suite does not cover the §4 gates, which is why they are pinned.

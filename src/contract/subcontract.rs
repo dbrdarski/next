@@ -18,7 +18,7 @@ use num_bigint::BigInt;
 use num_traits::Zero;
 
 use super::numeric::{interval_exact, interval_subset, intervals_disjoint};
-use super::{Contract, Kind as VKind};
+use super::{CRef, Contract, Kind as VKind};
 use crate::interner::Interner;
 use crate::rational::Rational;
 use crate::value::ValueRef;
@@ -113,12 +113,14 @@ fn atom_provable(a: &Contract, b: &Contract) -> bool {
 
 /// `Record` is exact: `A ⊑ B` iff same key set and each field's contract is a
 /// subcontract of `B`'s.
-fn record_subset(fa: &[(String, Contract)], fb: &[(String, Contract)]) -> bool {
+fn record_subset(fa: &[(String, CRef)], fb: &[(String, CRef)]) -> bool {
     fa.len() == fb.len()
-        && fa.iter().all(|(key, ca)| match fb.iter().find(|(k, _)| k == key) {
-            Some((_, cb)) => provable(ca, cb),
-            None => false,
-        })
+        && fa
+            .iter()
+            .all(|(key, ca)| match fb.iter().find(|(k, _)| k == key) {
+                Some((_, cb)) => provable(ca, cb),
+                None => false,
+            })
 }
 
 /// `Mod(n1,r1) ⊑ Mod(n2,r2)` iff every `x ≡ r1 (mod n1)` also has `x ≡ r2 (mod n2)`

@@ -301,7 +301,9 @@ fn as_point(c: &Contract) -> Option<Rational> {
 /// "an integer" — and their conjunction cannot be recognised as `≥ 0`. (Same idea as
 /// grounding's landing/grid step, applied to the abstraction rather than to a descent.)
 fn snap_to_lattice(mut a: NumAbs) -> NumAbs {
-    let Some(c) = a.cong.clone().filter(|c| !c.n.is_zero()) else { return a };
+    let Some(c) = a.cong.clone().filter(|c| !c.n.is_zero()) else {
+        return a;
+    };
     if let Bound::Excl(q) = &a.iv.low
         && let Some(next) = next_on_lattice(q, &c, true)
     {
@@ -369,18 +371,29 @@ pub(crate) fn to_contract(a: NumAbs, interner: &mut Interner) -> Contract {
                 }
                 Some(Contract::Range(l, h))
             } else {
-                let lo_c = if lo.is_incl() { Contract::GreaterEq(l) } else { Contract::Greater(l) };
-                let hi_c = if hi.is_incl() { Contract::LessEq(h) } else { Contract::Less(h) };
-                Some(Contract::Intersection(Box::new(lo_c), Box::new(hi_c)))
+                let lo_c = if lo.is_incl() {
+                    Contract::GreaterEq(l)
+                } else {
+                    Contract::Greater(l)
+                };
+                let hi_c = if hi.is_incl() {
+                    Contract::LessEq(h)
+                } else {
+                    Contract::Less(h)
+                };
+                Some(Contract::intersection(lo_c, hi_c, interner))
             }
         }
     };
-    let lattice = a.cong.filter(|c| !c.n.is_zero()).map(|c| Contract::Mod { n: c.n, r: c.r });
+    let lattice = a
+        .cong
+        .filter(|c| !c.n.is_zero())
+        .map(|c| Contract::Mod { n: c.n, r: c.r });
     match (base, lattice) {
         (None, None) => Contract::Kind(Kind::Number),
         (Some(b), None) => b,
         (None, Some(m)) => m,
-        (Some(b), Some(m)) => Contract::Intersection(Box::new(b), Box::new(m)),
+        (Some(b), Some(m)) => Contract::intersection(b, m, interner),
     }
 }
 

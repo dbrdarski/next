@@ -3883,3 +3883,55 @@ the children-first form the value interner already uses, and it is the ~1316-sit
 an optimization and a conformance tidy, not a correctness gap.
 
 409 lib + 111 conformance + 4 gate green, clippy clean.
+
+## 2026-08-01 — Children-first contract interning: the sweep, and what pointer identity caught
+
+Completes the item the previous entry named as *not done*. `Contract`'s compound variants hold
+`CRef = Interned<Contract>` rather than `Box<Contract>`, and every construction site routes its
+children through `interner.contract(..)`. Same mechanism as the value interner and as
+`intern_code`; contracts are simply the enum the author's 2026-08-01 Enums ruling first applies to.
+
+**The property this buys, proven not asserted** (`factcache::interning_tests::shared_subterms_are_one_allocation`):
+a subterm shared between two otherwise-different contracts is **one** allocation, and both parents
+hold the same pointer. Root-only interning could not express this — with `Box`ed children a subterm
+had no identity, so `n` contracts mentioning one domain cost `n` copies of its tree and comparing
+them was a deep walk each time. The test's `ptr_eq` between a `Tuple`'s element and a `Record`'s
+field could not even have been *written* before; that is the sense in which it is a new gate rather
+than a restatement.
+
+**Second-order win worth naming:** `Contract::clone` is now O(arity) — an enum copy plus refcount
+bumps — instead of O(size). The algebra clones constantly, so that is where the walk actually went.
+
+**The interner is the LAST parameter, and this was not cosmetic.** Interner-first made every nested
+construction a borrow-checker error: Rust takes the receiver/first `&mut` before evaluating the
+remaining arguments, so `Contract::union(i, a, Contract::union(i, b, c))` cannot compile. Argument
+order alone removes the whole class, because arguments evaluate left to right and each inner borrow
+ends before the outer one is taken. It also matches the convention already in the codebase —
+`subcontract(a, b, interner)`, `analyze_operation(op, inputs, interner)`, `restrict_len(g, t, d, interner)`.
+
+**Two real defects that pointer identity exposed**, both invisible under structural comparison:
+
+1. A test helper (`contract::tests::tl::repeat`) held its **own private `Interner`**. Its terms
+   could therefore never be pointer-equal to the caller's, and `tl17` failed with two `Concat`s
+   that print identically. Under root-only interning this was harmless; now a second interner is a
+   second identity domain. Fixed by taking the caller's interner, with a comment saying why.
+2. Assertions on a **literal `Concat` shape** must not be built through the normalizing `concat`
+   constructor (which flattens, fuses and erases). They intern their segments in place instead.
+
+**Changed expectation, deliberately:** `compound_contracts_dedup` asserted
+`interned_count::<Contract>() == 1` after building `Union(Number, String)`; it is now **3** — the
+union plus both children, which now have identities of their own. The claim the test exists to make
+(`a.ptr_eq(&b)`) is untouched.
+
+**Two parameters removed rather than silenced.** The sweep threaded an interner into
+`analyzer::bind_pattern` and into nine `cenv()` test helpers; clippy then showed neither ever
+interns — `bind_pattern` only reads through `tuple_element`/`field_output`. Both parameters were
+deleted. Also removed a stale `#[allow(dead_code)]` on `bodycheck::selected_indices`, which has
+four live callers.
+
+**Not attempted here** (unchanged by this work): the layer-1-vs-layer-2 shape gap in the fact-cache
+key, grounding still unwired, and global phase-separated discovery. No forbidden machinery; the four
+machinery-gate checks pass; the four pinned blockers and the six pinned false positives are unmoved
+and were re-checked rather than assumed.
+
+410 lib (409 + the new sharing test) + 111 conformance + 4 gate green, clippy clean, manifest 19/19.

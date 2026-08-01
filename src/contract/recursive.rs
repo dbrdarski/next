@@ -25,7 +25,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::{Contract, Kind, Verdict};
+use super::{CRef, Contract, Kind, Verdict};
 use crate::interner::Interner;
 use crate::rational::Rational;
 use crate::value::ValueRef;
@@ -242,7 +242,7 @@ pub fn contains(group: &RecGroup, c: &Contract, v: &ValueRef) -> bool {
 /// satisfying `segs` in order? References resolve against the group, so a
 /// recursive segment (`Repeat`) is followed. Terminates on admissible groups —
 /// guardedness makes every reference cycle consume at least one element.
-fn concat_contains(group: &RecGroup, segs: &[Contract], items: &[ValueRef]) -> bool {
+fn concat_contains(group: &RecGroup, segs: &[CRef], items: &[ValueRef]) -> bool {
     match segs.split_first() {
         None => items.is_empty(),
         Some((first, rest)) => (0..=items.len()).any(|k| {
@@ -980,11 +980,11 @@ fn prove_body(
             prove_segments(group, env, sa, sb, source_progress, assumed, interner)
         }
         (Contract::Concat(sa), Contract::Tuple(_)) => {
-            let sb = [b.clone()];
+            let sb = [interner.contract(b.clone())];
             prove_segments(group, env, sa, &sb, source_progress, assumed, interner)
         }
         (Contract::Tuple(_), Contract::Concat(sb)) => {
-            let sa = [a.clone()];
+            let sa = [interner.contract(a.clone())];
             prove_segments(group, env, &sa, sb, source_progress, assumed, interner)
         }
         // Structural descent — increments source progress (the induction measure).
@@ -1063,8 +1063,8 @@ fn segment_nullable(group: &RecGroup, s: &Contract) -> bool {
 fn prove_segments(
     group: &RecGroup,
     env: &EmptyEnv,
-    sa: &[Contract],
-    sb: &[Contract],
+    sa: &[CRef],
+    sb: &[CRef],
     progress: usize,
     assumed: &mut HashMap<(Contract, Contract), usize>,
     interner: &mut Interner,
@@ -1080,51 +1080,68 @@ fn prove_segments(
     // Target consumed but the source can still emit positions: sound only when
     // every residual source segment contributes nothing (the empty tuple).
     if sb.is_empty() {
-        return sa.iter().all(|s| matches!(s, Contract::Tuple(e) if e.is_empty()));
+        return sa
+            .iter()
+            .all(|s| matches!(&**s, Contract::Tuple(e) if e.is_empty()));
     }
 
     // Forced front boundary — both leading segments have a fixed arity.
     if let (Some(m), Some(n)) = (fixed_arity(&sa[0]), fixed_arity(&sb[0])) {
-        let (Contract::Tuple(ea), Contract::Tuple(eb)) = (&sa[0], &sb[0]) else { unreachable!() };
+        let (Contract::Tuple(ea), Contract::Tuple(eb)) = (&*sa[0], &*sb[0]) else {
+            unreachable!()
+        };
+        let (ea, eb) = (ea.clone(), eb.clone());
         let k = m.min(n);
         for i in 0..k {
             if !prove(group, env, &ea[i], &eb[i], progress + i, assumed, interner) {
                 return false;
             }
         }
-        let mut na: Vec<Contract> = Vec::new();
+        let mut na: Vec<CRef> = Vec::new();
         if m > k {
-            na.push(Contract::Tuple(ea[k..].to_vec()));
+            na.push(interner.contract(Contract::Tuple(ea[k..].to_vec())));
         }
         na.extend_from_slice(&sa[1..]);
-        let mut nb: Vec<Contract> = Vec::new();
+        let mut nb: Vec<CRef> = Vec::new();
         if n > k {
-            nb.push(Contract::Tuple(eb[k..].to_vec()));
+            nb.push(interner.contract(Contract::Tuple(eb[k..].to_vec())));
         }
         nb.extend_from_slice(&sb[1..]);
         return prove_segments(group, env, &na, &nb, progress + k, assumed, interner);
     }
 
     // Forced back boundary — both trailing segments have a fixed arity.
-    if let (Some(m), Some(n)) = (fixed_arity(sa.last().unwrap()), fixed_arity(sb.last().unwrap())) {
+    if let (Some(m), Some(n)) = (
+        fixed_arity(sa.last().unwrap()),
+        fixed_arity(sb.last().unwrap()),
+    ) {
         let (Contract::Tuple(ea), Contract::Tuple(eb)) =
-            (sa.last().unwrap(), sb.last().unwrap())
+            (&**sa.last().unwrap(), &**sb.last().unwrap())
         else {
             unreachable!()
         };
+        let (ea, eb) = (ea.clone(), eb.clone());
         let k = m.min(n);
         for i in 0..k {
-            if !prove(group, env, &ea[m - k + i], &eb[n - k + i], progress, assumed, interner) {
+            if !prove(
+                group,
+                env,
+                &ea[m - k + i],
+                &eb[n - k + i],
+                progress,
+                assumed,
+                interner,
+            ) {
                 return false;
             }
         }
-        let mut na: Vec<Contract> = sa[..sa.len() - 1].to_vec();
+        let mut na: Vec<CRef> = sa[..sa.len() - 1].to_vec();
         if m > k {
-            na.push(Contract::Tuple(ea[..m - k].to_vec()));
+            na.push(interner.contract(Contract::Tuple(ea[..m - k].to_vec())));
         }
-        let mut nb: Vec<Contract> = sb[..sb.len() - 1].to_vec();
+        let mut nb: Vec<CRef> = sb[..sb.len() - 1].to_vec();
         if n > k {
-            nb.push(Contract::Tuple(eb[..n - k].to_vec()));
+            nb.push(interner.contract(Contract::Tuple(eb[..n - k].to_vec())));
         }
         return prove_segments(group, env, &na, &nb, progress, assumed, interner);
     }
@@ -1148,8 +1165,16 @@ fn prove_segments(
     // unfolds against the opposite Concat). A residual that is variable on *both*
     // sides with no unique split stays `unproven` — the refuter supplies negatives.
     if sa.len() == 1 || sb.len() == 1 {
-        let ra = if sa.len() == 1 { sa[0].clone() } else { Contract::Concat(sa.to_vec()) };
-        let rb = if sb.len() == 1 { sb[0].clone() } else { Contract::Concat(sb.to_vec()) };
+        let ra = if sa.len() == 1 {
+            (*sa[0]).clone()
+        } else {
+            Contract::Concat(sa.to_vec())
+        };
+        let rb = if sb.len() == 1 {
+            (*sb[0]).clone()
+        } else {
+            Contract::Concat(sb.to_vec())
+        };
         return prove(group, env, &ra, &rb, progress, assumed, interner);
     }
     false

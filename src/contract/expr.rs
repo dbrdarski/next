@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use super::{Contract, Kind};
 use crate::ast::{Arg, BindingRef, Element, Expr, Field, Ref};
+use crate::interner::Interner;
 use crate::value::ValueRef;
 
 /// A name → named-contract binding environment.
@@ -25,38 +26,40 @@ pub type ContractEnv = HashMap<String, Contract>;
 
 /// Statically evaluate a contract expression, or `None` if `expr` is not a
 /// recognized contract form.
-pub fn eval_contract(expr: &Expr, env: &ContractEnv) -> Option<Contract> {
+pub fn eval_contract(expr: &Expr, env: &ContractEnv, i: &mut Interner) -> Option<Contract> {
     match expr {
-        Expr::Ref(Ref::Immutable(BindingRef::Name(n))) => ref_contract(n, env),
-        Expr::Apply { callee, args } => apply_contract(callee, args, env),
+        Expr::Ref(Ref::Immutable(BindingRef::Name(n))) => ref_contract(n, env, i),
+        Expr::Apply { callee, args } => apply_contract(callee, args, env, i),
         // A tuple literal of contracts denotes a tuple contract (no spreads yet).
         Expr::TupleCons(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for el in elems {
                 match el {
-                    Element::Expr(e) => parts.push(eval_contract(e, env)?),
+                    Element::Expr(e) => parts.push(eval_contract(e, env, i)?),
                     Element::Spread(_) => return None,
                 }
             }
-            Some(Contract::Tuple(parts))
+            Some(Contract::tuple(parts, i))
         }
         // A record literal of contracts denotes a record contract (static keys).
         Expr::RecordCons(fields) => {
             let mut pairs = Vec::with_capacity(fields.len());
             for f in fields {
                 match f {
-                    Field::Field { key, value } => pairs.push((key.clone(), eval_contract(value, env)?)),
+                    Field::Field { key, value } => {
+                        pairs.push((key.clone(), eval_contract(value, env, i)?))
+                    }
                     _ => return None,
                 }
             }
-            Some(Contract::Record(pairs))
+            Some(Contract::record(pairs, i))
         }
         _ => None,
     }
 }
 
 /// A prelude Kind name, `Top`/`Bottom`/`Failure`, or a named contract.
-fn ref_contract(name: &str, env: &ContractEnv) -> Option<Contract> {
+fn ref_contract(name: &str, env: &ContractEnv, i: &mut Interner) -> Option<Contract> {
     Some(match name {
         "Number" => Contract::Kind(Kind::Number),
         "String" => Contract::Kind(Kind::String),
@@ -68,16 +71,24 @@ fn ref_contract(name: &str, env: &ContractEnv) -> Option<Contract> {
         "Top" => Contract::Top,
         "Bottom" => Contract::Bottom,
         // The one prelude Failure shape (B6/E9): a record with `path` and `reason`.
-        "Failure" => Contract::Intersection(
-            Box::new(Contract::HasField("path".into())),
-            Box::new(Contract::HasField("reason".into())),
+        "Failure" => Contract::intersection(
+            Contract::HasField("path".into()),
+            Contract::HasField("reason".into()),
+            i,
         ),
         _ => return env.get(name).cloned(),
     })
 }
 
-fn apply_contract(callee: &Expr, args: &[Arg], env: &ContractEnv) -> Option<Contract> {
-    let Expr::Ref(Ref::Immutable(BindingRef::Name(ctor))) = callee else { return None };
+fn apply_contract(
+    callee: &Expr,
+    args: &[Arg],
+    env: &ContractEnv,
+    i: &mut Interner,
+) -> Option<Contract> {
+    let Expr::Ref(Ref::Immutable(BindingRef::Name(ctor))) = callee else {
+        return None;
+    };
     // Contract constructors take plain (non-spread) arguments.
     let args: Option<Vec<&Expr>> = args
         .iter()
@@ -94,32 +105,47 @@ fn apply_contract(callee: &Expr, args: &[Arg], env: &ContractEnv) -> Option<Cont
         ("GreaterEq", [m]) => Some(Contract::GreaterEq(num(m)?)),
         ("Less", [m]) => Some(Contract::Less(num(m)?)),
         ("LessEq", [m]) => Some(Contract::LessEq(num(m)?)),
-        ("Mod", [n, r]) => Some(Contract::Mod { n: int(n)?, r: int(r)? }),
-        ("Geo", [b, r]) => Some(Contract::Geo { b: num(b)?, r: num(r)? }),
+        ("Mod", [n, r]) => Some(Contract::Mod {
+            n: int(n)?,
+            r: int(r)?,
+        }),
+        ("Geo", [b, r]) => Some(Contract::Geo {
+            b: num(b)?,
+            r: num(r)?,
+        }),
         ("Equals", [v]) => Some(Contract::Equals(konst(v)?)),
         ("HasField", [k]) => Some(Contract::HasField(string(k)?)),
-        ("Union", [a, b]) => Some(Contract::Union(bx(eval_contract(a, env)?), bx(eval_contract(b, env)?))),
+        ("Union", [a, b]) => {
+            let (a, b) = (eval_contract(a, env, i)?, eval_contract(b, env, i)?);
+            Some(Contract::union(a, b, i))
+        }
         ("Intersection", [a, b]) => {
-            Some(Contract::Intersection(bx(eval_contract(a, env)?), bx(eval_contract(b, env)?)))
+            let (a, b) = (eval_contract(a, env, i)?, eval_contract(b, env, i)?);
+            Some(Contract::intersection(a, b, i))
         }
         ("Difference", [a, b]) => {
-            Some(Contract::Difference(bx(eval_contract(a, env)?), bx(eval_contract(b, env)?)))
+            let (a, b) = (eval_contract(a, env, i)?, eval_contract(b, env, i)?);
+            Some(Contract::difference(a, b, i))
         }
         // `Tuple(A, B, …)` — a variadic tuple contract.
-        ("Tuple", elems) => Some(Contract::Tuple(elems.iter().map(|e| eval_contract(e, env)).collect::<Option<_>>()?)),
+        ("Tuple", elems) => {
+            let elems: Vec<Contract> = elems
+                .iter()
+                .map(|e| eval_contract(e, env, i))
+                .collect::<Option<_>>()?;
+            Some(Contract::tuple(elems, i))
+        }
         // `Concat(S₁, S₂, …)` — tuple concatenation (tuple family §1), through the
         // normalizing smart constructor.
         ("Concat", segs) => {
-            let segs: Vec<Contract> =
-                segs.iter().map(|e| eval_contract(e, env)).collect::<Option<_>>()?;
-            Some(Contract::concat(segs))
+            let segs: Vec<Contract> = segs
+                .iter()
+                .map(|e| eval_contract(e, env, i))
+                .collect::<Option<_>>()?;
+            Some(Contract::concat(segs, i))
         }
         _ => None,
     }
-}
-
-fn bx(c: Contract) -> Box<Contract> {
-    Box::new(c)
 }
 
 fn konst(e: &Expr) -> Option<ValueRef> {
@@ -147,10 +173,13 @@ fn string(e: &Expr) -> Option<String> {
 /// Statically evaluate a sequence of `name = contract-expression` bindings into a
 /// [`ContractEnv`], in order (a binding may reference earlier ones). Non-contract
 /// bindings are skipped.
-pub fn build_contract_env<'a>(binds: impl IntoIterator<Item = (&'a str, &'a Expr)>) -> ContractEnv {
+pub fn build_contract_env<'a>(
+    binds: impl IntoIterator<Item = (&'a str, &'a Expr)>,
+    i: &mut Interner,
+) -> ContractEnv {
     let mut env = ContractEnv::new();
     for (name, expr) in binds {
-        if let Some(c) = eval_contract(expr, &env) {
+        if let Some(c) = eval_contract(expr, &env, i) {
             env.insert(name.to_string(), c);
         }
     }

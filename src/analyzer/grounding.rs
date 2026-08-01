@@ -130,7 +130,7 @@ pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner
         return Verdict::Grounded;
     }
     if let Some(start) = point_value(domain)
-        && let Some(refutation) = drift_away(callee, &start, cenv)
+        && let Some(refutation) = drift_away(callee, &start, cenv, interner)
     {
         return Verdict::Refuted(refutation);
     }
@@ -139,10 +139,15 @@ pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner
 
 /// The numeric constant-drift descent certificate (GR-05). `None` ⇒ this candidate does
 /// not apply (→ `Unproven`); `Some(Grounded)` ⇒ both components proven.
-fn numeric_descent(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Option<Verdict> {
+fn numeric_descent(
+    callee: &ValueRef,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Verdict> {
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
-    let rows = region_table(&closure.lambda.body, &param, cenv);
+    let rows = region_table(&closure.lambda.body, &param, cenv, interner);
 
     // Split arms: a row whose result contains a self-call is *recursive* (read each call's
     // drift on the parameter); the rest are *base* rows.
@@ -171,14 +176,19 @@ fn numeric_descent(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, int
     }
 
     // (2) Landing: a single base row, of a shape the descent provably reaches.
-    let [base] = bases.as_slice() else { return None };
+    let [base] = bases.as_slice() else {
+        return None;
+    };
     lands(base, &drifts, domain, interner).then_some(Verdict::Grounded)
 }
 
 /// Whether a strictly-decreasing integer chain over `domain` provably reaches `base`
 /// (GR-05(2)). Integer lattice required (dense measures are deferred).
 fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut Interner) -> bool {
-    let integers = Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) };
+    let integers = Contract::Mod {
+        n: BigInt::from(1),
+        r: BigInt::from(0),
+    };
     if !matches!(subcontract(domain, &integers, interner), Sub::Proven) {
         return false;
     }
@@ -204,10 +214,15 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
 /// orbit** (GR-11's degenerate case — `f(n)` recurring on itself). Because the orbit
 /// includes the start (`k = 0`), a start already in a base is correctly rejected. Sound:
 /// `true` only when the miss is certain.
-fn drift_away(callee: &ValueRef, start: &Rational, cenv: &ContractEnv) -> Option<Refutation> {
+fn drift_away(
+    callee: &ValueRef,
+    start: &Rational,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Refutation> {
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
-    let rows = region_table(&closure.lambda.body, &param, cenv);
+    let rows = region_table(&closure.lambda.body, &param, cenv, interner);
 
     let mut bases = Vec::new();
     let mut drift = None;
@@ -396,9 +411,15 @@ fn reaches(start: &Rational, d: &Rational, base: &Contract) -> bool {
 /// stay with `numeric_descent` / a later increment; two-varying-side (relational) stops
 /// contribute nothing (GR-15a).
 fn measure_descent(callee: &ValueRef) -> bool {
-    let Some(closure) = callee.as_closure() else { return false };
-    let Some(params) = param_names(&closure.lambda.params) else { return false };
-    let Expr::Match(m) = &*closure.lambda.body else { return false };
+    let Some(closure) = callee.as_closure() else {
+        return false;
+    };
+    let Some(params) = param_names(&closure.lambda.params) else {
+        return false;
+    };
+    let Expr::Match(m) = &*closure.lambda.body else {
+        return false;
+    };
 
     // Classify arms in order: a base arm (no self-call) offers its guard as a stop; a
     // recursive arm offers each self-call's positional argument list.
@@ -430,7 +451,9 @@ fn measure_descent(callee: &ValueRef) -> bool {
 /// Whether the half-line stop `g` reads as `E ⋈ c` for a linear measure `E` that drifts by
 /// a nonzero constant of a single sign facing the stop across every recursive call.
 fn measure_ok(g: &Expr, params: &[String], rec_calls: &[Vec<Expr>]) -> bool {
-    let Expr::PrimOp { op, args } = g else { return false };
+    let Expr::PrimOp { op, args } = g else {
+        return false;
+    };
     if args.len() != 2 {
         return false;
     }
@@ -445,7 +468,9 @@ fn measure_ok(g: &Expr, params: &[String], rec_calls: &[Vec<Expr>]) -> bool {
     };
     let mut ascending: Option<bool> = None;
     for call in rec_calls {
-        let Some(d) = drift_on(&e, call, params) else { return false };
+        let Some(d) = drift_on(&e, call, params) else {
+            return false;
+        };
         if d.is_zero() {
             return false; // no progress on this measure
         }
@@ -456,7 +481,9 @@ fn measure_ok(g: &Expr, params: &[String], rec_calls: &[Vec<Expr>]) -> bool {
             _ => {}
         }
     }
-    let Some(ascending) = ascending else { return false };
+    let Some(ascending) = ascending else {
+        return false;
+    };
     matches!(
         (op, ascending),
         (PrimOp::Le | PrimOp::Lt, false) | (PrimOp::Ge | PrimOp::Gt, true)
@@ -560,10 +587,21 @@ fn linear_form(e: &Expr, params: &[String]) -> Option<LinComb> {
 /// components and `==`/point-stop floors (Ackermann's — needing the grid + domain) are
 /// later increments.
 fn lex_descent(callee: &ValueRef) -> bool {
-    let Some(closure) = callee.as_closure() else { return false };
-    let Some(params) = param_names(&closure.lambda.params) else { return false };
+    let Some(closure) = callee.as_closure() else {
+        return false;
+    };
+    let Some(params) = param_names(&closure.lambda.params) else {
+        return false;
+    };
     let mut calls = Vec::new();
-    walk(&closure.lambda.body, &closure, std::slice::from_ref(callee), &params, &vec![false; params.len()], &mut calls);
+    walk(
+        &closure.lambda.body,
+        &closure,
+        std::slice::from_ref(callee),
+        &params,
+        &vec![false; params.len()],
+        &mut calls,
+    );
     if calls.is_empty() {
         return false;
     }
@@ -616,11 +654,15 @@ fn position_drift(arg: &Expr, param: &str) -> Option<Rational> {
 /// If guard `g` (optionally `negated`) is a **lower bound** on a bare parameter — `p > c` /
 /// `p >= c`, or the negation of `p <= c` / `p < c` — its parameter index, else `None`.
 fn guard_lb(g: &Expr, negated: bool, params: &[String]) -> Option<usize> {
-    let Expr::PrimOp { op, args } = g else { return None };
+    let Expr::PrimOp { op, args } = g else {
+        return None;
+    };
     if args.len() != 2 {
         return None;
     }
-    let (idx, op) = if let (Some(i), true) = (param_index(&args[0], params), const_num(&args[1]).is_some()) {
+    let (idx, op) = if let (Some(i), true) =
+        (param_index(&args[0], params), const_num(&args[1]).is_some())
+    {
         (i, *op)
     } else if let (Some(i), true) = (param_index(&args[1], params), const_num(&args[0]).is_some()) {
         (i, flip(*op))
@@ -633,7 +675,9 @@ fn guard_lb(g: &Expr, negated: bool, params: &[String]) -> Option<usize> {
 
 /// The index of a bare parameter reference in `params`, else `None`.
 fn param_index(e: &Expr, params: &[String]) -> Option<usize> {
-    let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = e else { return None };
+    let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = e else {
+        return None;
+    };
     params.iter().position(|p| p == n)
 }
 
@@ -679,11 +723,21 @@ fn injective_seqs(items: &[usize]) -> Vec<Vec<usize>> {
 /// stops matching it — exhaustiveness is E10's concern, not grounding's). Landing is
 /// intrinsic; no domain needed. Multi-parameter: the peeled position descends, others carried.
 fn structural_descent(callee: &ValueRef) -> bool {
-    let Some(closure) = callee.as_closure() else { return false };
-    let Some(params) = param_names(&closure.lambda.params) else { return false };
-    let Expr::Match(m) = &*closure.lambda.body else { return false };
-    let Some(scrut) = &m.scrutinee else { return false };
-    let Some(pos) = param_index(scrut, &params) else { return false };
+    let Some(closure) = callee.as_closure() else {
+        return false;
+    };
+    let Some(params) = param_names(&closure.lambda.params) else {
+        return false;
+    };
+    let Expr::Match(m) = &*closure.lambda.body else {
+        return false;
+    };
+    let Some(scrut) = &m.scrutinee else {
+        return false;
+    };
+    let Some(pos) = param_index(scrut, &params) else {
+        return false;
+    };
 
     let mut has_recursive = false;
     for item in &m.items {
@@ -698,7 +752,9 @@ fn structural_descent(callee: &ValueRef) -> bool {
             return false;
         };
         for call in &calls {
-            let Some(arg) = call.get(pos) else { return false };
+            let Some(arg) = call.get(pos) else {
+                return false;
+            };
             if !is_param(arg, &rest) {
                 return false; // the peeled position must carry the remainder
             }
@@ -753,9 +809,15 @@ fn mutual_descent(callee: &ValueRef) -> bool {
 /// leaf), or every group call decreases its parameter by a constant and it has a descending
 /// half-line base on that parameter.
 fn member_descends(f: &ValueRef, group: &[ValueRef]) -> bool {
-    let Some(closure) = f.as_closure() else { return false };
-    let Some(param) = single_param(&closure.lambda.params) else { return false };
-    let Expr::Match(m) = &*closure.lambda.body else { return false };
+    let Some(closure) = f.as_closure() else {
+        return false;
+    };
+    let Some(param) = single_param(&closure.lambda.params) else {
+        return false;
+    };
+    let Expr::Match(m) = &*closure.lambda.body else {
+        return false;
+    };
 
     let mut stops = Vec::new();
     let mut calls: Vec<Vec<Expr>> = Vec::new();
@@ -790,7 +852,9 @@ fn member_descends(f: &ValueRef, group: &[ValueRef]) -> bool {
 /// `param < c` (or the flipped `c >= param` / `c > param`) — the floor a decreasing measure
 /// lands in.
 fn descending_stop(g: &Expr, param: &str) -> bool {
-    let Expr::PrimOp { op, args } = g else { return false };
+    let Expr::PrimOp { op, args } = g else {
+        return false;
+    };
     if args.len() != 2 {
         return false;
     }
@@ -819,7 +883,9 @@ fn flip(op: PrimOp) -> PrimOp {
 
 /// The single bound parameter name (`(n)`), or `None` for any other parameter shape.
 fn single_param(params: &Pat) -> Option<String> {
-    let Pat::Tuple(elems) = params else { return None };
+    let Pat::Tuple(elems) = params else {
+        return None;
+    };
     match elems.as_slice() {
         [PatElem::Pat(Pat::Bind(n))] => Some(n.clone()),
         _ => None,
@@ -829,7 +895,9 @@ fn single_param(params: &Pat) -> Option<String> {
 /// Every bound parameter name in a flat parameter tuple (`(n, acc)` → `["n", "acc"]`), or
 /// `None` if any element is not a bare binding (a rest or nested pattern).
 fn param_names(params: &Pat) -> Option<Vec<String>> {
-    let Pat::Tuple(elems) = params else { return None };
+    let Pat::Tuple(elems) = params else {
+        return None;
+    };
     elems
         .iter()
         .map(|e| match e {
@@ -843,7 +911,9 @@ fn param_names(params: &Pat) -> Option<Vec<String>> {
 /// `param + c → +c`. Anything else (`param * c`, a non-parameter carrier, a compound) is
 /// not a constant drift — `None`, ending this candidate (GR-04).
 fn constant_drift(arg: &Expr, param: &str) -> Option<Rational> {
-    let Expr::PrimOp { op, args } = arg else { return None };
+    let Expr::PrimOp { op, args } = arg else {
+        return None;
+    };
     if args.len() != 2 {
         return None;
     }
@@ -988,7 +1058,9 @@ fn walk(e: &Expr, closure: &Closure, cv: &[ValueRef], params: &[String], lb: &[b
 /// to a member of the target group `targets` (pointer identity — a self- or mutual-capture
 /// is the same allocation).
 fn resolves_to_target(callee: &Expr, closure: &Closure, targets: &[ValueRef]) -> bool {
-    let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = callee else { return false };
+    let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = callee else {
+        return false;
+    };
     matches!(closure.env.lookup(n), Some(Binding::Value(v)) if targets.contains(&v))
 }
 
@@ -1009,10 +1081,14 @@ mod tests {
     use crate::oracle::harness::run_source_in;
 
     /// `GE(0) ∧ Mod(1,0)` — the non-negative integers, factorial's / countDown's domain.
-    pub(super) fn nonneg_ints() -> Contract {
-        Contract::Intersection(
-            Box::new(Contract::GreaterEq(Rational::from(0))),
-            Box::new(Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }),
+    pub(super) fn nonneg_ints(i: &mut Interner) -> Contract {
+        Contract::intersection(
+            Contract::GreaterEq(Rational::from(0)),
+            Contract::Mod {
+                n: BigInt::from(1),
+                r: BigInt::from(0),
+            },
+            i,
         )
     }
 
@@ -1025,7 +1101,10 @@ mod tests {
         // Point base `n == 0`, unit drift −1, integer domain → grid-aligned landing.
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
-        assert_eq!(ground(&cd, &nonneg_ints(), &ContractEnv::new(), &mut i), Verdict::Grounded);
+        assert_eq!(
+            ground(&cd, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1033,7 +1112,10 @@ mod tests {
         // The self-call `f(n - 1)` is nested under `n * _`; the walk still reads its drift.
         let mut i = Interner::new();
         let fact = f("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf", &mut i);
-        assert_eq!(ground(&fact, &nonneg_ints(), &ContractEnv::new(), &mut i), Verdict::Grounded);
+        assert_eq!(
+            ground(&fact, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1041,7 +1123,10 @@ mod tests {
         // Downward half-line base `k <= 1` — the descending chain enters it; no grid needed.
         let mut i = Interner::new();
         let g = f("g = (k) => k <= 1 ? k : g(k - 1)\ng", &mut i);
-        assert_eq!(ground(&g, &nonneg_ints(), &ContractEnv::new(), &mut i), Verdict::Grounded);
+        assert_eq!(
+            ground(&g, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1049,7 +1134,10 @@ mod tests {
         // `n + 1` is not descent — no floor. Candidate inapplicable → Unproven (sound).
         let mut i = Interner::new();
         let up = f("f = (n) => n == 0 ? 0 : f(n + 1)\nf", &mut i);
-        assert_eq!(ground(&up, &nonneg_ints(), &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&up, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     #[test]
@@ -1059,7 +1147,10 @@ mod tests {
         // divergent inputs are only refuted from an *exact* start (next test; specimen 3c).
         let mut i = Interner::new();
         let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
-        assert_eq!(ground(&step2, &nonneg_ints(), &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&step2, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     #[test]
@@ -1283,14 +1374,17 @@ mod review_gates {
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         assert_eq!(
-            ground(&cd, &nonneg_ints(), &ContractEnv::new(), &mut i),
+            ground(&cd, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
             Verdict::Grounded,
             "descent is unaffected by the refutation-side forced-path rule"
         );
         // And a *conditionally* recursive body still grounds when it descends.
-        let g = f("flag = true\ng = (n) => n <= 0 ? 0 : (flag ? g(n - 1) : 0)\ng", &mut i);
+        let g = f(
+            "flag = true\ng = (n) => n <= 0 ? 0 : (flag ? g(n - 1) : 0)\ng",
+            &mut i,
+        );
         assert_ne!(
-            ground(&g, &nonneg_ints(), &ContractEnv::new(), &mut i),
+            ground(&g, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
             Verdict::Unproven,
             "a descending conditional recursion is still judged, not abandoned"
         );

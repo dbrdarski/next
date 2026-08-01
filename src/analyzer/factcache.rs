@@ -257,14 +257,74 @@ mod interning_tests {
     fn compound_contracts_dedup() {
         let mut i = Interner::new();
         let mk = |i: &mut Interner| {
-            i.contract(Contract::Union(
-                Box::new(Contract::Kind(Kind::Number)),
-                Box::new(Contract::Kind(Kind::String)),
-            ))
+            let u = Contract::union(
+                Contract::Kind(Kind::Number),
+                Contract::Kind(Kind::String),
+                i,
+            );
+            i.contract(u)
         };
         let (a, b) = (mk(&mut i), mk(&mut i));
         assert!(a.ptr_eq(&b), "structurally equal compounds share one term");
-        assert_eq!(i.interned_count::<Contract>(), 1, "and only one is stored");
+        // Three terms, not one: children-first interning stores `Kind(Number)` and
+        // `Kind(String)` as well as the `Union` over them. Under the earlier root-only
+        // scheme this read `1`, because the children were `Box`ed inside the root and
+        // had no identity of their own — which is what `shared_subterms_are_one_allocation`
+        // now exercises directly.
+        assert_eq!(i.interned_count::<Contract>(), 3, "the union and both children");
+    }
+
+    /// **The property children-first interning exists for**: a subterm shared between two
+    /// otherwise-different contracts is stored **once**, and both parents point at it.
+    ///
+    /// Root-only interning could not give this. With `Box<Contract>` children the subterm had
+    /// no identity — each parent carried its own copy, so `n` contracts mentioning one domain
+    /// cost `n` copies of that domain's whole tree, and comparing them was a deep walk every
+    /// time. This is not a micro-optimization in the fact graph: `I` appears on every node of
+    /// a component (C§13.2a), and the cache key is specified to hold *interned pointers*.
+    #[test]
+    fn shared_subterms_are_one_allocation() {
+        let mut i = Interner::new();
+        // A domain of some depth, so a copy would be visible rather than incidental.
+        let domain = {
+            let inner =
+                Contract::intersection(Contract::Kind(Kind::Number), Contract::Greater(0.into()), &mut i);
+            Contract::union(inner, Contract::Kind(Kind::Null), &mut i)
+        };
+        let before = i.interned_count::<Contract>();
+
+        // Two different parents over the *same* subterm.
+        let lhs = Contract::tuple([domain.clone(), Contract::Kind(Kind::String)], &mut i);
+        let rhs = Contract::record([("d".to_string(), domain.clone())], &mut i);
+
+        // Exactly two new terms: the domain's own handle (minted by the first parent) and
+        // `Kind(String)`. The second parent added nothing at all — it reused the handle.
+        // A constructor returns an un-interned root holding interned children, so the
+        // `Tuple` and `Record` themselves are not counted here.
+        assert_eq!(
+            i.interned_count::<Contract>() - before,
+            2,
+            "the shared domain costs one allocation for both parents, not one each"
+        );
+
+        // And they hold the *same pointer*, which is the claim that matters: identity, not
+        // merely equality. `Interned::ptr_eq` is address comparison, so this cannot pass by
+        // accident of structural equality.
+        let (Contract::Tuple(elems), Contract::Record(fields)) = (&lhs, &rhs) else {
+            panic!("constructed a Tuple and a Record");
+        };
+        assert!(
+            elems[0].ptr_eq(&fields[0].1),
+            "the shared subterm is one allocation reached from both parents"
+        );
+
+        // Re-deriving the same domain hands back that same allocation rather than a new one.
+        let again = {
+            let inner =
+                Contract::intersection(Contract::Kind(Kind::Number), Contract::Greater(0.into()), &mut i);
+            Contract::union(inner, Contract::Kind(Kind::Null), &mut i)
+        };
+        assert!(i.contract(again).ptr_eq(&elems[0]), "an equal domain re-interns to the same term");
     }
 
     /// The key's whole point: two calls at the same fact node produce the *same* key, so the

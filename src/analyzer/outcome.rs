@@ -53,10 +53,12 @@ pub(crate) fn analyze_instance_body(
         }
     }
     // Parameters narrowed by the argument tuple.
-    let arg_tuple = Contract::Tuple(arg_contracts.to_vec());
+    let arg_tuple = Contract::tuple(arg_contracts.to_vec(), interner);
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut tenv);
 
-    Some(crate::analyzer::induction::without_inference(|| analyze(&closure.lambda.body, &tenv, cenv, interner)))
+    Some(crate::analyzer::induction::without_inference(|| {
+        analyze(&closure.lambda.body, &tenv, cenv, interner)
+    }))
 }
 
 /// Summarize applying the callee closure to arguments described by `arg_contracts`

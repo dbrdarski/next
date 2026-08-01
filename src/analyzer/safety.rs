@@ -189,10 +189,10 @@ fn verify_by_partition(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> Vec<Finding> {
-    let table = region_table(&closure.lambda.body, param, cenv);
+    let table = region_table(&closure.lambda.body, param, cenv, interner);
     let base = capture_env(callee);
     let mut out = Vec::new();
-    for sel in select(&table, domain) {
+    for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
         for f in analyze(&sel.result, &env, cenv, interner).findings {
@@ -237,7 +237,9 @@ fn classify(findings: Vec<Finding>) -> BodySafety {
 /// The captured environment as contracts — each free variable bound to `Equals(value)`.
 fn capture_env(callee: &ValueRef) -> TypeEnv {
     let mut env = TypeEnv::new();
-    let (Some(f), Some(closure)) = (callee.as_fn(), callee.as_closure()) else { return env };
+    let (Some(f), Some(closure)) = (callee.as_fn(), callee.as_closure()) else {
+        return env;
+    };
     for name in f.free_vars() {
         if let Some(Binding::Value(v)) = closure.env.lookup(name) {
             env.insert(name.clone(), Contract::Equals(v));
@@ -259,10 +261,14 @@ mod tests {
     }
 
     /// `GE(0) ∧ Mod(1,0)` — the non-negative integers.
-    fn nonneg_ints() -> Contract {
-        Contract::Intersection(
-            Box::new(Contract::GreaterEq(Rational::from(0))),
-            Box::new(Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }),
+    fn nonneg_ints(i: &mut Interner) -> Contract {
+        Contract::intersection(
+            Contract::GreaterEq(Rational::from(0)),
+            Contract::Mod {
+                n: BigInt::from(1),
+                r: BigInt::from(0),
+            },
+            i,
         )
     }
 
@@ -275,8 +281,11 @@ mod tests {
         // (integrality surviving `−`), which is why F0 had to exist first.
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
-        let v = prove(&cd, &[nonneg_ints()], &ContractEnv::new(), &mut i);
-        assert!(v.is_proven(), "countDown over its declared domain proves by induction: {v:?}");
+        let v = prove(&cd, &[nonneg_ints(&mut i)], &ContractEnv::new(), &mut i);
+        assert!(
+            v.is_proven(),
+            "countDown over its declared domain proves by induction: {v:?}"
+        );
     }
 
     #[test]
@@ -314,7 +323,11 @@ mod tests {
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        let fact = Hypothesis { callee: cd.clone(), input: vec![nonneg_ints()], claim: Claim::Safety };
+        let fact = Hypothesis {
+            callee: cd.clone(),
+            input: vec![nonneg_ints(&mut i)],
+            claim: Claim::Safety,
+        };
         let covered = induction::with_hypotheses(vec![fact], || {
             induction::safety_assumed(&cd, std::slice::from_ref(&five), &mut i)
         });
@@ -424,15 +437,21 @@ fn settle(
 /// Every call a candidate's body makes, with the callee resolved to a concrete instance
 /// and the argument domains evaluated **per region-table row** (so each call is
 /// discovered under the domain that actually reaches it).
-fn calls_of(node: &Node, cenv: &ContractEnv, interner: &mut Interner) -> Vec<(ValueRef, Vec<Contract>)> {
-    let Some(closure) = node.callee.as_closure() else { return Vec::new() };
+fn calls_of(
+    node: &Node,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<(ValueRef, Vec<Contract>)> {
+    let Some(closure) = node.callee.as_closure() else {
+        return Vec::new();
+    };
     let base = capture_env(&node.callee);
     let mut out = Vec::new();
     // Per-row walk (single parameter), else one whole-body walk.
     match (single_param(&closure.lambda.params), node.input.as_slice()) {
         (Some(param), [domain]) => {
-            let table = region_table(&closure.lambda.body, &param, cenv);
-            for sel in select(&table, domain) {
+            let table = region_table(&closure.lambda.body, &param, cenv, interner);
+            for sel in select(&table, domain, interner) {
                 let mut env = base.clone();
                 env.insert(param.clone(), sel.region.clone());
                 collect_calls(&sel.result, &closure, &env, cenv, interner, &mut out);
@@ -440,8 +459,16 @@ fn calls_of(node: &Node, cenv: &ContractEnv, interner: &mut Interner) -> Vec<(Va
         }
         _ => {
             let mut env = base.clone();
-            bind_pattern(&closure.lambda.params, &Contract::Tuple(node.input.clone()), &mut env);
-            collect_calls(&closure.lambda.body, &closure, &env, cenv, interner, &mut out);
+            let arg_tuple = Contract::tuple(node.input.clone(), interner);
+            bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
+            collect_calls(
+                &closure.lambda.body,
+                &closure,
+                &env,
+                cenv,
+                interner,
+                &mut out,
+            );
         }
     }
     out
@@ -460,22 +487,24 @@ fn covering_node(
         .filter(|(_, n)| n.callee == *target)
         .map(|(i, n)| (i, n.input.clone()))
         .collect();
-    cands.into_iter().find(|(_, input)| {
-        let call = Contract::Tuple(targs.to_vec());
-        let dom = Contract::Tuple(input.clone());
-        matches!(subcontract(&call, &dom, interner), Verdict::Proven)
-    })
-    .map(|(i, _)| i)
+    cands
+        .into_iter()
+        .find(|(_, input)| {
+            let call = Contract::tuple(targs.to_vec(), interner);
+            let dom = Contract::tuple(input.clone(), interner);
+            matches!(subcontract(&call, &dom, interner), Verdict::Proven)
+        })
+        .map(|(i, _)| i)
 }
 
 fn shape_of(v: &ValueRef) -> crate::ast::Lambda {
-    v.as_fn().map(|f| f.shape().clone()).unwrap_or_else(|| {
-        crate::ast::Lambda {
+    v.as_fn()
+        .map(|f| f.shape().clone())
+        .unwrap_or_else(|| crate::ast::Lambda {
             params: crate::ast::Pat::Wild,
             body: Box::new(crate::ast::Expr::Const(v.clone())),
             act_kind: crate::ast::ActKind::Pure,
-        }
-    })
+        })
 }
 
 /// Verify a **completion** claim: every path through the body over `I` produces a value.
@@ -488,9 +517,12 @@ pub(crate) fn verify_completes(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> bool {
-    let Some(closure) = callee.as_closure() else { return false };
+    let Some(closure) = callee.as_closure() else {
+        return false;
+    };
     let mut env = capture_env(callee);
-    bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+    let arg_tuple = Contract::tuple(args.to_vec(), interner);
+    bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
     matches!(
         analyze(&closure.lambda.body, &env, cenv, interner).completion,
         crate::analyzer::Completion::Produces
@@ -498,13 +530,23 @@ pub(crate) fn verify_completes(
 }
 
 /// Verify one member under the currently-assumed facts (the partition rule).
-pub(crate) fn verify(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
-    let Some(closure) = callee.as_closure() else { return Vec::new() };
+pub(crate) fn verify(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<Finding> {
+    let Some(closure) = callee.as_closure() else {
+        return Vec::new();
+    };
     match (single_param(&closure.lambda.params), args) {
-        (Some(param), [domain]) => verify_by_partition(callee, &closure, &param, domain, cenv, interner),
+        (Some(param), [domain]) => {
+            verify_by_partition(callee, &closure, &param, domain, cenv, interner)
+        }
         _ => {
             let mut env = capture_env(callee);
-            bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+            let arg_tuple = Contract::tuple(args.to_vec(), interner);
+            bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
             analyze(&closure.lambda.body, &env, cenv, interner).findings
         }
     }
@@ -535,16 +577,20 @@ pub(crate) fn produced_by_partition(
         (Some(param), [domain]) => (param, domain),
         _ => return None,
     };
-    let table = region_table(&closure.lambda.body, &param, cenv);
+    let table = region_table(&closure.lambda.body, &param, cenv, interner);
     let base = capture_env(callee);
     let mut parts = Vec::new();
-    for sel in select(&table, domain) {
+    for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
         parts.push(analyze(&sel.result, &env, cenv, interner).contract);
     }
     // No row selected means no path through the body over this domain produces anything.
-    if parts.is_empty() { None } else { Some(crate::analyzer::union_of(parts)) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(crate::analyzer::union_of(parts, interner))
+    }
 }
 
 /// Collect every application in `e` whose callee resolves through the closure's captured
@@ -685,9 +731,13 @@ mod graph_tests {
         // reuses that candidate rather than minting a new one — the component is a
         // self-loop and the joint pass proves it.
         let mut i = Interner::new();
-        let d = Contract::Intersection(
-            Box::new(Contract::GreaterEq(crate::rational::Rational::from(0))),
-            Box::new(Contract::Mod { n: num_bigint::BigInt::from(1), r: num_bigint::BigInt::from(0) }),
+        let d = Contract::intersection(
+            Contract::GreaterEq(crate::rational::Rational::from(0)),
+            Contract::Mod {
+                n: num_bigint::BigInt::from(1),
+                r: num_bigint::BigInt::from(0),
+            },
+            &mut i,
         );
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         assert!(prove(&cd, &[d], &ContractEnv::new(), &mut i).is_proven());
@@ -751,11 +801,18 @@ through the fact first; done naively it breaks countDown. Blocker 3 stays pinned
         // The converse, so the rule is not blanket: countDown covers its domain on every
         // path, and the recursive call is covered by the seed's own fact.
         let mut i = Interner::new();
-        let d = Contract::Intersection(
-            Box::new(Contract::GreaterEq(crate::rational::Rational::from(0))),
-            Box::new(Contract::Mod { n: num_bigint::BigInt::from(1), r: num_bigint::BigInt::from(0) }),
+        let d = Contract::intersection(
+            Contract::GreaterEq(crate::rational::Rational::from(0)),
+            Contract::Mod {
+                n: num_bigint::BigInt::from(1),
+                r: num_bigint::BigInt::from(0),
+            },
+            &mut i,
         );
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
-        assert!(completes(&cd, &[d], &ContractEnv::new(), &mut i), "countDown produces on every path");
+        assert!(
+            completes(&cd, &[d], &ContractEnv::new(), &mut i),
+            "countDown produces on every path"
+        );
     }
 }

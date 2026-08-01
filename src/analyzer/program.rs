@@ -27,7 +27,7 @@
 
 use std::collections::HashMap;
 
-use super::{demand, safety, Finding, Severity};
+use super::{Finding, Severity, demand, safety};
 use crate::analyzer::TrapClass;
 use crate::ast::{Bind, BindTarget, Expr, Item, Lambda, Module, Pat};
 use crate::contract::{Contract, ContractEnv, Verdict, eval_contract};
@@ -74,10 +74,13 @@ pub fn analyze_program(module: &Module, interner: &mut Interner) -> ProgramVerdi
         let Item::Where(w) = item else { continue };
 
         let Some(callee) = values.get(&w.name) else {
-            findings.push(malformed(&w.name, "names no function binding in this module"));
+            findings.push(malformed(
+                &w.name,
+                "names no function binding in this module",
+            ));
             continue;
         };
-        let Some(declared) = eval_contract(&w.input_contract, &cenv) else {
+        let Some(declared) = eval_contract(&w.input_contract, &cenv, interner) else {
             findings.push(malformed(
                 &w.name,
                 "declares an input contract this pass cannot evaluate statically \
@@ -94,11 +97,14 @@ pub fn analyze_program(module: &Module, interner: &mut Interner) -> ProgramVerdi
             continue;
         };
 
-        findings.extend(verdict_findings(&w.name, safety::prove(callee, &args, &cenv, interner)));
+        findings.extend(verdict_findings(
+            &w.name,
+            safety::prove(callee, &args, &cenv, interner),
+        ));
 
         // The declared **return** contract is a demand (C§13.1): the `where` asks whether
         // the body produces a value satisfying it, adjudicated here, at the ask site.
-        if let Some(ret) = eval_contract(&w.return_contract, &cenv) {
+        if let Some(ret) = eval_contract(&w.return_contract, &cenv, interner) {
             let asker = format!("where {}", w.name);
             match demand::returns(callee, &args, &ret, &asker, &cenv, interner) {
                 Verdict::Proven => proven_returns.push((w.name.clone(), ret)),
@@ -124,21 +130,33 @@ pub fn analyze_program(module: &Module, interner: &mut Interner) -> ProgramVerdi
 /// evaluated* definition, so contracts stay single-pass and in order (recursive source
 /// contracts are a separate increment, plan T2.4). Values get the two passes, since a
 /// closure captures `scope` by reference and is order-independent.
-fn collect(module: &Module, scope: &Env, interner: &mut Interner) -> (HashMap<String, ValueRef>, ContractEnv) {
+fn collect(
+    module: &Module,
+    scope: &Env,
+    interner: &mut Interner,
+) -> (HashMap<String, ValueRef>, ContractEnv) {
     let mut values = HashMap::new();
     let mut cenv = ContractEnv::new();
 
     for item in &module.items {
         match item {
-            Item::Bind(Bind { target: BindTarget::Name(name), value: Expr::Lambda(l), .. }) => {
+            Item::Bind(Bind {
+                target: BindTarget::Name(name),
+                value: Expr::Lambda(l),
+                ..
+            }) => {
                 define(name, l, scope, &mut values, interner);
             }
             Item::ActBind(ab) => define(&ab.name, &ab.lambda, scope, &mut values, interner),
             // A non-lambda binding of a contract expression is a **named contract**
             // (`Percent = Range(0, 100)` — C§12.2). Anything else contributes no
             // analyzer-visible value: evaluating it is exactly what this pass must not do.
-            Item::Bind(Bind { target: BindTarget::Name(name), value, .. }) => {
-                if let Some(c) = eval_contract(value, &cenv) {
+            Item::Bind(Bind {
+                target: BindTarget::Name(name),
+                value,
+                ..
+            }) => {
+                if let Some(c) = eval_contract(value, &cenv, interner) {
                     cenv.insert(name.clone(), c);
                 }
             }
@@ -180,7 +198,9 @@ fn spread_input(callee: &ValueRef, declared: Contract) -> Option<Vec<Contract>> 
     };
     match declared {
         _ if arity == 1 => Some(vec![declared]),
-        Contract::Tuple(parts) if parts.len() == arity => Some(parts),
+        Contract::Tuple(parts) if parts.len() == arity => {
+            Some(parts.iter().map(|c| (**c).clone()).collect())
+        }
         _ => None,
     }
 }

@@ -15,6 +15,7 @@ use num_bigint::BigInt;
 use num_integer::Integer;
 use num_traits::Zero;
 
+use crate::interner::Interner;
 use crate::oracle::values_equal;
 use crate::rational::Rational;
 use crate::value::{ValueData, ValueRef};
@@ -56,6 +57,59 @@ pub enum Kind {
 
 /// An interned contract handle: pointer identity, exactly as values and canonical code.
 pub type CRef = crate::intern::Interned<Contract>;
+
+/// The compound constructors, **children-first**.
+///
+/// A compound variant holds [`CRef`]s, so its children must be canonical before it exists —
+/// the same discipline [`Interner::tuple`] enforces for values. These take the child terms
+/// by value and intern them, so a construction site writes the algebra it means and the
+/// canonicalization is not its business.
+///
+/// Two consequences worth naming, because they are the point of the change. A shared subterm
+/// is **one** allocation no matter how many contracts mention it. And `Contract::clone` is now
+/// O(arity) — an enum copy plus refcount bumps — rather than O(size), because the children are
+/// pointers; the algebra clones constantly, so this is where the walk actually disappeared.
+impl Contract {
+    /// The canonical handle for this term. Children are already canonical by construction, so
+    /// the structural hash this pays is over child *pointers*, not a deep walk.
+    pub fn cref(self, i: &mut Interner) -> CRef {
+        i.contract(self)
+    }
+
+    pub fn union(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        Contract::Union(i.contract(a), i.contract(b))
+    }
+
+    pub fn intersection(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        Contract::Intersection(i.contract(a), i.contract(b))
+    }
+
+    pub fn difference(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        Contract::Difference(i.contract(a), i.contract(b))
+    }
+
+    /// `NotEquals(v) ≡ Difference(Top, Equals(v))` (C§6) — the sole negative form, spelled
+    /// once so its shape is canonical everywhere.
+    pub fn not_equals(v: ValueRef, i: &mut Interner) -> Contract {
+        Contract::difference(Contract::Top, Contract::Equals(v), i)
+    }
+
+    pub fn tuple(elems: impl IntoIterator<Item = Contract>, i: &mut Interner) -> Contract {
+        Contract::Tuple(elems.into_iter().map(|c| i.contract(c)).collect())
+    }
+
+    pub fn record(
+        fields: impl IntoIterator<Item = (String, Contract)>,
+        i: &mut Interner,
+    ) -> Contract {
+        Contract::Record(
+            fields
+                .into_iter()
+                .map(|(k, c)| (k, i.contract(c)))
+                .collect(),
+        )
+    }
+}
 
 /// A contract — a bounded algebraic property of values (C§4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -135,12 +189,14 @@ impl Contract {
     /// re-verifies): it turns a concrete base contribution such as `Union(Equals(1),
     /// Bottom)` into the Kind claim `Number`. An Indeterminate singleton (no Kind) and
     /// any non-singleton leaf are left unchanged.
-    pub fn generalize(&self) -> Contract {
+    pub fn generalize(&self, i: &mut Interner) -> Contract {
         match self {
-            Contract::Equals(v) => value_kind(v).map(Contract::Kind).unwrap_or_else(|| self.clone()),
-            Contract::Union(a, b) => match (a.generalize(), b.generalize()) {
+            Contract::Equals(v) => value_kind(v)
+                .map(Contract::Kind)
+                .unwrap_or_else(|| self.clone()),
+            Contract::Union(a, b) => match (a.generalize(i), b.generalize(i)) {
                 (Contract::Bottom, x) | (x, Contract::Bottom) => x,
-                (ga, gb) => Contract::Union(Box::new(ga), Box::new(gb)),
+                (ga, gb) => Contract::union(ga, gb, i),
             },
             other => other.clone(),
         }
@@ -203,39 +259,46 @@ impl Contract {
     ///
     /// Uninhabitance here uses only *permanent* structural facts, never temporary
     /// analysis state (family §1; RC §6 supplies the productivity verdicts).
-    pub fn concat(segments: impl IntoIterator<Item = Contract>) -> Contract {
-        // Flatten associatively.
-        let mut flat: Vec<Contract> = Vec::new();
+    pub fn concat(segments: impl IntoIterator<Item = Contract>, i: &mut Interner) -> Contract {
+        // Flatten associatively. A nested Concat's segments are already canonical.
+        let mut flat: Vec<CRef> = Vec::new();
         for s in segments {
             match s {
                 Contract::Concat(inner) => flat.extend(inner),
-                other => flat.push(other),
+                other => flat.push(i.contract(other)),
             }
         }
         // An uninhabited segment empties the whole concatenation.
-        if flat.iter().any(structurally_uninhabited) {
+        if flat.iter().any(|s| structurally_uninhabited(s)) {
             return Contract::Bottom;
         }
         // Erase empty-tuple segments.
-        flat.retain(|s| !matches!(s, Contract::Tuple(e) if e.is_empty()));
+        flat.retain(|s| !matches!(&**s, Contract::Tuple(e) if e.is_empty()));
 
         // Fuse adjacent exact segments.
-        let mut out: Vec<Contract> = Vec::with_capacity(flat.len());
+        let mut out: Vec<CRef> = Vec::with_capacity(flat.len());
         for s in flat {
-            let fused = match (out.last_mut(), s) {
+            // Concatenating the element lists is a pointer splice: the elements are canonical
+            // already, so only the fused Tuple itself needs interning.
+            let fused = match (out.last().map(|p| &**p), &*s) {
                 (Some(Contract::Tuple(prev)), Contract::Tuple(cur)) => {
-                    prev.extend(cur);
-                    None
+                    let mut merged = prev.clone();
+                    merged.extend(cur.iter().cloned());
+                    Some(merged)
                 }
-                (_, s) => Some(s),
+                _ => None,
             };
-            if let Some(s) = fused {
-                out.push(s);
+            match fused {
+                Some(merged) => {
+                    let t = i.contract(Contract::Tuple(merged));
+                    *out.last_mut().expect("fusion implies a preceding segment") = t;
+                }
+                None => out.push(s),
             }
         }
         match out.len() {
             0 => Contract::Tuple(vec![]), // the empty tuple
-            1 => out.pop().expect("length 1"),
+            1 => (*out.pop().expect("length 1")).clone(),
             _ => Contract::Concat(out),
         }
     }
@@ -246,7 +309,7 @@ impl Contract {
     /// `LengthRestricted(LengthRestricted(T, D₁), D₂) → LengthRestricted(T, D₁ ∩ D₂)`.
     /// The structural lowering (exact-tuple filter, Union distribution, `Repeat`
     /// unroll) is [`length::restrict_len`]; this constructor is the pure algebra.
-    pub fn length_restricted(t: Contract, d: Contract) -> Contract {
+    pub fn length_restricted(t: Contract, d: Contract, i: &mut Interner) -> Contract {
         if matches!(t, Contract::Bottom) || matches!(d, Contract::Bottom) {
             return Contract::Bottom;
         }
@@ -254,10 +317,11 @@ impl Contract {
             return t;
         }
         if let Contract::LengthRestricted(inner_t, inner_d) = t {
-            let merged = Contract::Intersection(inner_d, Box::new(d));
-            return Contract::LengthRestricted(inner_t, Box::new(merged));
+            let d = i.contract(d);
+            let merged = i.contract(Contract::Intersection(inner_d, d));
+            return Contract::LengthRestricted(inner_t, merged);
         }
-        Contract::LengthRestricted(Box::new(t), Box::new(d))
+        Contract::LengthRestricted(i.contract(t), i.contract(d))
     }
 
     /// Denotational membership (C§16): whether `v ∈ ⟦self⟧`.
@@ -371,13 +435,17 @@ fn in_geo(v: &ValueRef, b: &Rational, r: &Rational) -> bool {
 }
 
 fn has_field(v: &ValueRef, key: &str) -> bool {
-    let Some(entries) = v.as_record() else { return false };
+    let Some(entries) = v.as_record() else {
+        return false;
+    };
     let ku: Vec<u16> = key.encode_utf16().collect();
     entries.iter().any(|e| e.key == ku)
 }
 
-fn record_contains(v: &ValueRef, fields: &[(String, Contract)]) -> bool {
-    let Some(entries) = v.as_record() else { return false };
+fn record_contains(v: &ValueRef, fields: &[(String, CRef)]) -> bool {
+    let Some(entries) = v.as_record() else {
+        return false;
+    };
     // Exact: the record's key set equals the contract's, and each field's value
     // satisfies its contract. Keys are unique on both sides, so equal counts plus
     // all-fields-present ⇒ equal key sets (no un-listed fields).
@@ -397,7 +465,7 @@ fn record_contains(v: &ValueRef, fields: &[(String, Contract)]) -> bool {
 /// anything else is variable and is searched over. The search is a straightforward
 /// backtrack — the denotational reference, not the analyzer's alignment procedure
 /// (tuple-family §4), which decides the *contract* question without enumerating.
-fn concat_matches(segs: &[Contract], items: &[ValueRef]) -> bool {
+fn concat_matches(segs: &[CRef], items: &[ValueRef]) -> bool {
     match segs.split_first() {
         None => items.is_empty(),
         Some((first, rest)) => {
@@ -420,13 +488,11 @@ fn structurally_uninhabited(c: &Contract) -> bool {
     match c {
         Contract::Bottom => true,
         Contract::Range(lo, hi) => lo > hi,
-        Contract::Tuple(elems) => elems.iter().any(structurally_uninhabited),
-        Contract::Concat(segs) => segs.iter().any(structurally_uninhabited),
+        Contract::Tuple(elems) => elems.iter().any(|c| structurally_uninhabited(c)),
+        Contract::Concat(segs) => segs.iter().any(|c| structurally_uninhabited(c)),
         Contract::Record(fields) => fields.iter().any(|(_, c)| structurally_uninhabited(c)),
         Contract::Union(a, b) => structurally_uninhabited(a) && structurally_uninhabited(b),
-        Contract::Intersection(a, b) => {
-            structurally_uninhabited(a) || structurally_uninhabited(b)
-        }
+        Contract::Intersection(a, b) => structurally_uninhabited(a) || structurally_uninhabited(b),
         _ => false,
     }
 }
@@ -438,7 +504,7 @@ fn structurally_uninhabited(c: &Contract) -> bool {
 pub(crate) fn min_extent(c: &Contract) -> usize {
     match c {
         Contract::Tuple(elems) => elems.len(),
-        Contract::Concat(segs) => segs.iter().map(min_extent).sum(),
+        Contract::Concat(segs) => segs.iter().map(|c| min_extent(c)).sum(),
         Contract::Union(a, b) => min_extent(a).min(min_extent(b)),
         Contract::Intersection(a, b) => min_extent(a).max(min_extent(b)),
         Contract::Equals(v) => v.as_tuple().map(|t| t.len()).unwrap_or(0),
@@ -450,7 +516,7 @@ pub(crate) fn min_extent(c: &Contract) -> usize {
 fn exact_arity(c: &Contract) -> Option<usize> {
     match c {
         Contract::Tuple(elems) => Some(elems.len()),
-        Contract::Concat(segs) => segs.iter().map(exact_arity).sum::<Option<usize>>(),
+        Contract::Concat(segs) => segs.iter().map(|c| exact_arity(c)).sum::<Option<usize>>(),
         _ => None,
     }
 }
@@ -489,7 +555,9 @@ impl Contract {
     }
 }
 
-fn tuple_contains(v: &ValueRef, elems: &[Contract]) -> bool {
-    let Some(items) = v.as_tuple() else { return false };
+fn tuple_contains(v: &ValueRef, elems: &[CRef]) -> bool {
+    let Some(items) = v.as_tuple() else {
+        return false;
+    };
     items.len() == elems.len() && items.iter().zip(elems).all(|(item, c)| c.contains(item))
 }

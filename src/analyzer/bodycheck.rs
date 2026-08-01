@@ -88,17 +88,29 @@ pub fn body_summary(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, in
     ACTIVE.with(|s| {
         s.borrow_mut().pop();
     });
-    BodySummary { produced, completion, findings }
+    BodySummary {
+        produced,
+        completion,
+        findings,
+    }
 }
 
 /// `produced` (the body's inferred contract) and `completion` (E10), by analyzing the
 /// whole body once with the captures bound and the parameters narrowed by the argument
 /// tuple. Safety findings here are discarded — [`body_check`] supplies the
 /// path-sensitive ones.
-fn whole_body(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> (Contract, Completion) {
-    let Some(closure) = callee.as_closure() else { return (Contract::Top, Completion::Produces) };
+fn whole_body(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> (Contract, Completion) {
+    let Some(closure) = callee.as_closure() else {
+        return (Contract::Top, Completion::Produces);
+    };
     let mut env = capture_env(callee);
-    bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+    let arg_tuple = Contract::tuple(args.to_vec(), interner);
+    bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
     let a = analyze(&closure.lambda.body, &env, cenv, interner);
     (a.contract, a.completion)
 }
@@ -106,8 +118,15 @@ fn whole_body(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner
 /// Findings from checking a call to `callee` with argument contracts `args`. Empty ⇒ no
 /// finding proved. `Error` ⇒ a definitely-reached row traps (refutation); `Warning` ⇒
 /// unproven (a may-region row traps, or safety could not be proven).
-pub fn body_check(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
-    let Some(closure) = callee.as_closure() else { return vec![] };
+pub fn body_check(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<Finding> {
+    let Some(closure) = callee.as_closure() else {
+        return vec![];
+    };
     let base = capture_env(callee);
 
     match param_name(&closure.lambda.params) {
@@ -123,7 +142,8 @@ pub fn body_check(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, inte
         // cutoff, so this terminates (multi-param growing recursions have no direct trap).
         Param::Other => {
             let mut env = base;
-            bind_pattern(&closure.lambda.params, &Contract::Tuple(args.to_vec()), &mut env);
+            let arg_tuple = Contract::tuple(args.to_vec(), interner);
+            bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
             analyze(&closure.lambda.body, &env, cenv, interner).findings
         }
     }
@@ -143,11 +163,19 @@ pub fn body_check(callee: &ValueRef, args: &[Contract], cenv: &ContractEnv, inte
 /// Substrate only in this increment (proved by its tests); the summary body check that
 /// walks these rows — replacing `body_check`'s unfolding — is the next increment.
 #[allow(dead_code)]
-fn reachable_rows(callee: &ValueRef, param: &str, arg: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Vec<usize> {
-    let Some(closure) = callee.as_closure() else { return vec![] };
-    let table = region_table(&closure.lambda.body, param, cenv);
+fn reachable_rows(
+    callee: &ValueRef,
+    param: &str,
+    arg: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<usize> {
+    let Some(closure) = callee.as_closure() else {
+        return vec![];
+    };
+    let table = region_table(&closure.lambda.body, param, cenv, interner);
     let mut seen: Vec<usize> = Vec::new();
-    let mut work: Vec<usize> = selected_indices(&table, arg);
+    let mut work: Vec<usize> = selected_indices(&table, arg, interner);
     while let Some(i) = work.pop() {
         if seen.contains(&i) {
             continue;
@@ -156,11 +184,13 @@ fn reachable_rows(callee: &ValueRef, param: &str, arg: &Contract, cenv: &Contrac
         let mut calls = Vec::new();
         collect_self_calls(&table[i].result, &closure, callee, &mut calls);
         for arglist in &calls {
-            let Some(arg_expr) = arglist.first() else { continue };
+            let Some(arg_expr) = arglist.first() else {
+                continue;
+            };
             let mut env = capture_env(callee);
             env.insert(param.to_string(), table[i].region.clone());
             let dom = analyze(arg_expr, &env, cenv, interner).contract;
-            for j in selected_indices(&table, &dom) {
+            for j in selected_indices(&table, &dom, interner) {
                 if !seen.contains(&j) && !work.contains(&j) {
                     work.push(j);
                 }
@@ -190,12 +220,21 @@ fn reachable_rows(callee: &ValueRef, param: &str, arg: &Contract, cenv: &Contrac
 /// Recursive calls in a row's result are *summarized*, not unfolded: when analyzed they
 /// route back through `analyze_apply → body_summary`, hit the [`ACTIVE`] shape cutoff, and
 /// return the cycle assumption. Coverage comes from the reachable-row set, not unfolding.
-fn check_recursive_body(callee: &ValueRef, param: &str, arg: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Vec<Finding> {
-    let Some(closure) = callee.as_closure() else { return vec![] };
-    let table = region_table(&closure.lambda.body, param, cenv);
+fn check_recursive_body(
+    callee: &ValueRef,
+    param: &str,
+    arg: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<Finding> {
+    let Some(closure) = callee.as_closure() else {
+        return vec![];
+    };
+    let table = region_table(&closure.lambda.body, param, cenv, interner);
     let mut reaching: Vec<Option<Contract>> = vec![None; table.len()];
-    for i in selected_indices(&table, arg) {
-        grow(&mut reaching[i], intersect(arg.clone(), table[i].region.clone()), interner);
+    for i in selected_indices(&table, arg, interner) {
+        let add = intersect(arg.clone(), table[i].region.clone(), interner);
+        grow(&mut reaching[i], add, interner);
     }
     // Fixpoint: propagate recursive-call targets (computed under the fixed row region, so the
     // union is bounded and converges).
@@ -209,12 +248,14 @@ fn check_recursive_body(callee: &ValueRef, param: &str, arg: &Contract, cenv: &C
             let mut calls = Vec::new();
             collect_self_calls(&table[i].result, &closure, callee, &mut calls);
             for arglist in &calls {
-                let Some(arg_expr) = arglist.first() else { continue };
+                let Some(arg_expr) = arglist.first() else {
+                    continue;
+                };
                 let mut env = capture_env(callee);
                 env.insert(param.to_string(), table[i].region.clone());
                 let target = analyze(arg_expr, &env, cenv, interner).contract;
-                for j in selected_indices(&table, &target) {
-                    let add = intersect(target.clone(), table[j].region.clone());
+                for j in selected_indices(&table, &target, interner) {
+                    let add = intersect(target.clone(), table[j].region.clone(), interner);
                     changed |= grow(&mut reaching[j], add, interner);
                 }
             }
@@ -253,7 +294,7 @@ fn grow(slot: &mut Option<Contract>, add: Contract, interner: &mut Interner) -> 
             if matches!(subcontract(&add, cur, interner), Verdict::Proven) {
                 false
             } else {
-                *slot = Some(Contract::Union(Box::new(cur.clone()), Box::new(add)));
+                *slot = Some(Contract::union(cur.clone(), add, interner));
                 true
             }
         }
@@ -261,17 +302,16 @@ fn grow(slot: &mut Option<Contract>, add: Contract, interner: &mut Interner) -> 
 }
 
 /// `Top ∩ x = x`; otherwise the raw `Intersection` (the algebra reasons about it).
-fn intersect(a: Contract, b: Contract) -> Contract {
+fn intersect(a: Contract, b: Contract, i: &mut Interner) -> Contract {
     match (a, b) {
         (Contract::Top, x) | (x, Contract::Top) => x,
-        (a, b) => Contract::Intersection(Box::new(a), Box::new(b)),
+        (a, b) => Contract::intersection(a, b, i),
     }
 }
 
 /// The row indices a value in `domain` may select — the first-match remainder walk of
 /// [`select`], returning indices (exact rows consume, uncertain rows do not).
-#[allow(dead_code)]
-fn selected_indices(table: &[Row], domain: &Contract) -> Vec<usize> {
+fn selected_indices(table: &[Row], domain: &Contract, interner: &mut Interner) -> Vec<usize> {
     if let Contract::Equals(v) = domain {
         let mut out = Vec::new();
         for (i, row) in table.iter().enumerate() {
@@ -291,7 +331,7 @@ fn selected_indices(table: &[Row], domain: &Contract) -> Vec<usize> {
             out.push(i);
         }
         if row.exact {
-            remaining = Contract::Difference(Box::new(remaining), Box::new(row.region.clone()));
+            remaining = Contract::difference(remaining, row.region.clone(), interner);
         }
     }
     out
@@ -308,7 +348,9 @@ enum Param {
 }
 
 fn param_name(params: &Pat) -> Param {
-    let Pat::Tuple(elems) = params else { return Param::Other };
+    let Pat::Tuple(elems) = params else {
+        return Param::Other;
+    };
     match elems.as_slice() {
         [] => Param::Zero,
         [PatElem::Pat(Pat::Bind(n))] => Param::One(n.clone()),
@@ -319,7 +361,9 @@ fn param_name(params: &Pat) -> Param {
 /// The captured environment as contracts — each free variable bound to `Equals(value)`.
 fn capture_env(callee: &ValueRef) -> TypeEnv {
     let mut env = TypeEnv::new();
-    let (Some(f), Some(closure)) = (callee.as_fn(), callee.as_closure()) else { return env };
+    let (Some(f), Some(closure)) = (callee.as_fn(), callee.as_closure()) else {
+        return env;
+    };
     for name in f.free_vars() {
         if let Some(Binding::Value(v)) = closure.env.lookup(name) {
             env.insert(name.clone(), Contract::Equals(v));

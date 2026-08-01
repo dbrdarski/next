@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use num_bigint::BigInt;
 
 use super::recursive::{self, Emptiness, RecGroup};
-use super::{Contract, Kind};
+use super::{CRef, Contract, Kind};
 use crate::interner::Interner;
 use crate::rational::Rational;
 
@@ -78,13 +78,13 @@ fn ge(k: u64) -> Contract {
     Contract::GreaterEq(Rational::from_integer(BigInt::from(k)))
 }
 
-fn union_all(mut parts: Vec<Contract>) -> Contract {
+fn union_all(mut parts: Vec<Contract>, i: &mut Interner) -> Contract {
     match parts.len() {
         0 => Contract::Bottom,
         1 => parts.pop().expect("len 1"),
         _ => parts
             .into_iter()
-            .reduce(|a, b| Contract::Union(Box::new(a), Box::new(b)))
+            .reduce(|a, b| Contract::union(a, b, i))
             .expect("non-empty"),
     }
 }
@@ -115,17 +115,21 @@ pub fn len(group: &RecGroup, c: &Contract, interner: &mut Interner) -> Len {
             let mut acc = Len::exact(eq_len(0));
             for s in segs {
                 let l = len(group, s, interner);
-                acc = sum_len(&acc, &l);
+                acc = sum_len(&acc, &l, interner);
             }
             acc
         }
 
         Contract::Union(a, b) => {
             let (la, lb) = (len(group, a, interner), len(group, b, interner));
-            let stamp = if la.is_exact() && lb.is_exact() { Stamp::Exact } else { Stamp::Approx };
+            let stamp = if la.is_exact() && lb.is_exact() {
+                Stamp::Exact
+            } else {
+                Stamp::Approx
+            };
             // The union of exact sets is exact.
             Len {
-                contract: union_all(vec![la.contract, lb.contract]),
+                contract: union_all(vec![la.contract, lb.contract], interner),
                 stamp,
             }
         }
@@ -148,7 +152,7 @@ pub fn len(group: &RecGroup, c: &Contract, interner: &mut Interner) -> Len {
         // Intersection/Difference: sound bounds only.
         Contract::Intersection(a, b) => {
             let (la, lb) = (len(group, a, interner), len(group, b, interner));
-            Len::approx(Contract::Intersection(Box::new(la.contract), Box::new(lb.contract)))
+            Len::approx(Contract::intersection(la.contract, lb.contract, interner))
         }
         Contract::Difference(base, _) => len(group, base, interner).weakened(),
 
@@ -159,8 +163,11 @@ pub fn len(group: &RecGroup, c: &Contract, interner: &mut Interner) -> Len {
             if super::disjoint(&lt.contract, d) {
                 return Len::exact(Contract::Bottom);
             }
-            let contract = Contract::Intersection(Box::new(lt.contract), d.clone());
-            Len { contract, stamp: lt.stamp }
+            let contract = Contract::Intersection(interner.contract(lt.contract), d.clone());
+            Len {
+                contract,
+                stamp: lt.stamp,
+            }
         }
 
         // Anything else carries no tuple length.
@@ -188,8 +195,12 @@ fn stamped_count(
 /// The C§7 sum of two length contracts. Exact only when both operands are exact
 /// **and** the applied rule is exact for the pair (a coarsening rule stamps
 /// `Approx`).
-fn sum_len(a: &Len, b: &Len) -> Len {
-    let stamp = if a.is_exact() && b.is_exact() { Stamp::Exact } else { Stamp::Approx };
+fn sum_len(a: &Len, b: &Len, i: &mut Interner) -> Len {
+    let stamp = if a.is_exact() && b.is_exact() {
+        Stamp::Exact
+    } else {
+        Stamp::Approx
+    };
     // Bottom + anything = Bottom (no realizable length).
     if matches!(a.contract, Contract::Bottom) || matches!(b.contract, Contract::Bottom) {
         return Len::exact(Contract::Bottom);
@@ -197,11 +208,19 @@ fn sum_len(a: &Len, b: &Len) -> Len {
     let contract = match (finite_lengths(&a.contract), finite_lengths(&b.contract)) {
         // Two finite exact sets sum pointwise — exact.
         (Some(xs), Some(ys)) => {
-            let sums: BTreeSet<u64> = xs.iter().flat_map(|x| ys.iter().map(move |y| x + y)).collect();
-            union_all(sums.into_iter().map(eq_len).collect())
+            let sums: BTreeSet<u64> = xs
+                .iter()
+                .flat_map(|x| ys.iter().map(move |y| x + y))
+                .collect();
+            union_all(sums.into_iter().map(eq_len).collect(), i)
         }
         // Otherwise fall back to the minima — a sound lower bound, coarsening.
-        _ => return Len { contract: ge(min_of(&a.contract) + min_of(&b.contract)), stamp: Stamp::Approx },
+        _ => {
+            return Len {
+                contract: ge(min_of(&a.contract) + min_of(&b.contract)),
+                stamp: Stamp::Approx,
+            };
+        }
     };
     Len { contract, stamp }
 }
@@ -300,7 +319,7 @@ fn solve(group: &RecGroup, name: &str, interner: &mut Interner) -> Len {
     // The eventual period is the gcd of CLOSED-WALK weights — the SCC-wide
     // cycle-weight gcd — never the gcd of individual edges (TL-19).
     let period = cycle_weight_gcd(&alts);
-    Len::exact(periodic_form(&achievable, period, bound))
+    Len::exact(periodic_form(&achievable, period, bound, interner))
 }
 
 /// Split a definition into its union alternatives.
@@ -316,10 +335,15 @@ fn branches(c: &Contract) -> Vec<&Contract> {
 }
 
 /// Classify one alternative as a base, an edge, or opaque.
-fn classify(group: &RecGroup, scc: &BTreeSet<String>, alt: &Contract, interner: &mut Interner) -> Alt {
+fn classify(
+    group: &RecGroup,
+    scc: &BTreeSet<String>,
+    alt: &Contract,
+    interner: &mut Interner,
+) -> Alt {
     // Collect own-SCC references and the surrounding non-recursive segments.
     let segs: Vec<&Contract> = match alt {
-        Contract::Concat(s) => s.iter().collect(),
+        Contract::Concat(s) => s.iter().map(|c| &**c).collect(),
         other => vec![other],
     };
     let mut target: Option<String> = None;
@@ -347,7 +371,7 @@ fn classify(group: &RecGroup, scc: &BTreeSet<String>, alt: &Contract, interner: 
                 if !l.is_exact() {
                     return Alt::Opaque; // label outside the finite-exact boundary
                 }
-                weight = sum_len(&weight, &l);
+                weight = sum_len(&weight, &l, interner);
             }
         }
     }
@@ -454,8 +478,15 @@ fn saturate(alts: &BTreeMap<String, Vec<Alt>>, bound: u64) -> BTreeMap<String, B
         let mut changed = false;
         for (state, list) in alts {
             for a in list {
-                let Alt::Edge { to, weights } = a else { continue };
-                let targets: Vec<u64> = set.get(to).cloned().unwrap_or_default().into_iter().collect();
+                let Alt::Edge { to, weights } = a else {
+                    continue;
+                };
+                let targets: Vec<u64> = set
+                    .get(to)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
                 for t in targets {
                     for w in weights {
                         let v = t + w;
@@ -478,7 +509,9 @@ fn saturate(alts: &BTreeMap<String, Vec<Alt>>, bound: u64) -> BTreeMap<String, B
 /// This is the cycle-weight gcd, **not** the edge-weight gcd (TL-19).
 fn cycle_weight_gcd(alts: &BTreeMap<String, Vec<Alt>>) -> u64 {
     let mut pot: BTreeMap<&str, i64> = BTreeMap::new();
-    let Some(root) = alts.keys().next() else { return 1 };
+    let Some(root) = alts.keys().next() else {
+        return 1;
+    };
     pot.insert(root.as_str(), 0);
 
     // Propagate potentials (the graph is strongly connected within an SCC).
@@ -486,9 +519,13 @@ fn cycle_weight_gcd(alts: &BTreeMap<String, Vec<Alt>>) -> u64 {
     while changed {
         changed = false;
         for (state, list) in alts {
-            let Some(&ps) = pot.get(state.as_str()) else { continue };
+            let Some(&ps) = pot.get(state.as_str()) else {
+                continue;
+            };
             for a in list {
-                let Alt::Edge { to, weights } = a else { continue };
+                let Alt::Edge { to, weights } = a else {
+                    continue;
+                };
                 let Some(&w) = weights.first() else { continue };
                 if !pot.contains_key(to.as_str()) {
                     pot.insert(to.as_str(), ps + w as i64);
@@ -500,10 +537,16 @@ fn cycle_weight_gcd(alts: &BTreeMap<String, Vec<Alt>>) -> u64 {
 
     let mut g: u64 = 0;
     for (state, list) in alts {
-        let Some(&ps) = pot.get(state.as_str()) else { continue };
+        let Some(&ps) = pot.get(state.as_str()) else {
+            continue;
+        };
         for a in list {
-            let Alt::Edge { to, weights } = a else { continue };
-            let Some(&pt) = pot.get(to.as_str()) else { continue };
+            let Alt::Edge { to, weights } = a else {
+                continue;
+            };
+            let Some(&pt) = pot.get(to.as_str()) else {
+                continue;
+            };
             for w in weights {
                 let d = (ps + *w as i64 - pt).unsigned_abs();
                 g = gcd(g, d);
@@ -520,7 +563,12 @@ fn gcd(a: u64, b: u64) -> u64 {
 /// Render an ultimately-periodic achievable set as a contract: for each residue
 /// class mod `period`, the smallest point from which the class is complete becomes
 /// a `Mod ∩ GE` tail; everything below stays an explicit exceptional value.
-fn periodic_form(achievable: &BTreeSet<u64>, period: u64, bound: u64) -> Contract {
+fn periodic_form(
+    achievable: &BTreeSet<u64>,
+    period: u64,
+    bound: u64,
+    i: &mut Interner,
+) -> Contract {
     let mut parts: Vec<Contract> = Vec::new();
     let mut covered: BTreeSet<u64> = BTreeSet::new();
 
@@ -539,13 +587,11 @@ fn periodic_form(achievable: &BTreeSet<u64>, period: u64, bound: u64) -> Contrac
         parts.push(if period == 1 {
             ge(start)
         } else {
-            Contract::Intersection(
-                Box::new(Contract::Mod {
-                    n: BigInt::from(period),
-                    r: BigInt::from(start % period),
-                }),
-                Box::new(ge(start)),
-            )
+            let residue = Contract::Mod {
+                n: BigInt::from(period),
+                r: BigInt::from(start % period),
+            };
+            Contract::intersection(residue, ge(start), i)
         });
         covered.extend(class.into_iter().filter(|v| *v >= start));
     }
@@ -555,7 +601,7 @@ fn periodic_form(achievable: &BTreeSet<u64>, period: u64, bound: u64) -> Contrac
         parts.push(eq_len(*v));
     }
     parts.sort_by_key(min_of);
-    union_all(parts)
+    union_all(parts, i)
 }
 
 // ── §3: the refutation discipline and the reverse transfer ───────────────────
@@ -581,10 +627,12 @@ pub fn intersection_empty_by_length(
 /// fires (exact-tuple filter, `Union` distribution, `Repeat` unroll against a pure
 /// lower bound); everything else is the derived `LengthRestricted(T, D)` form.
 ///
-/// `interner` is carried for the owed recursive rule ("recursive contracts take
-/// certified unfoldings for demand-depth-bounded D", §3) — not yet consumed.
-#[allow(clippy::only_used_in_recursion)]
-pub fn restrict_len(group: &RecGroup, t: &Contract, d: &Contract, interner: &mut Interner) -> Contract {
+pub fn restrict_len(
+    group: &RecGroup,
+    t: &Contract,
+    d: &Contract,
+    interner: &mut Interner,
+) -> Contract {
     if matches!(t, Contract::Bottom) || matches!(d, Contract::Bottom) {
         return Contract::Bottom;
     }
@@ -601,11 +649,14 @@ pub fn restrict_len(group: &RecGroup, t: &Contract, d: &Contract, interner: &mut
         Contract::Union(a, b) => {
             let ra = restrict_len(group, a, d, interner);
             let rb = restrict_len(group, b, d, interner);
-            match (matches!(ra, Contract::Bottom), matches!(rb, Contract::Bottom)) {
+            match (
+                matches!(ra, Contract::Bottom),
+                matches!(rb, Contract::Bottom),
+            ) {
                 (true, true) => Contract::Bottom,
                 (true, false) => rb,
                 (false, true) => ra,
-                (false, false) => Contract::Union(Box::new(ra), Box::new(rb)),
+                (false, false) => Contract::union(ra, rb, interner),
             }
         }
         // `Repeat(E)` against a pure lower bound `GreaterEq(n)`: unroll `n` copies —
@@ -615,22 +666,26 @@ pub fn restrict_len(group: &RecGroup, t: &Contract, d: &Contract, interner: &mut
             match (repeat_element(group, name), d) {
                 (Some(elem), Contract::GreaterEq(m)) => match to_nat(m) {
                     Some(n) if n <= 4096 => {
+                        // `elem` is already canonical, so the unrolled head is a vector of
+                        // `n` copies of one pointer — not `n` copies of the element's tree.
                         let head = Contract::Tuple(vec![elem; n as usize]);
-                        Contract::concat([head, Contract::Ref(name.clone())])
+                        Contract::concat([head, Contract::Ref(name.clone())], interner)
                     }
-                    _ => Contract::length_restricted(t.clone(), d.clone()),
+                    _ => Contract::length_restricted(t.clone(), d.clone(), interner),
                 },
-                _ => Contract::length_restricted(t.clone(), d.clone()),
+                _ => Contract::length_restricted(t.clone(), d.clone(), interner),
             }
         }
-        _ => Contract::length_restricted(t.clone(), d.clone()),
+        _ => Contract::length_restricted(t.clone(), d.clone(), interner),
     }
 }
 
 /// Recognize the `Repeat(E)` shape — `R = Union(Tuple(), Concat(Tuple([E]), R))` —
 /// and return its element contract `E`.
-fn repeat_element(group: &RecGroup, name: &str) -> Option<Contract> {
-    let Some(Contract::Union(a, b)) = group.defs.get(name) else { return None };
+fn repeat_element(group: &RecGroup, name: &str) -> Option<CRef> {
+    let Some(Contract::Union(a, b)) = group.defs.get(name) else {
+        return None;
+    };
     let is_empty_tuple = |c: &Contract| matches!(c, Contract::Tuple(e) if e.is_empty());
     let rec = if is_empty_tuple(a) {
         b
@@ -639,9 +694,17 @@ fn repeat_element(group: &RecGroup, name: &str) -> Option<Contract> {
     } else {
         return None;
     };
-    let Contract::Concat(segs) = &**rec else { return None };
+    let Contract::Concat(segs) = &**rec else {
+        return None;
+    };
+    // Slice patterns see the handles, so the segments are matched through them.
     match segs.as_slice() {
-        [Contract::Tuple(one), Contract::Ref(r)] if one.len() == 1 && r == name => Some(one[0].clone()),
+        [head, tail] => match (&**head, &**tail) {
+            (Contract::Tuple(one), Contract::Ref(r)) if one.len() == 1 && r == name => {
+                Some(one[0].clone())
+            }
+            _ => None,
+        },
         _ => None,
     }
 }

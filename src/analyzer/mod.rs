@@ -256,20 +256,26 @@ fn analyze_tuple(elems: &[Element], env: &TypeEnv, cenv: &ContractEnv, interner:
             Element::Spread(e) => {
                 let mut r = analyze(e, env, cenv, interner);
                 demand(&r, &mut findings); // the spread operand is an expecting seat
-                check_spread_kind(&r.contract, Kind::Tuple, "tuple spread of a non-Tuple", &mut findings, interner);
+                check_spread_kind(
+                    &r.contract,
+                    Kind::Tuple,
+                    "tuple spread of a non-Tuple",
+                    &mut findings,
+                    interner,
+                );
                 findings.append(&mut r.findings);
                 if !run.is_empty() {
-                    segments.push(Contract::Tuple(std::mem::take(&mut run)));
+                    segments.push(Contract::tuple(std::mem::take(&mut run), interner));
                 }
                 segments.push(tuple_shaped(&r.contract));
             }
         }
     }
     if !run.is_empty() {
-        segments.push(Contract::Tuple(run));
+        segments.push(Contract::tuple(run, interner));
     }
     // With no spreads this normalizes straight back to the exact Tuple.
-    Analysis::produced(Contract::concat(segments), findings)
+    Analysis::produced(Contract::concat(segments, interner), findings)
 }
 
 /// The spread operand's contract as a Concat segment. On the non-trapping path
@@ -312,13 +318,23 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, cenv: &ContractEnv, interner:
             Field::Spread(e) => {
                 let mut r = analyze(e, env, cenv, interner);
                 demand(&r, &mut findings);
-                check_spread_kind(&r.contract, Kind::Record, "record spread of a non-Record", &mut findings, interner);
+                check_spread_kind(
+                    &r.contract,
+                    Kind::Record,
+                    "record spread of a non-Record",
+                    &mut findings,
+                    interner,
+                );
                 findings.append(&mut r.findings);
                 exact_shape = false;
             }
         }
     }
-    let contract = if exact_shape { Contract::Record(pairs) } else { Contract::Top };
+    let contract = if exact_shape {
+        Contract::record(pairs, interner)
+    } else {
+        Contract::Top
+    };
     Analysis::produced(contract, findings)
 }
 
@@ -327,10 +343,17 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, cenv: &ContractEnv, interner:
 /// `<Function>`, `<Indeterminate …>`), so an interpolation carries **no
 /// printability demand** — there is nothing here to reject. Interpolations remain
 /// ordinary expecting seats, and their subexpressions are analyzed as usual.
-fn analyze_template(parts: &[TemplatePart], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+fn analyze_template(
+    parts: &[TemplatePart],
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Analysis {
     let mut findings = Vec::new();
     for part in parts {
-        let TemplatePart::Interp(e) = part else { continue };
+        let TemplatePart::Interp(e) = part else {
+            continue;
+        };
         let mut r = analyze(e, env, cenv, interner);
         demand(&r, &mut findings); // interpolations are expecting seats
         findings.append(&mut r.findings);
@@ -428,28 +451,46 @@ fn fold_node(
             },
         },
     };
-    Some(Expr::Access { target: Box::new(Expr::Const(tv.clone())), form: form2, total })
+    Some(Expr::Access {
+        target: Box::new(Expr::Const(tv.clone())),
+        form: form2,
+        total,
+    })
 }
 
 /// Field access (E6): prove receiver non-null and field present (demand form).
-fn analyze_field(tc: &Contract, name: &str, total: bool, findings: &mut Vec<Finding>, interner: &mut Interner) -> Contract {
+fn analyze_field(
+    tc: &Contract,
+    name: &str,
+    total: bool,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) -> Contract {
     let has_field = Contract::HasField(name.to_string());
     let output = field_output(tc, name);
     let null = Contract::Kind(Kind::Null);
 
     if matches!(subcontract(tc, &has_field, interner), Verdict::Proven) {
         // Record with the field, non-null — safe.
-        return if total { or_null(output) } else { output };
+        return if total {
+            or_null(output, interner)
+        } else {
+            output
+        };
     }
     if total {
         // `?.` totalizes null and absent to null — never traps.
-        return or_null(output);
+        return or_null(output, interner);
     }
     if disjoint(tc, &has_field) {
         // Every inhabitant either is null (null-receiver) or lacks the field
         // (absent-field) — always traps.
         let could_null = !disjoint(tc, &null);
-        let class = if could_null { TrapClass::NullReceiver } else { TrapClass::AbsentField };
+        let class = if could_null {
+            TrapClass::NullReceiver
+        } else {
+            TrapClass::AbsentField
+        };
         findings.push(Finding {
             class,
             severity: Severity::Error,
@@ -471,21 +512,29 @@ fn field_output(tc: &Contract, name: &str) -> Contract {
         Contract::Record(fields) => fields
             .iter()
             .find(|(k, _)| k == name)
-            .map(|(_, c)| c.clone())
+            .map(|(_, c)| (**c).clone())
             .unwrap_or(Contract::Top),
         _ => Contract::Top,
     }
 }
 
-fn or_null(c: Contract) -> Contract {
-    Contract::Union(Box::new(c), Box::new(Contract::Kind(Kind::Null)))
+fn or_null(c: Contract, i: &mut Interner) -> Contract {
+    Contract::union(c, Contract::Kind(Kind::Null), i)
 }
 
-fn analyze_index(tc: &Contract, total: bool, findings: &mut Vec<Finding>, interner: &mut Interner) -> Contract {
+fn analyze_index(
+    tc: &Contract,
+    total: bool,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) -> Contract {
     if total {
         return Contract::Top; // `?.[i]` totalizes null / out-of-bounds / non-integer to null
     }
-    if matches!(subcontract(tc, &Contract::Kind(Kind::Null), interner), Verdict::Proven) {
+    if matches!(
+        subcontract(tc, &Contract::Kind(Kind::Null), interner),
+        Verdict::Proven
+    ) {
         findings.push(Finding {
             class: TrapClass::NullReceiver,
             severity: Severity::Error,
@@ -639,9 +688,13 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                 }
             }
         }
-        (union_of(produced), join_completions(&completions))
+        (union_of(produced, interner), join_completions(&completions))
     };
-    Analysis { contract, findings, completion }
+    Analysis {
+        contract,
+        findings,
+        completion,
+    }
 }
 
 /// The callee's completion (E10) at a call site. A **mutator** discards its return, so it
@@ -768,8 +821,8 @@ fn analyze_known_callee(
         admit(closure.lambda.act_kind, findings);
         // Argument obligation: the argument tuple must match the parameter pattern.
         if !has_spread {
-            let arg_tuple = Contract::Tuple(arg_contracts.to_vec());
-            let params = pattern_contract(&closure.lambda.params, cenv);
+            let arg_tuple = Contract::tuple(arg_contracts.to_vec(), interner);
+            let params = pattern_contract(&closure.lambda.params, cenv, interner);
             if matches!(subcontract(&arg_tuple, &params, interner), Verdict::Proven) {
                 // obligation met
             } else if disjoint(&arg_tuple, &params) {
@@ -903,14 +956,21 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
                 findings.extend(a.findings);
             }
             MatchItem::Arm(arm) => {
-                let pc = arm.pattern.as_ref().map(|p| pattern_contract(p, cenv)).unwrap_or(Contract::Top);
-                let narrowed = intersect(&remainder, &pc);
+                let pc = arm
+                    .pattern
+                    .as_ref()
+                    .map(|p| pattern_contract(p, cenv, interner))
+                    .unwrap_or(Contract::Top);
+                let narrowed = intersect(&remainder, &pc, interner);
 
                 // **Dead arm** (Archive7 §11.3): its scrutinee region is already empty —
                 // a prior total arm consumed the remainder, or the pattern is disjoint
                 // from what remains — so it can never be selected. Skip it entirely: an
                 // unreachable branch contributes no findings, no result, no consumption.
-                if matches!(subcontract(&narrowed, &Contract::Bottom, interner), Verdict::Proven) {
+                if matches!(
+                    subcontract(&narrowed, &Contract::Bottom, interner),
+                    Verdict::Proven
+                ) {
                     continue;
                 }
 
@@ -950,18 +1010,23 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
                 // pattern region — emptying the remainder when the pattern covers all of
                 // it (e.g. `_` / a bare binding).
                 if !opaque_guard {
-                    remainder = if matches!(subcontract(&remainder, &pc, interner), Verdict::Proven) {
+                    remainder = if matches!(subcontract(&remainder, &pc, interner), Verdict::Proven)
+                    {
                         Contract::Bottom
                     } else {
-                        difference(&remainder, &pc)
+                        difference(&remainder, &pc, interner)
                     };
                 }
             }
         }
     }
 
-    let contract = union_of(results);
-    Analysis { contract, findings, completion: classify_remainder(&remainder, any_guarded, interner) }
+    let contract = union_of(results, interner);
+    Analysis {
+        contract,
+        findings,
+        completion: classify_remainder(&remainder, any_guarded, interner),
+    }
 }
 
 /// Classify a `Match`'s completion (E10) from its uncovered `remainder` (three-voiced):
@@ -982,7 +1047,11 @@ fn classify_remainder(remainder: &Contract, any_guarded: bool, interner: &mut In
 
 /// The contract of values a pattern matches — a **superset** of the true match set
 /// (sound for narrowing by intersection).
-pub(crate) fn pattern_contract(pat: &crate::ast::Pat, cenv: &ContractEnv) -> Contract {
+pub(crate) fn pattern_contract(
+    pat: &crate::ast::Pat,
+    cenv: &ContractEnv,
+    i: &mut Interner,
+) -> Contract {
     use crate::ast::{Pat, PatElem, PatField};
     match pat {
         Pat::Const(v) => Contract::Equals(v.clone()),
@@ -993,29 +1062,33 @@ pub(crate) fn pattern_contract(pat: &crate::ast::Pat, cenv: &ContractEnv) -> Con
             if elems.iter().any(|e| matches!(e, PatElem::Rest(_))) {
                 Contract::Kind(Kind::Tuple)
             } else {
-                let parts = elems
+                let parts: Vec<Contract> = elems
                     .iter()
                     .map(|e| match e {
-                        PatElem::Pat(p) => pattern_contract(p, cenv),
+                        PatElem::Pat(p) => pattern_contract(p, cenv, i),
                         PatElem::Rest(_) => unreachable!(),
                     })
                     .collect();
-                Contract::Tuple(parts)
+                Contract::tuple(parts, i)
             }
         }
         Pat::Record { fields, exact } => {
-            let named: Vec<&PatField> =
-                fields.iter().filter(|f| matches!(f, PatField::Field { .. })).collect();
+            let named: Vec<&PatField> = fields
+                .iter()
+                .filter(|f| matches!(f, PatField::Field { .. }))
+                .collect();
             let has_rest = fields.iter().any(|f| matches!(f, PatField::Rest(_)));
             if *exact && !has_rest {
-                let pairs = named
+                let pairs: Vec<(String, Contract)> = named
                     .iter()
                     .map(|f| match f {
-                        PatField::Field { key, pat } => (key.clone(), pattern_contract(pat, cenv)),
+                        PatField::Field { key, pat } => {
+                            (key.clone(), pattern_contract(pat, cenv, i))
+                        }
                         PatField::Rest(_) => unreachable!(),
                     })
                     .collect();
-                Contract::Record(pairs)
+                Contract::record(pairs, i)
             } else {
                 // Open record: "has at least these fields."
                 named
@@ -1024,11 +1097,11 @@ pub(crate) fn pattern_contract(pat: &crate::ast::Pat, cenv: &ContractEnv) -> Con
                         PatField::Field { key, .. } => Some(Contract::HasField(key.clone())),
                         PatField::Rest(_) => None,
                     })
-                    .reduce(|a, b| intersect(&a, &b))
+                    .reduce(|a, b| intersect(&a, &b, i))
                     .unwrap_or(Contract::Kind(Kind::Record))
             }
         }
-        Pat::Contract(r) => contract_ref(r, cenv).unwrap_or(Contract::Top),
+        Pat::Contract(r) => contract_ref(r, cenv, i).unwrap_or(Contract::Top),
     }
 }
 
@@ -1038,8 +1111,8 @@ pub(crate) fn pattern_contract(pat: &crate::ast::Pat, cenv: &ContractEnv) -> Con
 /// unresolvable name yields `None`, which the caller widens to `Top` (no
 /// narrowing). Resolution is shared with the contract-expression evaluator so
 /// patterns and contract expressions agree by construction.
-fn contract_ref(r: &Ref, cenv: &ContractEnv) -> Option<Contract> {
-    eval_contract(&Expr::Ref(r.clone()), cenv)
+fn contract_ref(r: &Ref, cenv: &ContractEnv, i: &mut Interner) -> Option<Contract> {
+    eval_contract(&Expr::Ref(r.clone()), cenv, i)
 }
 
 /// Bind a pattern's names to their narrowed contracts in `env` (best-effort; a
@@ -1051,9 +1124,9 @@ pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut
             env.insert(name.clone(), narrowed.clone());
         }
         Pat::Tuple(elems) => {
-            for (i, e) in elems.iter().enumerate() {
+            for (pos, e) in elems.iter().enumerate() {
                 if let PatElem::Pat(p) = e {
-                    let sub = tuple_element(narrowed, i);
+                    let sub = tuple_element(narrowed, pos);
                     bind_pattern(p, &sub, env);
                 }
             }
@@ -1072,7 +1145,7 @@ pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut
 
 fn tuple_element(c: &Contract, i: usize) -> Contract {
     match c {
-        Contract::Tuple(parts) => parts.get(i).cloned().unwrap_or(Contract::Top),
+        Contract::Tuple(parts) => parts.get(i).map(|c| (**c).clone()).unwrap_or(Contract::Top),
         _ => Contract::Top,
     }
 }
@@ -1093,7 +1166,7 @@ fn analyze_bind(
             env.insert(name.clone(), value.clone());
         }
         BindTarget::Pattern(p) => {
-            let pc = pattern_contract(p, cenv);
+            let pc = pattern_contract(p, cenv, interner);
             if matches!(subcontract(value, &pc, interner), Verdict::Proven) {
                 // Irrefutable — always matches.
             } else if disjoint(value, &pc) {
@@ -1109,7 +1182,8 @@ fn analyze_bind(
                     message: "cannot prove this destructuring binding irrefutable".into(),
                 });
             }
-            bind_pattern(p, &intersect(value, &pc), env);
+            let narrowed = intersect(value, &pc, interner);
+            bind_pattern(p, &narrowed, env);
         }
     }
 }
@@ -1135,29 +1209,29 @@ fn check_tested_seat(guard: &Contract, findings: &mut Vec<Finding>, interner: &m
     }
 }
 
-fn intersect(a: &Contract, b: &Contract) -> Contract {
+fn intersect(a: &Contract, b: &Contract, i: &mut Interner) -> Contract {
     match (a, b) {
         (Contract::Top, x) | (x, Contract::Top) => x.clone(),
         // Elementwise on matching tuples, so narrowing reaches sub-patterns.
         (Contract::Tuple(pa), Contract::Tuple(pb)) if pa.len() == pb.len() => {
-            Contract::Tuple(pa.iter().zip(pb).map(|(x, y)| intersect(x, y)).collect())
+            let elems: Vec<Contract> = pa.iter().zip(pb).map(|(x, y)| intersect(x, y, i)).collect();
+            Contract::tuple(elems, i)
         }
-        _ => Contract::Intersection(Box::new(a.clone()), Box::new(b.clone())),
+        _ => Contract::intersection(a.clone(), b.clone(), i),
     }
 }
 
-fn difference(a: &Contract, b: &Contract) -> Contract {
-    Contract::Difference(Box::new(a.clone()), Box::new(b.clone()))
+fn difference(a: &Contract, b: &Contract, i: &mut Interner) -> Contract {
+    Contract::difference(a.clone(), b.clone(), i)
 }
 
-fn union_of(mut contracts: Vec<Contract>) -> Contract {
+pub(crate) fn union_of(mut contracts: Vec<Contract>, i: &mut Interner) -> Contract {
     match contracts.len() {
         0 => Contract::Top, // a Match with no arms only ever completes-without-value
         1 => contracts.pop().unwrap(),
         _ => contracts
             .into_iter()
-            .reduce(|a, b| Contract::Union(Box::new(a), Box::new(b)))
+            .reduce(|a, b| Contract::union(a, b, i))
             .unwrap(),
     }
 }
-

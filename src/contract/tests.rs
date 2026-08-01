@@ -52,7 +52,7 @@ fn equals_uses_value_equality() {
     let b = i.tuple(vec![one, two]);
     assert!(Contract::Equals(a).contains(&b));
     // NotEquals ≡ Difference(Top, Equals(v))
-    let ne = Contract::Difference(Box::new(Contract::Top), Box::new(Contract::Equals(five)));
+    let ne = Contract::difference(Contract::Top, Contract::Equals(five), &mut i);
     assert!(ne.contains(&i.integer(6)));
     assert!(!ne.contains(&i.integer(5)));
 }
@@ -75,10 +75,7 @@ fn numeric_bounds_and_range() {
     assert!(Contract::LessEq(r(5)).contains(&i.integer(5)));
 
     // a landing zone (T, T+d] = Intersection(GreaterThan(T), LessOrEqual(T+d))
-    let lz = Contract::Intersection(
-        Box::new(Contract::Greater(r(10))),
-        Box::new(Contract::LessEq(r(20))),
-    );
+    let lz = Contract::intersection(Contract::Greater(r(10)), Contract::LessEq(r(20)), &mut i);
     assert!(!lz.contains(&i.integer(10)));
     assert!(lz.contains(&i.integer(11)));
     assert!(lz.contains(&i.integer(20)));
@@ -131,13 +128,13 @@ fn set_operations() {
     let mut i = Interner::new();
     let small = Contract::Range(r(0), r(10));
     let big = Contract::Range(r(100), r(200));
-    let u = Contract::Union(Box::new(small.clone()), Box::new(big.clone()));
+    let u = Contract::union(small.clone(), big.clone(), &mut i);
     assert!(u.contains(&i.integer(5)));
     assert!(u.contains(&i.integer(150)));
     assert!(!u.contains(&i.integer(50)));
 
     // Difference(Range(0,10), Equals(5)) — a hole
-    let hole = Contract::Difference(Box::new(small), Box::new(Contract::Equals(i.integer(5))));
+    let hole = Contract::difference(small, Contract::Equals(i.integer(5)), &mut i);
     assert!(hole.contains(&i.integer(4)));
     assert!(!hole.contains(&i.integer(5)));
     assert!(hole.contains(&i.integer(6)));
@@ -155,10 +152,13 @@ fn record_and_tuple_and_field() {
     assert!(!Contract::HasField("email".into()).contains(&rec));
 
     // Record is EXACT — the key set must match exactly.
-    let exact = Contract::Record(vec![
-        ("age".into(), Contract::Range(r(0), r(120))),
-        ("name".into(), Contract::Kind(Kind::String)),
-    ]);
+    let exact = Contract::record(
+        vec![
+            ("age".into(), Contract::Range(r(0), r(120))),
+            ("name".into(), Contract::Kind(Kind::String)),
+        ],
+        &mut i,
+    );
     assert!(exact.contains(&rec), "exact match of {{age, name}}");
     // an extra field is rejected (this is the exact-vs-open distinction)
     let (a1, n1, e1) = (i.integer(30), i.string("ann"), i.string("x"));
@@ -179,7 +179,10 @@ fn record_and_tuple_and_field() {
     // Tuple contract, exact length + positional contracts
     let (one, sx) = (i.integer(1), i.string("x"));
     let t = i.tuple(vec![one.clone(), sx]);
-    let tc = Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::String)]);
+    let tc = Contract::tuple(
+        vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::String)],
+        &mut i,
+    );
     assert!(tc.contains(&t));
     let wrong = i.tuple(vec![one]);
     assert!(!tc.contains(&wrong)); // length mismatch
@@ -222,16 +225,25 @@ fn refuted(a: &Contract, b: &Contract, i: &mut Interner) {
 #[test]
 fn subcontract_intervals() {
     let mut i = Interner::new();
-    proven(&Contract::Range(r(0), r(10)), &Contract::Range(r(0), r(100)), &mut i);
-    refuted(&Contract::Range(r(0), r(100)), &Contract::Range(r(0), r(10)), &mut i);
-    proven(&Contract::Range(r(0), r(10)), &Contract::Kind(Kind::Number), &mut i);
+    proven(
+        &Contract::Range(r(0), r(10)),
+        &Contract::Range(r(0), r(100)),
+        &mut i,
+    );
+    refuted(
+        &Contract::Range(r(0), r(100)),
+        &Contract::Range(r(0), r(10)),
+        &mut i,
+    );
+    proven(
+        &Contract::Range(r(0), r(10)),
+        &Contract::Kind(Kind::Number),
+        &mut i,
+    );
     proven(&Contract::Greater(r(5)), &Contract::GreaterEq(r(5)), &mut i);
     refuted(&Contract::GreaterEq(r(5)), &Contract::Greater(r(5)), &mut i);
     // landing zone (10, 20] ⊑ [10, 20] (dense rationals: not ⊑ [11, 20]).
-    let lz = Contract::Intersection(
-        Box::new(Contract::Greater(r(10))),
-        Box::new(Contract::LessEq(r(20))),
-    );
+    let lz = Contract::intersection(Contract::Greater(r(10)), Contract::LessEq(r(20)), &mut i);
     proven(&lz, &Contract::Range(r(10), r(20)), &mut i);
     refuted(&lz, &Contract::Range(r(11), r(20)), &mut i); // 10.5 witnesses the gap
 }
@@ -240,25 +252,44 @@ fn subcontract_intervals() {
 fn subcontract_equals_and_kind() {
     let mut i = Interner::new();
     let five = i.integer(5);
-    proven(&Contract::Equals(five.clone()), &Contract::Range(r(0), r(10)), &mut i);
+    proven(
+        &Contract::Equals(five.clone()),
+        &Contract::Range(r(0), r(10)),
+        &mut i,
+    );
     let fifty = i.integer(50);
-    refuted(&Contract::Equals(fifty), &Contract::Range(r(0), r(10)), &mut i);
+    refuted(
+        &Contract::Equals(fifty),
+        &Contract::Range(r(0), r(10)),
+        &mut i,
+    );
     proven(&Contract::Kind(Kind::Number), &Contract::Top, &mut i);
-    refuted(&Contract::Kind(Kind::Number), &Contract::Kind(Kind::String), &mut i);
+    refuted(
+        &Contract::Kind(Kind::Number),
+        &Contract::Kind(Kind::String),
+        &mut i,
+    );
     proven(&Contract::Bottom, &Contract::Kind(Kind::String), &mut i);
 }
 
 #[test]
 fn subcontract_union_and_mod() {
     let mut i = Interner::new();
-    let split = Contract::Union(
-        Box::new(Contract::Range(r(0), r(5))),
-        Box::new(Contract::Range(r(6), r(10))),
+    let split = Contract::union(
+        Contract::Range(r(0), r(5)),
+        Contract::Range(r(6), r(10)),
+        &mut i,
     );
     proven(&split, &Contract::Range(r(0), r(10)), &mut i);
     // multiples of 4 ⊑ evens; evens ⋢ multiples of 4
-    let mult4 = Contract::Mod { n: BigInt::from(4), r: BigInt::from(0) };
-    let even = Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) };
+    let mult4 = Contract::Mod {
+        n: BigInt::from(4),
+        r: BigInt::from(0),
+    };
+    let even = Contract::Mod {
+        n: BigInt::from(2),
+        r: BigInt::from(0),
+    };
     proven(&mult4, &even, &mut i);
     refuted(&even, &mult4, &mut i);
 }
@@ -281,15 +312,33 @@ fn subcontract_soundness_sweep() {
         Contract::Greater(r(0)),
         Contract::LessEq(r(10)),
         Contract::Equals(five),
-        Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) },
-        Contract::Mod { n: BigInt::from(4), r: BigInt::from(0) },
-        Contract::Union(Box::new(Contract::Range(r(0), r(5))), Box::new(Contract::Range(r(6), r(10)))),
-        Contract::Intersection(Box::new(Contract::Range(r(0), r(20))), Box::new(Contract::Greater(r(5)))),
-        Contract::Difference(Box::new(Contract::Range(r(0), r(10))), Box::new(Contract::Equals(i.integer(5)))),
+        Contract::Mod {
+            n: BigInt::from(2),
+            r: BigInt::from(0),
+        },
+        Contract::Mod {
+            n: BigInt::from(4),
+            r: BigInt::from(0),
+        },
+        Contract::union(
+            Contract::Range(r(0), r(5)),
+            Contract::Range(r(6), r(10)),
+            &mut i,
+        ),
+        Contract::intersection(
+            Contract::Range(r(0), r(20)),
+            Contract::Greater(r(5)),
+            &mut i,
+        ),
+        Contract::difference(
+            Contract::Range(r(0), r(10)),
+            Contract::Equals(i.integer(5)),
+            &mut i,
+        ),
         Contract::HasField("age".into()),
         Contract::Kind(Kind::Tuple),
         Contract::Kind(Kind::Record),
-        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+        Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i),
     ];
 
     // A diverse value pool (numbers, non-numbers).
@@ -342,9 +391,9 @@ fn disjoint_soundness() {
         Contract::Kind(Kind::Record),
         Contract::Range(r(0), r(10)),
         Contract::HasField("a".into()),
-        Contract::Record(vec![("a".into(), Contract::Kind(Kind::Number))]),
-        Contract::Record(vec![("b".into(), Contract::Kind(Kind::Number))]),
-        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+        Contract::record(vec![("a".into(), Contract::Kind(Kind::Number))], &mut i),
+        Contract::record(vec![("b".into(), Contract::Kind(Kind::Number))], &mut i),
+        Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i),
         Contract::Equals(i.integer(5)),
     ];
     let mut pool: Vec<ValueRef> = vec![
@@ -463,10 +512,14 @@ fn out(op: PrimOp, ins: &[Contract], i: &mut Interner) -> Contract {
     analyze_operation(op, ins, i).output
 }
 
-fn nonneg_ints() -> Contract {
-    Contract::Intersection(
-        Box::new(Contract::GreaterEq(r(0))),
-        Box::new(Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }),
+fn nonneg_ints(i: &mut Interner) -> Contract {
+    Contract::intersection(
+        Contract::GreaterEq(r(0)),
+        Contract::Mod {
+            n: BigInt::from(1),
+            r: BigInt::from(0),
+        },
+        i,
     )
 }
 
@@ -499,21 +552,31 @@ fn rulebook_congruence_survives_additive_ops() {
     let one = Contract::Equals(i.integer(1));
     // The non-negative integers minus 1 are still **integers** ≥ −1 — integrality
     // survives `−` because an exact operand is a congruence with modulus 0.
-    let got = out(PrimOp::Sub, &[nonneg_ints(), one.clone()], &mut i);
-    let want = Contract::Intersection(
-        Box::new(Contract::GreaterEq(r(-1))),
-        Box::new(Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }),
+    let got = out(PrimOp::Sub, &[nonneg_ints(&mut i), one.clone()], &mut i);
+    let want = Contract::intersection(
+        Contract::GreaterEq(r(-1)),
+        Contract::Mod {
+            n: BigInt::from(1),
+            r: BigInt::from(0),
+        },
+        &mut i,
     );
     assert_eq!(got, want, "integrality must survive `- 1`");
     // even + 2 is even.
-    let evens = Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) };
+    let evens = Contract::Mod {
+        n: BigInt::from(2),
+        r: BigInt::from(0),
+    };
     let two = Contract::Equals(i.integer(2));
     assert_eq!(out(PrimOp::Add, &[evens.clone(), two], &mut i), evens);
     // Scaling (C§7): even × 3 lands on multiples of 6.
     let three = Contract::Equals(i.integer(3));
     assert_eq!(
         out(PrimOp::Mul, &[evens, three], &mut i),
-        Contract::Mod { n: BigInt::from(6), r: BigInt::from(0) }
+        Contract::Mod {
+            n: BigInt::from(6),
+            r: BigInt::from(0)
+        }
     );
 }
 
@@ -657,9 +720,17 @@ fn operation_soundness_sweep() {
         Contract::Geo { b: r(2), r: r(3) },
         Contract::Geo { b: r(-2), r: r(3) },
         // composites
-        Contract::Intersection(Box::new(Contract::GreaterEq(r(0))), Box::new(ints(1, 0))),
-        Contract::Union(Box::new(Contract::Equals(i.integer(2))), Box::new(Contract::Equals(i.integer(6)))),
-        Contract::Difference(Box::new(Contract::Range(r(0), r(10))), Box::new(Contract::Equals(i.integer(5)))),
+        Contract::intersection(Contract::GreaterEq(r(0)), ints(1, 0), &mut i),
+        Contract::union(
+            Contract::Equals(i.integer(2)),
+            Contract::Equals(i.integer(6)),
+            &mut i,
+        ),
+        Contract::difference(
+            Contract::Range(r(0), r(10)),
+            Contract::Equals(i.integer(5)),
+            &mut i,
+        ),
         // Indeterminate — both forms
         Contract::Indeterminate(crate::value::IndetForm::DivByZero),
         Contract::Indeterminate(crate::value::IndetForm::ZeroOverZero),
@@ -759,11 +830,11 @@ mod rec {
     fn rec_ref(name: &str) -> Contract {
         Contract::Ref(name.into())
     }
-    fn record(fields: &[(&str, Contract)]) -> Contract {
-        Contract::Record(fields.iter().map(|(k, c)| (k.to_string(), c.clone())).collect())
+    fn record(fields: &[(&str, Contract)], i: &mut Interner) -> Contract {
+        Contract::record(fields.iter().map(|(k, c)| (k.to_string(), c.clone())), i)
     }
-    fn union(a: Contract, b: Contract) -> Contract {
-        Contract::Union(Box::new(a), Box::new(b))
+    fn union(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        Contract::union(a, b, i)
     }
     fn group(defs: &[(&str, Contract)]) -> RecGroup {
         RecGroup::new(defs.iter().map(|(n, c)| (n.to_string(), c.clone())))
@@ -771,10 +842,11 @@ mod rec {
 
     #[test]
     fn rc09_negative_occurrence_rejected() {
+        let mut i = Interner::new();
         // Bad = Difference(Top, Bad) — antitone, no least fixpoint.
         let g = group(&[(
             "Bad",
-            Contract::Difference(Box::new(Contract::Top), Box::new(rec_ref("Bad"))),
+            Contract::difference(Contract::Top, rec_ref("Bad"), &mut i),
         )]);
         assert_eq!(
             recursive::admissible(&g),
@@ -784,6 +856,7 @@ mod rec {
 
     #[test]
     fn rc10_unguarded_recursion_rejected() {
+        let mut i = Interner::new();
         // R = R
         let g1 = group(&[("R", rec_ref("R"))]);
         assert!(matches!(
@@ -791,7 +864,10 @@ mod rec {
             Err(recursive::DefError::Unguarded { .. })
         ));
         // R = Union(Number, R) — denotes Number; hint says so.
-        let g2 = group(&[("R", union(Contract::Kind(Kind::Number), rec_ref("R")))]);
+        let g2 = group(&[(
+            "R",
+            union(Contract::Kind(Kind::Number), rec_ref("R"), &mut i),
+        )]);
         match recursive::admissible(&g2) {
             Err(recursive::DefError::Unguarded { hint, .. }) => assert!(hint.contains("denotes")),
             other => panic!("expected unguarded, got {other:?}"),
@@ -800,13 +876,21 @@ mod rec {
 
     #[test]
     fn guarded_group_is_admissible() {
+        let mut i = Interner::new();
         // List = Union(Null, Record({head: Number, tail: List})) — references are
         // guarded beneath the Record.
         let g = group(&[(
             "List",
             union(
                 Contract::Kind(Kind::Null),
-                record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("List"))]),
+                record(
+                    &[
+                        ("head", Contract::Kind(Kind::Number)),
+                        ("tail", rec_ref("List")),
+                    ],
+                    &mut i,
+                ),
+                &mut i,
             ),
         )]);
         assert_eq!(recursive::admissible(&g), Ok(()));
@@ -819,7 +903,14 @@ mod rec {
             "List",
             union(
                 Contract::Kind(Kind::Null),
-                record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("List"))]),
+                record(
+                    &[
+                        ("head", Contract::Kind(Kind::Number)),
+                        ("tail", rec_ref("List")),
+                    ],
+                    &mut i,
+                ),
+                &mut i,
             ),
         )]);
         assert!(recursive::admissible(&g).is_ok());
@@ -846,10 +937,13 @@ mod rec {
         // μR.Record({next: R}) is empty (a list with no nil is uninhabited), so it
         // is a subcontract of everything — v0.1 would have wrongly refuted.
         let mut i = Interner::new();
-        let g = group(&[("R", record(&[("next", rec_ref("R"))]))]);
+        let g = group(&[("R", record(&[("next", rec_ref("R"))], &mut i))]);
         assert!(recursive::admissible(&g).is_ok());
         let v = recursive::subcontract(&g, &rec_ref("R"), &Contract::Kind(Kind::Number), &mut i);
-        assert!(matches!(v, Verdict::Proven), "empty source ⊑ anything, got {v:?}");
+        assert!(
+            matches!(v, Verdict::Proven),
+            "empty source ⊑ anything, got {v:?}"
+        );
     }
 
     #[test]
@@ -858,8 +952,15 @@ mod rec {
         // via Null, then A via {b: null}.
         let mut i = Interner::new();
         let g = group(&[
-            ("A", record(&[("b", rec_ref("B"))])),
-            ("B", union(Contract::Kind(Kind::Null), record(&[("a", rec_ref("A"))]))),
+            ("A", record(&[("b", rec_ref("B"))], &mut i)),
+            (
+                "B",
+                union(
+                    Contract::Kind(Kind::Null),
+                    record(&[("a", rec_ref("A"))], &mut i),
+                    &mut i,
+                ),
+            ),
         ]);
         assert!(recursive::admissible(&g).is_ok());
         let e = recursive::emptiness(&g, &mut i);
@@ -879,8 +980,8 @@ mod rec {
         // A = Record({b: B}); B = Record({a: A}) — no base case, both empty.
         let mut i = Interner::new();
         let g = group(&[
-            ("A", record(&[("b", rec_ref("B"))])),
-            ("B", record(&[("a", rec_ref("A"))])),
+            ("A", record(&[("b", rec_ref("B"))], &mut i)),
+            ("B", record(&[("a", rec_ref("A"))], &mut i)),
         ]);
         assert!(recursive::admissible(&g).is_ok());
         let e = recursive::emptiness(&g, &mut i);
@@ -890,10 +991,11 @@ mod rec {
 
     /// `Repeat(E)` — a flat sequence, derived from Concat (tuple family §1):
     /// `R = Union(Tuple(), Concat(Tuple(E), R))`.
-    fn repeat_group(name: &str, element: Contract) -> RecGroup {
+    fn repeat_group(name: &str, element: Contract, i: &mut Interner) -> RecGroup {
         let body = union(
-            Contract::Tuple(vec![]),
-            Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)]),
+            Contract::tuple(vec![], i),
+            Contract::concat([Contract::tuple(vec![element], i), rec_ref(name)], i),
+            i,
         );
         group(&[(name, body)])
     }
@@ -905,19 +1007,26 @@ mod rec {
 
     #[test]
     fn concat_guardedness_admits_repeat() {
+        let mut i = Interner::new();
         // The recursive segment is guarded by a sibling of proven minimum extent 1.
-        let g = repeat_group("R", Contract::Kind(Kind::Number));
+        let g = repeat_group("R", Contract::Kind(Kind::Number), &mut i);
         assert_eq!(recursive::admissible(&g), Ok(()));
 
         // With no consuming sibling, the same shape is unguarded and rejected.
-        let bad = group(&[("U", Contract::concat([Contract::Kind(Kind::Tuple), rec_ref("U")]))]);
-        assert!(matches!(recursive::admissible(&bad), Err(recursive::DefError::Unguarded { .. })));
+        let bad = group(&[(
+            "U",
+            Contract::concat([Contract::Kind(Kind::Tuple), rec_ref("U")], &mut i),
+        )]);
+        assert!(matches!(
+            recursive::admissible(&bad),
+            Err(recursive::DefError::Unguarded { .. })
+        ));
     }
 
     #[test]
     fn concat_membership_splits_the_tuple() {
         let mut i = Interner::new();
-        let g = repeat_group("R", Contract::Kind(Kind::Number));
+        let g = repeat_group("R", Contract::Kind(Kind::Number), &mut i);
         let r = rec_ref("R");
 
         let empty = i.tuple(vec![]);
@@ -937,12 +1046,15 @@ mod rec {
         // consumes ≥ 1 element, so the revisited pair advances source progress.
         let mut i = Interner::new();
         let g = merge(
-            repeat_group("RN", Contract::Kind(Kind::Number)),
-            repeat_group("RT", Contract::Top),
+            repeat_group("RN", Contract::Kind(Kind::Number), &mut i),
+            repeat_group("RT", Contract::Top, &mut i),
         );
         assert!(recursive::admissible(&g).is_ok());
         let v = recursive::subcontract(&g, &rec_ref("RN"), &rec_ref("RT"), &mut i);
-        assert!(matches!(v, Verdict::Proven), "Repeat(Number) ⊑ Repeat(Top), got {v:?}");
+        assert!(
+            matches!(v, Verdict::Proven),
+            "Repeat(Number) ⊑ Repeat(Top), got {v:?}"
+        );
     }
 
     #[test]
@@ -951,16 +1063,25 @@ mod rec {
         // tuple witness (`[1]`), never a bare positional mismatch (§5.3).
         let mut i = Interner::new();
         let g = merge(
-            repeat_group("RN", Contract::Kind(Kind::Number)),
-            repeat_group("RS", Contract::Kind(Kind::String)),
+            repeat_group("RN", Contract::Kind(Kind::Number), &mut i),
+            repeat_group("RS", Contract::Kind(Kind::String), &mut i),
         );
         assert!(recursive::admissible(&g).is_ok());
         match recursive::subcontract(&g, &rec_ref("RN"), &rec_ref("RS"), &mut i) {
             Verdict::Refuted(w) => {
-                assert!(recursive::contains(&g, &rec_ref("RN"), &w), "witness ∈ Repeat(Number)");
-                assert!(!recursive::contains(&g, &rec_ref("RS"), &w), "witness ∉ Repeat(String)");
+                assert!(
+                    recursive::contains(&g, &rec_ref("RN"), &w),
+                    "witness ∈ Repeat(Number)"
+                );
+                assert!(
+                    !recursive::contains(&g, &rec_ref("RS"), &w),
+                    "witness ∉ Repeat(String)"
+                );
                 // A complete tuple, not a naked element.
-                assert!(w.as_tuple().is_some(), "the witness is a whole tuple: {w:?}");
+                assert!(
+                    w.as_tuple().is_some(),
+                    "the witness is a whole tuple: {w:?}"
+                );
             }
             other => panic!("expected Refuted, got {other:?}"),
         }
@@ -972,8 +1093,18 @@ mod rec {
         // the combined source-progress rule.
         let mut i = Interner::new();
         let g = group(&[
-            ("A", record(&[("seq", rec_ref("B"))])),
-            ("B", union(Contract::Tuple(vec![]), Contract::concat([Contract::Tuple(vec![rec_ref("A")]), rec_ref("B")]))),
+            ("A", record(&[("seq", rec_ref("B"))], &mut i)),
+            (
+                "B",
+                union(
+                    Contract::tuple(vec![], &mut i),
+                    Contract::concat(
+                        [Contract::tuple(vec![rec_ref("A")], &mut i), rec_ref("B")],
+                        &mut i,
+                    ),
+                    &mut i,
+                ),
+            ),
         ]);
         assert!(recursive::admissible(&g).is_ok());
         // Both directions terminate and stay sound; reflexivity must hold.
@@ -999,7 +1130,14 @@ mod rec {
             "L",
             union(
                 Contract::Kind(Kind::Function),
-                Contract::concat([Contract::Tuple(vec![Contract::Kind(Kind::Number)]), rec_ref("L")]),
+                Contract::concat(
+                    [
+                        Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i),
+                        rec_ref("L"),
+                    ],
+                    &mut i,
+                ),
+                &mut i,
             ),
         )]);
         assert!(recursive::admissible(&g).is_ok());
@@ -1011,16 +1149,29 @@ mod rec {
         );
         // And the false Empty must not leak into a subcontract proof.
         let v = recursive::subcontract(&g, &rec_ref("L"), &Contract::Kind(Kind::Number), &mut i);
-        assert!(!matches!(v, Verdict::Proven), "L ⊑ Number must not prove, got {v:?}");
+        assert!(
+            !matches!(v, Verdict::Proven),
+            "L ⊑ Number must not prove, got {v:?}"
+        );
 
         // Control: a Concat cycle with no base really is empty.
         let dead = group(&[(
             "D",
-            Contract::concat([Contract::Tuple(vec![Contract::Kind(Kind::Number)]), rec_ref("D")]),
+            Contract::concat(
+                [
+                    Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i),
+                    rec_ref("D"),
+                ],
+                &mut i,
+            ),
         )]);
         assert!(recursive::admissible(&dead).is_ok());
         let e = recursive::emptiness(&dead, &mut i);
-        assert!(matches!(e["D"], recursive::Emptiness::Empty), "got {:?}", e["D"]);
+        assert!(
+            matches!(e["D"], recursive::Emptiness::Empty),
+            "got {:?}",
+            e["D"]
+        );
     }
 
     #[test]
@@ -1031,8 +1182,8 @@ mod rec {
         let one = i.integer(1);
         let inner = i.tuple(vec![one]);
         let c = Contract::Concat(vec![
-            Contract::Equals(inner),
-            Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+            Contract::Equals(inner).cref(&mut i),
+            Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i).cref(&mut i),
         ]);
         let (a, b) = (i.integer(1), i.integer(5));
         let val = i.tuple(vec![a, b]);
@@ -1055,11 +1206,19 @@ mod rec {
         let mut i = Interner::new();
         let g = group(&[(
             "L",
-            union(Contract::Kind(Kind::Function), record(&[("next", rec_ref("L"))])),
+            union(
+                Contract::Kind(Kind::Function),
+                record(&[("next", rec_ref("L"))], &mut i),
+                &mut i,
+            ),
         )]);
         assert!(recursive::admissible(&g).is_ok());
         let e = recursive::emptiness(&g, &mut i);
-        assert!(matches!(e["L"], recursive::Emptiness::Unproven), "got {:?}", e["L"]);
+        assert!(
+            matches!(e["L"], recursive::Emptiness::Unproven),
+            "got {:?}",
+            e["L"]
+        );
     }
 
     #[test]
@@ -1069,11 +1228,22 @@ mod rec {
         let mut i = Interner::new();
         let num_list = union(
             Contract::Kind(Kind::Null),
-            record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("NumList"))]),
+            record(
+                &[
+                    ("head", Contract::Kind(Kind::Number)),
+                    ("tail", rec_ref("NumList")),
+                ],
+                &mut i,
+            ),
+            &mut i,
         );
         let any_list = union(
             Contract::Kind(Kind::Null),
-            record(&[("head", Contract::Top), ("tail", rec_ref("AnyList"))]),
+            record(
+                &[("head", Contract::Top), ("tail", rec_ref("AnyList"))],
+                &mut i,
+            ),
+            &mut i,
         );
         let g = group(&[("NumList", num_list), ("AnyList", any_list)]);
         assert!(recursive::admissible(&g).is_ok());
@@ -1084,8 +1254,8 @@ mod rec {
     fn equals(i: &mut Interner, v: i64) -> Contract {
         Contract::Equals(i.integer(v))
     }
-    fn intersection(a: Contract, b: Contract) -> Contract {
-        Contract::Intersection(Box::new(a), Box::new(b))
+    fn intersection(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        Contract::intersection(a, b, i)
     }
 
     #[test]
@@ -1095,15 +1265,25 @@ mod rec {
         let mut i = Interner::new();
         let one = equals(&mut i, 1);
         let g = group(&[
-            ("A", union(one.clone(), record(&[("next", rec_ref("A"))]))),
-            ("B", union(one, record(&[("next", rec_ref("B"))]))),
+            (
+                "A",
+                union(
+                    one.clone(),
+                    record(&[("next", rec_ref("A"))], &mut i),
+                    &mut i,
+                ),
+            ),
+            (
+                "B",
+                union(one, record(&[("next", rec_ref("B"))], &mut i), &mut i),
+            ),
         ]);
         assert!(recursive::admissible(&g).is_ok());
         // Add the intersection as a member so emptiness reports on it.
         let g2 = group(&[
             ("A", g.defs["A"].clone()),
             ("B", g.defs["B"].clone()),
-            ("AB", intersection(rec_ref("A"), rec_ref("B"))),
+            ("AB", intersection(rec_ref("A"), rec_ref("B"), &mut i)),
         ]);
         let e = recursive::emptiness(&g2, &mut i);
         match &e["AB"] {
@@ -1123,16 +1303,26 @@ mod rec {
         let one = equals(&mut i, 1);
         let two = equals(&mut i, 2);
         let g = group(&[
-            ("A", union(one, record(&[("next", rec_ref("A"))]))),
-            ("B", union(two, record(&[("next", rec_ref("B"))]))),
-            ("AB", intersection(rec_ref("A"), rec_ref("B"))),
+            (
+                "A",
+                union(one, record(&[("next", rec_ref("A"))], &mut i), &mut i),
+            ),
+            (
+                "B",
+                union(two, record(&[("next", rec_ref("B"))], &mut i), &mut i),
+            ),
+            ("AB", intersection(rec_ref("A"), rec_ref("B"), &mut i)),
         ]);
         assert!(recursive::admissible(&g).is_ok());
         let e = recursive::emptiness(&g, &mut i);
         // A and B are individually inhabited, but their intersection is empty.
         assert!(matches!(e["A"], recursive::Emptiness::NonEmpty(_)));
         assert!(matches!(e["B"], recursive::Emptiness::NonEmpty(_)));
-        assert!(matches!(e["AB"], recursive::Emptiness::Empty), "got {:?}", e["AB"]);
+        assert!(
+            matches!(e["AB"], recursive::Emptiness::Empty),
+            "got {:?}",
+            e["AB"]
+        );
     }
 
     #[test]
@@ -1142,18 +1332,38 @@ mod rec {
         let mut i = Interner::new();
         let num_list = union(
             Contract::Kind(Kind::Null),
-            record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("NumList"))]),
+            record(
+                &[
+                    ("head", Contract::Kind(Kind::Number)),
+                    ("tail", rec_ref("NumList")),
+                ],
+                &mut i,
+            ),
+            &mut i,
         );
         let str_list = union(
             Contract::Kind(Kind::Null),
-            record(&[("head", Contract::Kind(Kind::String)), ("tail", rec_ref("StrList"))]),
+            record(
+                &[
+                    ("head", Contract::Kind(Kind::String)),
+                    ("tail", rec_ref("StrList")),
+                ],
+                &mut i,
+            ),
+            &mut i,
         );
         let g = group(&[("NumList", num_list), ("StrList", str_list)]);
         assert!(recursive::admissible(&g).is_ok());
         match recursive::subcontract(&g, &rec_ref("NumList"), &rec_ref("StrList"), &mut i) {
             Verdict::Refuted(w) => {
-                assert!(recursive::contains(&g, &rec_ref("NumList"), &w), "witness ∈ NumList");
-                assert!(!recursive::contains(&g, &rec_ref("StrList"), &w), "witness ∉ StrList");
+                assert!(
+                    recursive::contains(&g, &rec_ref("NumList"), &w),
+                    "witness ∈ NumList"
+                );
+                assert!(
+                    !recursive::contains(&g, &rec_ref("StrList"), &w),
+                    "witness ∉ StrList"
+                );
             }
             other => panic!("expected Refuted, got {other:?}"),
         }
@@ -1166,11 +1376,22 @@ mod rec {
         let mut i = Interner::new();
         let num_list = union(
             Contract::Kind(Kind::Null),
-            record(&[("head", Contract::Kind(Kind::Number)), ("tail", rec_ref("NumList"))]),
+            record(
+                &[
+                    ("head", Contract::Kind(Kind::Number)),
+                    ("tail", rec_ref("NumList")),
+                ],
+                &mut i,
+            ),
+            &mut i,
         );
         let any_list = union(
             Contract::Kind(Kind::Null),
-            record(&[("head", Contract::Top), ("tail", rec_ref("AnyList"))]),
+            record(
+                &[("head", Contract::Top), ("tail", rec_ref("AnyList"))],
+                &mut i,
+            ),
+            &mut i,
         );
         let g = group(&[("NumList", num_list), ("AnyList", any_list)]);
 
@@ -1198,44 +1419,77 @@ mod rec {
 
 #[test]
 fn concat_normal_forms() {
+    let mut i = Interner::new();
     let num = || Contract::Kind(Kind::Number);
     let str_ = || Contract::Kind(Kind::String);
-    let t = |e: Vec<Contract>| Contract::Tuple(e);
+    fn t(e: Vec<Contract>, i: &mut Interner) -> Contract {
+        Contract::tuple(e, i)
+    }
 
     // Nested Concats flatten associatively.
-    let inner = Contract::concat([Contract::Kind(Kind::Tuple), Contract::Kind(Kind::Tuple)]);
-    let flat = Contract::concat([inner, Contract::Kind(Kind::Tuple)]);
-    assert_eq!(flat, Contract::Concat(vec![Contract::Kind(Kind::Tuple); 3]));
+    let inner = Contract::concat(
+        [Contract::Kind(Kind::Tuple), Contract::Kind(Kind::Tuple)],
+        &mut i,
+    );
+    let flat = Contract::concat([inner, Contract::Kind(Kind::Tuple)], &mut i);
+    assert_eq!(
+        flat,
+        Contract::Concat(vec![Contract::Kind(Kind::Tuple).cref(&mut i); 3])
+    );
 
     // The empty-tuple segment erases (a structural fact).
-    assert_eq!(Contract::concat([t(vec![]), Contract::Kind(Kind::Tuple)]), Contract::Kind(Kind::Tuple));
+    assert_eq!(
+        Contract::concat([t(vec![], &mut i), Contract::Kind(Kind::Tuple)], &mut i),
+        Contract::Kind(Kind::Tuple)
+    );
     // …and a Concat of nothing is the empty tuple.
-    assert_eq!(Contract::concat([]), t(vec![]));
-    assert_eq!(Contract::concat([t(vec![]), t(vec![])]), t(vec![]));
+    assert_eq!(Contract::concat([], &mut i), t(vec![], &mut i));
+    assert_eq!(
+        Contract::concat([t(vec![], &mut i), t(vec![], &mut i)], &mut i),
+        t(vec![], &mut i)
+    );
 
     // Adjacent exact segments fuse.
-    assert_eq!(Contract::concat([t(vec![num()]), t(vec![str_()])]), t(vec![num(), str_()]));
+    assert_eq!(
+        Contract::concat([t(vec![num()], &mut i), t(vec![str_()], &mut i)], &mut i),
+        t(vec![num(), str_()], &mut i)
+    );
 
     // An uninhabited segment NEVER erases — it empties the whole Concat (erasing
     // it would turn an empty contract into an inhabited one).
-    assert_eq!(Contract::concat([Contract::Bottom, t(vec![num()])]), Contract::Bottom);
     assert_eq!(
-        Contract::concat([t(vec![Contract::Bottom]), Contract::Kind(Kind::Tuple)]),
+        Contract::concat([Contract::Bottom, t(vec![num()], &mut i)], &mut i),
+        Contract::Bottom
+    );
+    assert_eq!(
+        Contract::concat(
+            [
+                t(vec![Contract::Bottom], &mut i),
+                Contract::Kind(Kind::Tuple)
+            ],
+            &mut i
+        ),
         Contract::Bottom,
     );
 
     // A single segment collapses to itself.
-    assert_eq!(Contract::concat([t(vec![num()])]), t(vec![num()]));
+    assert_eq!(
+        Contract::concat([t(vec![num()], &mut i)], &mut i),
+        t(vec![num()], &mut i)
+    );
 }
 
 #[test]
 fn concat_membership_matches_denotation() {
     let mut i = Interner::new();
     // Concat(Tuple(Number), Tuple(String)) — fused to an exact 2-tuple.
-    let c = Contract::concat([
-        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
-        Contract::Tuple(vec![Contract::Kind(Kind::String)]),
-    ]);
+    let c = Contract::concat(
+        [
+            Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i),
+            Contract::tuple(vec![Contract::Kind(Kind::String)], &mut i),
+        ],
+        &mut i,
+    );
     let one = i.integer(1);
     let sx = i.string("x");
     let ok = i.tuple(vec![one.clone(), sx.clone()]);
@@ -1247,8 +1501,8 @@ fn concat_membership_matches_denotation() {
 
     // A variable head segment is searched over: Concat(Kind(Tuple), Tuple(Number)).
     let v = Contract::Concat(vec![
-        Contract::Kind(Kind::Tuple),
-        Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
+        Contract::Kind(Kind::Tuple).cref(&mut i),
+        Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i).cref(&mut i),
     ]);
     let (a, b) = (i.string("a"), i.integer(9));
     let ends_num = i.tuple(vec![a, b]);
@@ -1281,32 +1535,65 @@ mod contract_expr {
         let mut i = Interner::new();
         let env = ContractEnv::new();
 
-        assert_eq!(eval_contract(&cref("Number"), &env), Some(Contract::Kind(Kind::Number)));
-        assert_eq!(eval_contract(&cref("Top"), &env), Some(Contract::Top));
-        assert_eq!(eval_contract(&cref("Bottom"), &env), Some(Contract::Bottom));
+        assert_eq!(
+            eval_contract(&cref("Number"), &env, &mut i),
+            Some(Contract::Kind(Kind::Number))
+        );
+        assert_eq!(
+            eval_contract(&cref("Top"), &env, &mut i),
+            Some(Contract::Top)
+        );
+        assert_eq!(
+            eval_contract(&cref("Bottom"), &env, &mut i),
+            Some(Contract::Bottom)
+        );
 
         // Range(0, 100)
-        let range = ctor("Range", vec![Expr::Const(i.integer(0)), Expr::Const(i.integer(100))]);
-        assert_eq!(eval_contract(&range, &env), Some(Contract::Range(r(0), r(100))));
+        let range = ctor(
+            "Range",
+            vec![Expr::Const(i.integer(0)), Expr::Const(i.integer(100))],
+        );
+        assert_eq!(
+            eval_contract(&range, &env, &mut i),
+            Some(Contract::Range(r(0), r(100)))
+        );
 
         // Greater(5) / LessEq(9)
         let g = ctor("Greater", vec![Expr::Const(i.integer(5))]);
-        assert_eq!(eval_contract(&g, &env), Some(Contract::Greater(r(5))));
+        assert_eq!(
+            eval_contract(&g, &env, &mut i),
+            Some(Contract::Greater(r(5)))
+        );
 
         // Mod(2, 0) — the even integers
-        let m = ctor("Mod", vec![Expr::Const(i.integer(2)), Expr::Const(i.integer(0))]);
-        assert_eq!(eval_contract(&m, &env), Some(Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) }));
+        let m = ctor(
+            "Mod",
+            vec![Expr::Const(i.integer(2)), Expr::Const(i.integer(0))],
+        );
+        assert_eq!(
+            eval_contract(&m, &env, &mut i),
+            Some(Contract::Mod {
+                n: BigInt::from(2),
+                r: BigInt::from(0)
+            })
+        );
 
         // Equals(7) and HasField("age")
         let five = i.integer(7);
         let eq = ctor("Equals", vec![Expr::Const(five.clone())]);
-        assert_eq!(eval_contract(&eq, &env), Some(Contract::Equals(five)));
+        assert_eq!(
+            eval_contract(&eq, &env, &mut i),
+            Some(Contract::Equals(five))
+        );
         let age = i.string("age");
         let hf = ctor("HasField", vec![Expr::Const(age)]);
-        assert_eq!(eval_contract(&hf, &env), Some(Contract::HasField("age".into())));
+        assert_eq!(
+            eval_contract(&hf, &env, &mut i),
+            Some(Contract::HasField("age".into()))
+        );
 
         // An unknown bare name does not resolve.
-        assert_eq!(eval_contract(&cref("Nope"), &env), None);
+        assert_eq!(eval_contract(&cref("Nope"), &env, &mut i), None);
     }
 
     #[test]
@@ -1317,45 +1604,65 @@ mod contract_expr {
         // Union(Number, Null)
         let u = ctor("Union", vec![cref("Number"), cref("Null")]);
         assert_eq!(
-            eval_contract(&u, &env),
-            Some(Contract::Union(
-                Box::new(Contract::Kind(Kind::Number)),
-                Box::new(Contract::Kind(Kind::Null)),
+            eval_contract(&u, &env, &mut i),
+            Some(Contract::union(
+                Contract::Kind(Kind::Number),
+                Contract::Kind(Kind::Null),
+                &mut i
             )),
         );
 
         // A tuple literal of contracts is a tuple contract: [Number, String]
-        let t = Expr::TupleCons(vec![Element::Expr(cref("Number")), Element::Expr(cref("String"))]);
+        let t = Expr::TupleCons(vec![
+            Element::Expr(cref("Number")),
+            Element::Expr(cref("String")),
+        ]);
         assert_eq!(
-            eval_contract(&t, &env),
-            Some(Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::String)])),
+            eval_contract(&t, &env, &mut i),
+            Some(Contract::tuple(
+                vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::String)],
+                &mut i
+            )),
         );
 
         // A record literal of contracts is a record contract: { a: Number }
-        let rec = Expr::RecordCons(vec![Field::Field { key: "a".into(), value: cref("Number") }]);
+        let rec = Expr::RecordCons(vec![Field::Field {
+            key: "a".into(),
+            value: cref("Number"),
+        }]);
         assert_eq!(
-            eval_contract(&rec, &env),
-            Some(Contract::Record(vec![("a".into(), Contract::Kind(Kind::Number))])),
+            eval_contract(&rec, &env, &mut i),
+            Some(Contract::record(
+                vec![("a".into(), Contract::Kind(Kind::Number))],
+                &mut i
+            )),
         );
 
         // A non-contract expression is not a contract.
-        assert_eq!(eval_contract(&Expr::Const(i.integer(3)), &env), None);
+        assert_eq!(
+            eval_contract(&Expr::Const(i.integer(3)), &env, &mut i),
+            None
+        );
     }
 
     #[test]
     fn named_contracts_resolve_and_compose() {
         // Percent = Range(0, 100);  Grade = Union(Percent, Null)
         let mut i = Interner::new();
-        let percent = ctor("Range", vec![Expr::Const(i.integer(0)), Expr::Const(i.integer(100))]);
+        let percent = ctor(
+            "Range",
+            vec![Expr::Const(i.integer(0)), Expr::Const(i.integer(100))],
+        );
         let grade = ctor("Union", vec![cref("Percent"), cref("Null")]);
-        let env = build_contract_env([("Percent", &percent), ("Grade", &grade)]);
+        let env = build_contract_env([("Percent", &percent), ("Grade", &grade)], &mut i);
 
         assert_eq!(env.get("Percent"), Some(&Contract::Range(r(0), r(100))));
         assert_eq!(
             env.get("Grade"),
-            Some(&Contract::Union(
-                Box::new(Contract::Range(r(0), r(100))),
-                Box::new(Contract::Kind(Kind::Null)),
+            Some(&Contract::union(
+                Contract::Range(r(0), r(100)),
+                Contract::Kind(Kind::Null),
+                &mut i
             )),
         );
 
@@ -1377,8 +1684,8 @@ mod tl {
     fn rec_ref(n: &str) -> Contract {
         Contract::Ref(n.into())
     }
-    fn union(a: Contract, b: Contract) -> Contract {
-        Contract::Union(Box::new(a), Box::new(b))
+    fn union(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        Contract::union(a, b, i)
     }
     fn group(defs: &[(&str, Contract)]) -> RecGroup {
         RecGroup::new(defs.iter().map(|(n, c)| (n.to_string(), c.clone())))
@@ -1394,12 +1701,19 @@ mod tl {
         Contract::GreaterEq(r(k))
     }
     /// `Repeat(E) = Union(Tuple(), Concat(Tuple(E), R))`.
-    fn repeat(name: &str, element: Contract) -> RecGroup {
+    /// Takes the caller's interner rather than minting one: with children-first
+    /// interning, terms from two interners are never pointer-equal, so a helper with a
+    /// private table would silently build contracts the caller cannot match.
+    fn repeat(name: &str, element: Contract, i: &mut Interner) -> RecGroup {
         group(&[(
             name,
             union(
-                Contract::Tuple(vec![]),
-                Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)]),
+                Contract::tuple(vec![], i),
+                Contract::concat(
+                    [Contract::tuple(vec![element], i), rec_ref(name)],
+                    i,
+                ),
+                i,
             ),
         )])
     }
@@ -1411,16 +1725,22 @@ mod tl {
         let num = || Contract::Kind(Kind::Number);
 
         // A proven-inhabited exact tuple: (Equals(k), Exact).
-        let t = Contract::Tuple(vec![num(), num()]);
-        assert_eq!(len(&g, &t, &mut i), crate::contract::Len { contract: eq(2), stamp: Stamp::Exact });
+        let t = Contract::tuple(vec![num(), num()], &mut i);
+        assert_eq!(
+            len(&g, &t, &mut i),
+            crate::contract::Len {
+                contract: eq(2),
+                stamp: Stamp::Exact
+            }
+        );
 
         // An exact record counts its fields.
-        let rec = Contract::Record(vec![("a".into(), num()), ("b".into(), num())]);
+        let rec = Contract::record(vec![("a".into(), num()), ("b".into(), num())], &mut i);
         assert_eq!(len(&g, &rec, &mut i).contract, eq(2));
 
         // An uninhabited shape has NO realizable length: (Bottom, Exact) —
         // impossible shapes are never realizable lengths.
-        let dead = Contract::Tuple(vec![num(), Contract::Bottom]);
+        let dead = Contract::tuple(vec![num(), Contract::Bottom], &mut i);
         let l = len(&g, &dead, &mut i);
         assert_eq!(l.contract, Contract::Bottom);
         assert!(l.is_exact());
@@ -1428,25 +1748,36 @@ mod tl {
         // Concat sums segment lengths. A `GE` operand is outside the finite-exact
         // label boundary, so the sum coarsens to the minima and stamps Approx.
         let c = Contract::Concat(vec![
-            Contract::Tuple(vec![num()]),
-            Contract::Kind(Kind::Tuple),
+            Contract::tuple(vec![num()], &mut i).cref(&mut i),
+            Contract::Kind(Kind::Tuple).cref(&mut i),
         ]);
         let l = len(&g, &c, &mut i);
         assert_eq!(l.contract, ge(1), "one element, then any tail");
-        assert_eq!(l.stamp, Stamp::Approx, "a coarsening rule forfeits the stamp");
+        assert_eq!(
+            l.stamp,
+            Stamp::Approx,
+            "a coarsening rule forfeits the stamp"
+        );
 
         // Two finite exact segments sum exactly.
         let both = Contract::Concat(vec![
-            Contract::Tuple(vec![num()]),
-            Contract::Tuple(vec![num(), num()]),
+            Contract::tuple(vec![num()], &mut i).cref(&mut i),
+            Contract::tuple(vec![num(), num()], &mut i).cref(&mut i),
         ]);
         assert_eq!(
             len(&g, &both, &mut i),
-            crate::contract::Len { contract: eq(3), stamp: Stamp::Exact },
+            crate::contract::Len {
+                contract: eq(3),
+                stamp: Stamp::Exact
+            },
         );
 
         // Union takes the union of branch lengths, exactly.
-        let u = union(Contract::Tuple(vec![num()]), Contract::Tuple(vec![num(), num()]));
+        let u = union(
+            Contract::tuple(vec![num()], &mut i),
+            Contract::tuple(vec![num(), num()], &mut i),
+            &mut i,
+        );
         let l = len(&g, &u, &mut i);
         assert!(l.is_exact());
         assert!(l.contract.contains(&i.integer(1)) && l.contract.contains(&i.integer(2)));
@@ -1458,11 +1789,14 @@ mod tl {
         // The recursive branch Bottom-normalizes, so only the base survives:
         // len = (Equals(0), Exact) — never GE(0).
         let mut i = Interner::new();
-        let g = repeat("R", Contract::Bottom);
+        let g = repeat("R", Contract::Bottom, &mut i);
         let l = len(&g, &rec_ref("R"), &mut i);
         assert!(l.is_exact(), "the length is exact, not approximate");
         assert!(l.contract.contains(&i.integer(0)));
-        assert!(!l.contract.contains(&i.integer(1)), "no nonzero length is realizable");
+        assert!(
+            !l.contract.contains(&i.integer(1)),
+            "no nonzero length is realizable"
+        );
     }
 
     #[test]
@@ -1475,10 +1809,18 @@ mod tl {
             "R",
             union(
                 union(
-                    Contract::Tuple(vec![]),
-                    Contract::concat([Contract::Tuple(vec![e(), e()]), rec_ref("R")]),
+                    Contract::tuple(vec![], &mut i),
+                    Contract::concat(
+                        [Contract::tuple(vec![e(), e()], &mut i), rec_ref("R")],
+                        &mut i,
+                    ),
+                    &mut i,
                 ),
-                Contract::concat([Contract::Tuple(vec![e(), e(), e()]), rec_ref("R")]),
+                Contract::concat(
+                    [Contract::tuple(vec![e(), e(), e()], &mut i), rec_ref("R")],
+                    &mut i,
+                ),
+                &mut i,
             ),
         )]);
         let l = len(&g, &rec_ref("R"), &mut i);
@@ -1501,11 +1843,15 @@ mod tl {
             (
                 "R",
                 union(
-                    Contract::Tuple(vec![]),
-                    Contract::concat([Contract::Tuple(vec![e()]), rec_ref("S")]),
+                    Contract::tuple(vec![], &mut i),
+                    Contract::concat([Contract::tuple(vec![e()], &mut i), rec_ref("S")], &mut i),
+                    &mut i,
                 ),
             ),
-            ("S", Contract::concat([Contract::Tuple(vec![e()]), rec_ref("R")])),
+            (
+                "S",
+                Contract::concat([Contract::tuple(vec![e()], &mut i), rec_ref("R")], &mut i),
+            ),
         ]);
 
         let lr = len(&g, &rec_ref("R"), &mut i);
@@ -1532,12 +1878,24 @@ mod tl {
         let g = group(&[(
             "R",
             union(
-                Contract::Tuple(vec![]),
-                Contract::concat([Contract::Tuple(vec![e()]), rec_ref("R"), rec_ref("R")]),
+                Contract::tuple(vec![], &mut i),
+                Contract::concat(
+                    [
+                        Contract::tuple(vec![e()], &mut i),
+                        rec_ref("R"),
+                        rec_ref("R"),
+                    ],
+                    &mut i,
+                ),
+                &mut i,
             ),
         )]);
         let l = len(&g, &rec_ref("R"), &mut i);
-        assert_eq!(l.stamp, Stamp::Approx, "nonlinear alternatives forfeit exactness");
+        assert_eq!(
+            l.stamp,
+            Stamp::Approx,
+            "nonlinear alternatives forfeit exactness"
+        );
         assert!(l.contract.contains(&i.integer(0)));
     }
 
@@ -1551,17 +1909,28 @@ mod tl {
         let g = group(&[(
             "R",
             union(
-                Contract::Tuple(vec![]),
-                Contract::concat([
-                    union(Contract::Tuple(vec![e()]), rec_ref("R")),
-                    Contract::Tuple(vec![e()]),
-                ]),
+                Contract::tuple(vec![], &mut i),
+                Contract::concat(
+                    [
+                        union(Contract::tuple(vec![e()], &mut i), rec_ref("R"), &mut i),
+                        Contract::tuple(vec![e()], &mut i),
+                    ],
+                    &mut i,
+                ),
+                &mut i,
             ),
         )]);
         assert!(recursive::admissible(&g).is_ok());
         let l = len(&g, &rec_ref("R"), &mut i); // must not overflow the stack
-        assert_eq!(l.stamp, Stamp::Approx, "a nested own-SCC label declines exactness");
-        assert!(l.contract.contains(&i.integer(0)), "soundness: 0 is realizable");
+        assert_eq!(
+            l.stamp,
+            Stamp::Approx,
+            "a nested own-SCC label declines exactness"
+        );
+        assert!(
+            l.contract.contains(&i.integer(0)),
+            "soundness: 0 is realizable"
+        );
 
         // Control: a ref nested in a *tuple element* is arity-irrelevant and must
         // stay exact — N = Tuple(E, Ref N) is always a 2-tuple... but wait, that
@@ -1571,13 +1940,17 @@ mod tl {
         let g2 = group(&[(
             "N",
             union(
-                Contract::Tuple(vec![e(), Contract::Kind(Kind::Null)]),
-                Contract::Tuple(vec![e(), rec_ref("N")]),
+                Contract::tuple(vec![e(), Contract::Kind(Kind::Null)], &mut i),
+                Contract::tuple(vec![e(), rec_ref("N")], &mut i),
+                &mut i,
             ),
         )]);
         assert!(recursive::admissible(&g2).is_ok());
         let l2 = len(&g2, &rec_ref("N"), &mut i);
-        assert!(l2.is_exact(), "element-nested refs never affect arity: {l2:?}");
+        assert!(
+            l2.is_exact(),
+            "element-nested refs never affect arity: {l2:?}"
+        );
         assert!(l2.contract.contains(&i.integer(2)));
         assert!(!l2.contract.contains(&i.integer(3)));
     }
@@ -1593,20 +1966,29 @@ mod tl {
             (
                 "Many",
                 union(
-                    Contract::Tuple(vec![]),
-                    Contract::concat([Contract::Tuple(vec![e()]), rec_ref("Many")]),
+                    Contract::tuple(vec![], &mut i),
+                    Contract::concat(
+                        [Contract::tuple(vec![e()], &mut i), rec_ref("Many")],
+                        &mut i,
+                    ),
+                    &mut i,
                 ),
             ),
             (
                 "R",
                 union(
-                    Contract::Tuple(vec![]),
-                    Contract::concat([rec_ref("Many"), rec_ref("R")]),
+                    Contract::tuple(vec![], &mut i),
+                    Contract::concat([rec_ref("Many"), rec_ref("R")], &mut i),
+                    &mut i,
                 ),
             ),
         ]);
         let l = len(&g, &rec_ref("R"), &mut i);
-        assert_eq!(l.stamp, Stamp::Approx, "an infinite increment language is not exact");
+        assert_eq!(
+            l.stamp,
+            Stamp::Approx,
+            "an infinite increment language is not exact"
+        );
         // Still sound: every realizable length is admitted.
         for n in [0, 1, 2, 7] {
             assert!(l.contract.contains(&i.integer(n)));
@@ -1624,13 +2006,26 @@ mod tl {
         let mut i = Interner::new();
         let g = empty_group();
         // A contract whose length is (GE(5), Approx): tuples of length ≥ 5.
-        let at_least_five = Contract::LengthRestricted(Box::new(Contract::Kind(Kind::Tuple)), Box::new(ge(5)));
-        let pair = Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)]);
-        assert!(intersection_empty_by_length(&g, &at_least_five, &pair, &mut i));
+        let at_least_five = Contract::length_restricted(Contract::Kind(Kind::Tuple), ge(5), &mut i);
+        let pair = Contract::tuple(
+            vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)],
+            &mut i,
+        );
+        assert!(intersection_empty_by_length(
+            &g,
+            &at_least_five,
+            &pair,
+            &mut i
+        ));
         // A length that DOES overlap must not be reported empty.
-        let triple = Contract::Tuple(vec![Contract::Top, Contract::Top, Contract::Top]);
-        let three_plus = Contract::LengthRestricted(Box::new(Contract::Kind(Kind::Tuple)), Box::new(ge(3)));
-        assert!(!intersection_empty_by_length(&g, &three_plus, &triple, &mut i));
+        let triple = Contract::tuple(vec![Contract::Top, Contract::Top, Contract::Top], &mut i);
+        let three_plus = Contract::length_restricted(Contract::Kind(Kind::Tuple), ge(3), &mut i);
+        assert!(!intersection_empty_by_length(
+            &g,
+            &three_plus,
+            &triple,
+            &mut i
+        ));
     }
 
     #[test]
@@ -1646,13 +2041,23 @@ mod tl {
             (
                 "R",
                 union(
-                    Contract::Tuple(vec![]),
-                    Contract::concat([Contract::Tuple(vec![Contract::Kind(Kind::Number)]), rec_ref("R")]),
+                    Contract::tuple(vec![], &mut i),
+                    Contract::concat(
+                        [
+                            Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i),
+                            rec_ref("R"),
+                        ],
+                        &mut i,
+                    ),
+                    &mut i,
                 ),
             ),
             (
                 "P",
-                Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)]),
+                Contract::tuple(
+                    vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)],
+                    &mut i,
+                ),
             ),
         ]);
         // No length-based refutation exists in `subcontract`, so any Refuted must
@@ -1674,15 +2079,15 @@ mod tl {
     fn tl17_restrict_len_unrolls_repeat_and_falls_to_symbolic() {
         use crate::contract::restrict_len;
         let mut i = Interner::new();
-        let g = repeat("R", Contract::Kind(Kind::Number));
+        let g = repeat("R", Contract::Kind(Kind::Number), &mut i);
 
         // Repeat(Number) restricted to GE(1) unrolls: Concat(Tuple(Number), R).
         let unrolled = restrict_len(&g, &rec_ref("R"), &ge(1), &mut i);
         assert_eq!(
             unrolled,
             Contract::Concat(vec![
-                Contract::Tuple(vec![Contract::Kind(Kind::Number)]),
-                rec_ref("R"),
+                Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i).cref(&mut i),
+                rec_ref("R").cref(&mut i)
             ]),
         );
         // It denotes "≥ 1 Number": the empty tuple is excluded, a 1-tuple included.
@@ -1701,24 +2106,34 @@ mod tl {
             let (a, b) = (i.integer(1), i.integer(2));
             i.tuple(vec![a, b])
         };
-        assert!(recursive::contains(&g, &symbolic, &two), "length 2 (even) admitted");
-        assert!(!recursive::contains(&g, &symbolic, &single), "length 1 (odd) excluded");
+        assert!(
+            recursive::contains(&g, &symbolic, &two),
+            "length 2 (even) admitted"
+        );
+        assert!(
+            !recursive::contains(&g, &symbolic, &single),
+            "length 1 (odd) excluded"
+        );
     }
 
     #[test]
     fn length_restricted_canonical_rows() {
+        let mut i = Interner::new();
         let num = || Contract::Kind(Kind::Number);
         // Bottom on either side ⇒ Bottom.
-        assert_eq!(Contract::length_restricted(Contract::Bottom, ge(1)), Contract::Bottom);
         assert_eq!(
-            Contract::length_restricted(Contract::Kind(Kind::Tuple), Contract::Bottom),
+            Contract::length_restricted(Contract::Bottom, ge(1), &mut i),
+            Contract::Bottom
+        );
+        assert_eq!(
+            Contract::length_restricted(Contract::Kind(Kind::Tuple), Contract::Bottom, &mut i),
             Contract::Bottom,
         );
         // TopLength (GE(0)) ⇒ the base unchanged.
-        assert_eq!(Contract::length_restricted(num(), ge(0)), num());
+        assert_eq!(Contract::length_restricted(num(), ge(0), &mut i), num());
         // Nesting merges the domains by intersection.
-        let inner = Contract::length_restricted(Contract::Kind(Kind::Tuple), ge(2));
-        let outer = Contract::length_restricted(inner, Contract::LessEq(r(9)));
+        let inner = Contract::length_restricted(Contract::Kind(Kind::Tuple), ge(2), &mut i);
+        let outer = Contract::length_restricted(inner, Contract::LessEq(r(9)), &mut i);
         match outer {
             Contract::LengthRestricted(t, d) => {
                 assert_eq!(*t, Contract::Kind(Kind::Tuple));
@@ -1733,7 +2148,7 @@ mod tl {
         use crate::contract::restrict_len;
         let mut i = Interner::new();
         let g = empty_group();
-        let pair = Contract::Tuple(vec![Contract::Top, Contract::Top]);
+        let pair = Contract::tuple(vec![Contract::Top, Contract::Top], &mut i);
         // Length 2 admitted by GE(1) ⇒ keep the tuple.
         assert_eq!(restrict_len(&g, &pair, &ge(1), &mut i), pair);
         // Length 2 excluded by GE(3) ⇒ Bottom.
@@ -1749,15 +2164,16 @@ mod tl {
         Contract::Kind(Kind::String)
     }
     /// The `Union(Tuple(), Concat(Tuple(E), Ref name))` body of a `Repeat(E)`.
-    fn repeat_body(element: Contract, name: &str) -> Contract {
+    fn repeat_body(element: Contract, name: &str, i: &mut Interner) -> Contract {
         union(
-            Contract::Tuple(vec![]),
-            Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)]),
+            Contract::tuple(vec![], i),
+            Contract::concat([Contract::tuple(vec![element], i), rec_ref(name)], i),
+            i,
         )
     }
     /// `Concat(Tuple(E), Ref name)` — one-or-more `E` (a non-empty `Repeat`).
-    fn one_or_more(element: Contract, name: &str) -> Contract {
-        Contract::concat([Contract::Tuple(vec![element]), rec_ref(name)])
+    fn one_or_more(element: Contract, name: &str, i: &mut Interner) -> Contract {
+        Contract::concat([Contract::tuple(vec![element], i), rec_ref(name)], i)
     }
 
     #[test]
@@ -1766,11 +2182,17 @@ mod tl {
         // peel Tuple(Number) ⊑ Tuple(Top), leaving Repeat(Number) ⊑ Repeat(Top),
         // which closes by consumed-extent covariance (RC-17).
         let mut i = Interner::new();
-        let g = group(&[("RN", repeat_body(num(), "RN")), ("RT", repeat_body(Contract::Top, "RT"))]);
-        let src = one_or_more(num(), "RN");
-        let tgt = one_or_more(Contract::Top, "RT");
+        let g = group(&[
+            ("RN", repeat_body(num(), "RN", &mut i)),
+            ("RT", repeat_body(Contract::Top, "RT", &mut i)),
+        ]);
+        let src = one_or_more(num(), "RN", &mut i);
+        let tgt = one_or_more(Contract::Top, "RT", &mut i);
         let v = recursive::subcontract(&g, &src, &tgt, &mut i);
-        assert!(matches!(v, Verdict::Proven), "≥1 Number ⊑ ≥1 Top, got {v:?}");
+        assert!(
+            matches!(v, Verdict::Proven),
+            "≥1 Number ⊑ ≥1 Top, got {v:?}"
+        );
     }
 
     #[test]
@@ -1779,9 +2201,9 @@ mod tl {
         // `[1]` inhabits the source and fails the target on *length* — a realizable
         // witness (§3.ii), not a manufactured length verdict.
         let mut i = Interner::new();
-        let g = group(&[("RN", repeat_body(num(), "RN"))]);
-        let src = one_or_more(num(), "RN");
-        let pair = Contract::Tuple(vec![num(), num()]);
+        let g = group(&[("RN", repeat_body(num(), "RN", &mut i))]);
+        let src = one_or_more(num(), "RN", &mut i);
+        let pair = Contract::tuple(vec![num(), num()], &mut i);
         match recursive::subcontract(&g, &src, &pair, &mut i) {
             Verdict::Refuted(w) => {
                 assert!(recursive::contains(&g, &src, &w), "witness ∈ source");
@@ -1797,12 +2219,18 @@ mod tl {
         // verdict is a *complete* number-list witness (`[1]`), never a bare
         // positional exclusion (§4 round 2 / §5.3).
         let mut i = Interner::new();
-        let g = group(&[("RN", repeat_body(num(), "RN")), ("RS", repeat_body(str_(), "RS"))]);
-        let src = one_or_more(num(), "RN");
-        let tgt = one_or_more(str_(), "RS");
+        let g = group(&[
+            ("RN", repeat_body(num(), "RN", &mut i)),
+            ("RS", repeat_body(str_(), "RS", &mut i)),
+        ]);
+        let src = one_or_more(num(), "RN", &mut i);
+        let tgt = one_or_more(str_(), "RS", &mut i);
         match recursive::subcontract(&g, &src, &tgt, &mut i) {
             Verdict::Refuted(w) => {
-                assert!(recursive::contains(&g, &src, &w), "witness is a complete number-list");
+                assert!(
+                    recursive::contains(&g, &src, &w),
+                    "witness is a complete number-list"
+                );
                 assert!(!recursive::contains(&g, &tgt, &w), "witness ∉ string-list");
             }
             other => panic!("expected element Refuted, got {other:?}"),
@@ -1816,10 +2244,13 @@ mod tl {
         // no unique split. It must land Unproven (a real inhabitant witness cannot
         // exist), never a fabricated refutation.
         let mut i = Interner::new();
-        let g = group(&[("RN", repeat_body(num(), "RN"))]);
-        let two = Contract::Concat(vec![rec_ref("RN"), rec_ref("RN")]);
+        let g = group(&[("RN", repeat_body(num(), "RN", &mut i))]);
+        let two = Contract::Concat(vec![rec_ref("RN").cref(&mut i), rec_ref("RN").cref(&mut i)]);
         let v = recursive::subcontract(&g, &two, &rec_ref("RN"), &mut i);
-        assert!(matches!(v, Verdict::Unproven), "no forced split ⇒ unproven, got {v:?}");
+        assert!(
+            matches!(v, Verdict::Unproven),
+            "no forced split ⇒ unproven, got {v:?}"
+        );
     }
 
     #[test]
@@ -1828,11 +2259,17 @@ mod tl {
         // variable segment binds the residual (§4 interior): the collapsed target
         // `Repeat(N)` unfolds against the source residual under the guard.
         let mut i = Interner::new();
-        let g = group(&[("RN", repeat_body(num(), "RN"))]);
-        let two_plus = Contract::concat([Contract::Tuple(vec![num(), num()]), rec_ref("RN")]);
-        let one_plus = one_or_more(num(), "RN");
+        let g = group(&[("RN", repeat_body(num(), "RN", &mut i))]);
+        let two_plus = Contract::concat(
+            [Contract::tuple(vec![num(), num()], &mut i), rec_ref("RN")],
+            &mut i,
+        );
+        let one_plus = one_or_more(num(), "RN", &mut i);
         let v = recursive::subcontract(&g, &two_plus, &one_plus, &mut i);
-        assert!(matches!(v, Verdict::Proven), "≥2 Number ⊑ ≥1 Number, got {v:?}");
+        assert!(
+            matches!(v, Verdict::Proven),
+            "≥2 Number ⊑ ≥1 Number, got {v:?}"
+        );
     }
 
     #[test]
@@ -1841,9 +2278,9 @@ mod tl {
         // empty list inhabits the source and fails the target, so the fallback must
         // NOT prove it — the empty tuple is the refutation witness.
         let mut i = Interner::new();
-        let g = group(&[("RN", repeat_body(num(), "RN"))]);
-        let zero_plus = Contract::Concat(vec![rec_ref("RN")]);
-        let one_plus = one_or_more(num(), "RN");
+        let g = group(&[("RN", repeat_body(num(), "RN", &mut i))]);
+        let zero_plus = Contract::Concat(vec![rec_ref("RN").cref(&mut i)]);
+        let one_plus = one_or_more(num(), "RN", &mut i);
         match recursive::subcontract(&g, &zero_plus, &one_plus, &mut i) {
             Verdict::Refuted(w) => {
                 assert!(recursive::contains(&g, &zero_plus, &w), "witness ∈ ≥0");
@@ -1860,9 +2297,21 @@ mod tl {
         // trivially compatible (Top on the right), so acceptance is carried by the
         // forced-boundary arity match alone — the lengths-only case (TL-01a).
         let mut i = Interner::new();
-        let g = group(&[("RN", repeat_body(num(), "RN")), ("RT", repeat_body(Contract::Top, "RT"))]);
-        let src = Contract::concat([Contract::Tuple(vec![num(), num()]), rec_ref("RN")]);
-        let tgt = Contract::concat([Contract::Tuple(vec![Contract::Top, Contract::Top]), rec_ref("RT")]);
+        let g = group(&[
+            ("RN", repeat_body(num(), "RN", &mut i)),
+            ("RT", repeat_body(Contract::Top, "RT", &mut i)),
+        ]);
+        let src = Contract::concat(
+            [Contract::tuple(vec![num(), num()], &mut i), rec_ref("RN")],
+            &mut i,
+        );
+        let tgt = Contract::concat(
+            [
+                Contract::tuple(vec![Contract::Top, Contract::Top], &mut i),
+                rec_ref("RT"),
+            ],
+            &mut i,
+        );
         let v = recursive::subcontract(&g, &src, &tgt, &mut i);
         assert!(matches!(v, Verdict::Proven), "arity ≥2 accept, got {v:?}");
     }
@@ -1877,8 +2326,8 @@ mod tl {
         //     insufficient — no complete source witness realizes that branch).
         let mut i = Interner::new();
         let g = empty_group();
-        let inhabited = Contract::Tuple(vec![num(), Contract::Top]);
-        let target = Contract::Tuple(vec![str_(), Contract::Top]);
+        let inhabited = Contract::tuple(vec![num(), Contract::Top], &mut i);
+        let target = Contract::tuple(vec![str_(), Contract::Top], &mut i);
         match recursive::subcontract(&g, &inhabited, &target, &mut i) {
             Verdict::Refuted(w) => {
                 assert!(recursive::contains(&g, &inhabited, &w));
@@ -1886,9 +2335,12 @@ mod tl {
             }
             other => panic!("inhabited position ⇒ Refuted, got {other:?}"),
         }
-        let empty_pos = Contract::Tuple(vec![num(), Contract::Bottom]);
+        let empty_pos = Contract::tuple(vec![num(), Contract::Bottom], &mut i);
         let v = recursive::subcontract(&g, &empty_pos, &target, &mut i);
-        assert!(matches!(v, Verdict::Proven), "empty source ⊑ anything (guard), got {v:?}");
+        assert!(
+            matches!(v, Verdict::Proven),
+            "empty source ⊑ anything (guard), got {v:?}"
+        );
     }
 }
 

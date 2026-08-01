@@ -120,15 +120,18 @@ fn analyze_safety(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> O
 /// `Indeterminate + 1` is provably **safe**, and reading it as merely unproven (as
 /// this table previously did) understated what the analyzer knows.
 fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bool {
-    let sub = |a: &Contract, b: &Contract, i: &mut Interner| matches!(subcontract(a, b, i), Verdict::Proven);
+    let sub = |a: &Contract, b: &Contract, i: &mut Interner| {
+        matches!(subcontract(a, b, i), Verdict::Proven)
+    };
     // The operand kinds arithmetic tolerates: a Number, or any Indeterminate (which
     // short-circuits the whole operation to itself).
+    let any_indet = any_indeterminate(interner);
     let arith_operand = |c: &Contract, i: &mut Interner| {
-        sub(c, &Contract::Kind(Kind::Number), i) || sub(c, &any_indeterminate(), i)
+        sub(c, &Contract::Kind(Kind::Number), i) || sub(c, &any_indet, i)
     };
     // An operand that provably *is* an Indeterminate makes an arithmetic op total
     // regardless of what the other operand is (it never gets evaluated numerically).
-    let short_circuits = |c: &Contract, i: &mut Interner| sub(c, &any_indeterminate(), i);
+    let short_circuits = |c: &Contract, i: &mut Interner| sub(c, &any_indet, i);
 
     match op {
         // `==`/`!=` accept any values and never trap.
@@ -190,26 +193,35 @@ fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bo
 }
 
 /// Either Indeterminate form — the operand set arithmetic short-circuits on.
-fn any_indeterminate() -> Contract {
-    Contract::Union(
-        Box::new(Contract::Indeterminate(IndetForm::DivByZero)),
-        Box::new(Contract::Indeterminate(IndetForm::ZeroOverZero)),
+fn any_indeterminate(i: &mut Interner) -> Contract {
+    Contract::union(
+        Contract::Indeterminate(IndetForm::DivByZero),
+        Contract::Indeterminate(IndetForm::ZeroOverZero),
+        i,
     )
 }
 
 /// Sound: `true` only when `0 ∉ ⟦c⟧`.
 fn nonzero(c: &Contract, interner: &mut Interner) -> bool {
-    let zero = Contract::Difference(Box::new(Contract::Top), Box::new(Contract::Equals(interner.integer(0))));
+    let zero = interner.integer(0);
+    let zero = Contract::not_equals(zero, interner);
     matches!(subcontract(c, &zero, interner), Verdict::Proven)
 }
 
 /// The contract of all integers: `x ≡ 0 (mod 1)`.
 fn integers() -> Contract {
-    Contract::Mod { n: BigInt::from(1), r: BigInt::from(0) }
+    Contract::Mod {
+        n: BigInt::from(1),
+        r: BigInt::from(0),
+    }
 }
 
 /// Sample one value per input and probe the oracle for a trapping tuple.
-fn refute_safety(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Option<Vec<ValueRef>> {
+fn refute_safety(
+    op: PrimOp,
+    inputs: &[Contract],
+    interner: &mut Interner,
+) -> Option<Vec<ValueRef>> {
     let pools: Vec<Vec<ValueRef>> = inputs
         .iter()
         .map(|c| {
@@ -273,7 +285,7 @@ fn with_indet_passthrough(inputs: &[Contract], out: Contract, interner: &mut Int
     for form in [IndetForm::DivByZero, IndetForm::ZeroOverZero] {
         let iv = interner.indeterminate(form);
         if inputs.iter().any(|c| c.contains(&iv)) {
-            result = Contract::Union(Box::new(result), Box::new(Contract::Indeterminate(form)));
+            result = Contract::union(result, Contract::Indeterminate(form), interner);
         }
     }
     result
@@ -365,13 +377,20 @@ fn binary_numeric(
 /// collapses it to `Equals(0)`; a non-numeric or non-exact factor declines (`None`),
 /// falling through to the general numeric rule.
 fn geo_scaling(g: &Contract, factor: &Contract) -> Option<Contract> {
-    let Contract::Geo { b, r } = g else { return None };
-    let Contract::Equals(v) = factor else { return None };
+    let Contract::Geo { b, r } = g else {
+        return None;
+    };
+    let Contract::Equals(v) = factor else {
+        return None;
+    };
     let c = v.as_number()?;
     if c.is_zero() {
         return Some(Contract::Equals(v.clone()));
     }
-    Some(Contract::Geo { b: b.clone() * c.clone(), r: r.clone() })
+    Some(Contract::Geo {
+        b: b.clone() * c.clone(),
+        r: r.clone(),
+    })
 }
 
 /// `+` on non-numeric operands: two Strings concatenate; anything unresolved may be
@@ -380,9 +399,10 @@ fn geo_scaling(g: &Contract, factor: &Contract) -> Option<Contract> {
 fn string_or_mixed(a: &Contract, b: &Contract, interner: &mut Interner) -> Contract {
     match (is_str(a, interner), is_str(b, interner)) {
         (true, true) => Contract::Kind(Kind::String),
-        _ => Contract::Union(
-            Box::new(Contract::Kind(Kind::Number)),
-            Box::new(Contract::Kind(Kind::String)),
+        _ => Contract::union(
+            Contract::Kind(Kind::Number),
+            Contract::Kind(Kind::String),
+            interner,
         ),
     }
 }
@@ -401,16 +421,22 @@ fn with_zero_divisor_forms(
     }
     let mut out = numeric_part;
     if a.contains(&zero) {
-        out = Contract::Union(Box::new(out), Box::new(Contract::Indeterminate(IndetForm::ZeroOverZero)));
+        out = Contract::union(
+            out,
+            Contract::Indeterminate(IndetForm::ZeroOverZero),
+            interner,
+        );
     }
-    Contract::Union(Box::new(out), Box::new(Contract::Indeterminate(IndetForm::DivByZero)))
+    Contract::union(out, Contract::Indeterminate(IndetForm::DivByZero), interner)
 }
 
 /// An ordering comparison whose operands' bounds settle it — `Range(0,5) < GreaterEq(10)`
 /// is *always* true, so `Equals(true)` is the precise image. Undecided → `Kind(Boolean)`.
 fn decide_comparison(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Interner) -> Contract {
     let boolean = Contract::Kind(Kind::Boolean);
-    let (Some(x), Some(y)) = (num_abs(a), num_abs(b)) else { return boolean };
+    let (Some(x), Some(y)) = (num_abs(a), num_abs(b)) else {
+        return boolean;
+    };
     match numeric::compare_decided(op, &x, &y) {
         Some(v) => Contract::Equals(interner.boolean(v)),
         None => boolean,

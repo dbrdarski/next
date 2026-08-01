@@ -28,12 +28,16 @@ use crate::value::ValueRef;
 /// pattern. `None` for a non-function, or for a **rest-bearing** pattern whose sound
 /// domain is length-precise (owed, §4). The returned contract is a sound accepted set:
 /// an argument tuple inside it is *matched* by the pattern (never merely narrowed to).
-pub fn accepted_domain(callee: &ValueRef, cenv: &ContractEnv) -> Option<Contract> {
+pub fn accepted_domain(
+    callee: &ValueRef,
+    cenv: &ContractEnv,
+    i: &mut Interner,
+) -> Option<Contract> {
     let closure = callee.as_closure()?;
     if has_rest(&closure.lambda.params) {
         return None; // length-precise domain owed (§4 restrictLen)
     }
-    Some(pattern_contract(&closure.lambda.params, cenv))
+    Some(pattern_contract(&closure.lambda.params, cenv, i))
 }
 
 /// The input obligation for a known callee closure against argument contracts. The
@@ -46,16 +50,19 @@ pub fn input_obligation(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> SeatVerdict {
-    let Some(domain) = accepted_domain(callee, cenv) else {
+    let Some(domain) = accepted_domain(callee, cenv, interner) else {
         return SeatVerdict::Unproven; // no soundly-derivable domain
     };
-    let arg_tuple = Contract::Tuple(arg_contracts.to_vec());
+    let arg_tuple = Contract::tuple(arg_contracts.to_vec(), interner);
     match subcontract(&arg_tuple, &domain, interner) {
         Verdict::Proven => SeatVerdict::Proven,
         Verdict::Refuted(w) => {
             // w ∈ ⟦arg_tuple⟧ ∖ ⟦domain⟧ — a represented argument tuple this callee rejects.
             let arguments = w.as_tuple().map(<[ValueRef]>::to_vec).unwrap_or_default();
-            SeatVerdict::Refuted(ApplicationWitness { callee: callee.clone(), arguments })
+            SeatVerdict::Refuted(ApplicationWitness {
+                callee: callee.clone(),
+                arguments,
+            })
         }
         Verdict::Unproven => SeatVerdict::Unproven,
     }

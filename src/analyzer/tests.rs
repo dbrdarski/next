@@ -305,7 +305,7 @@ fn open_field_access_reasoning() {
     let mut env = TypeEnv::new();
     env.insert(
         "r".into(),
-        Contract::Record(vec![("a".into(), Contract::Kind(Kind::Number))]),
+        Contract::record(vec![("a".into(), Contract::Kind(Kind::Number))], &mut i),
     );
 
     // r.a where r : Record({a: Number}) — accepted, output is Number.
@@ -403,15 +403,26 @@ fn a_partial_callee_at_an_expecting_seat_is_an_error() {
     // expecting-seat ERROR (the completion threaded from the callee, closing the gap
     // where only mutators were flagged).
     let mut i = Interner::new();
-    let g = crate::oracle::run_source("g = (n) => n :: { 0 => 1 }\ng").unwrap().0;
+    let g = crate::oracle::run_source("g = (n) => n :: { 0 => 1 }\ng")
+        .unwrap()
+        .0;
     let mut env = empty();
     env.insert("g".into(), Contract::Equals(g));
     env.insert("x".into(), Contract::Kind(Kind::Number));
-    let e = prim(PrimOp::Add, vec![apply(name("g"), vec![name("x")]), konst(i.integer(1))]);
+    let e = prim(
+        PrimOp::Add,
+        vec![apply(name("g"), vec![name("x")]), konst(i.integer(1))],
+    );
     let a = analyze(&e, &env, &nc(), &mut i);
-    assert!(!a.accepted(), "a proven fall-through at an expecting seat is an error: {:?}", a.findings);
     assert!(
-        a.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat && f.severity == Severity::Error),
+        !a.accepted(),
+        "a proven fall-through at an expecting seat is an error: {:?}",
+        a.findings
+    );
+    assert!(
+        a.findings
+            .iter()
+            .any(|f| f.class == TrapClass::ExpectingSeat && f.severity == Severity::Error),
         "expecting-seat error present: {:?}",
         a.findings
     );
@@ -424,15 +435,24 @@ fn a_guarded_fall_through_is_a_warning_not_an_error() {
     // not *proven*. The three-voice verdict at an expecting seat is a WARNING, not an
     // error (the precision the tri-state buys over the old may_complete → error).
     let mut i = Interner::new();
-    let m = matchx(Some(name("n")), vec![arm(None, Some(name("b")), konst(i.integer(1)))]);
+    let m = matchx(
+        Some(name("n")),
+        vec![arm(None, Some(name("b")), konst(i.integer(1)))],
+    );
     let e = prim(PrimOp::Add, vec![m, konst(i.integer(1))]);
     let mut env = empty();
     env.insert("n".into(), Contract::Kind(Kind::Number));
     env.insert("b".into(), Contract::Kind(Kind::Boolean));
     let a = analyze(&e, &env, &nc(), &mut i);
-    assert!(a.accepted(), "a guarded (unproven) fall-through must not be an error: {:?}", a.findings);
     assert!(
-        a.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat && f.severity == Severity::Warning),
+        a.accepted(),
+        "a guarded (unproven) fall-through must not be an error: {:?}",
+        a.findings
+    );
+    assert!(
+        a.findings
+            .iter()
+            .any(|f| f.class == TrapClass::ExpectingSeat && f.severity == Severity::Warning),
         "but it warns: {:?}",
         a.findings
     );
@@ -446,7 +466,10 @@ fn match_arm_narrows_scrutinee() {
     let mut env = TypeEnv::new();
     env.insert(
         "x".into(),
-        Contract::Tuple(vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)]),
+        Contract::tuple(
+            vec![Contract::Kind(Kind::Number), Contract::Kind(Kind::Number)],
+            &mut i,
+        ),
     );
     let pat = Pat::Tuple(vec![
         PatElem::Pat(Pat::Bind("a".into())),
@@ -500,7 +523,7 @@ fn percent_env(i: &mut Interner) -> ContractEnv {
             Arg::Expr(konst(i.integer(100))),
         ],
     };
-    crate::contract::build_contract_env([("Percent", &range)])
+    crate::contract::build_contract_env([("Percent", &range)], i)
 }
 
 fn contract_pat(n: &str) -> Pat {
@@ -575,14 +598,18 @@ fn computed_key_finiteness_demand() {
     let mut fenv = TypeEnv::new();
     fenv.insert(
         "k".into(),
-        Contract::Union(Box::new(Contract::Equals(ka)), Box::new(Contract::Equals(kb))),
+        Contract::union(Contract::Equals(ka), Contract::Equals(kb), &mut i),
     );
     let finite = Expr::RecordCons(vec![Field::Computed {
         key: name("k"),
         value: konst(i.integer(1)),
     }]);
     let a = analyze(&finite, &fenv, &nc(), &mut i);
-    assert!(a.accepted(), "a finite string set is admitted: {:?}", a.findings);
+    assert!(
+        a.accepted(),
+        "a finite string set is admitted: {:?}",
+        a.findings
+    );
 }
 
 #[test]
@@ -591,7 +618,10 @@ fn tuple_spread_produces_concat_shape() {
     // the exact 2-tuple Tuple([Equals(1), Number]) — no more Top for spreads.
     let mut i = Interner::new();
     let mut env = TypeEnv::new();
-    env.insert("t".into(), Contract::Tuple(vec![Contract::Kind(Kind::Number)]));
+    env.insert(
+        "t".into(),
+        Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i),
+    );
     let e = Expr::TupleCons(vec![
         Element::Expr(konst(i.integer(1))),
         Element::Spread(name("t")),
@@ -600,7 +630,10 @@ fn tuple_spread_produces_concat_shape() {
     assert!(a.accepted(), "{:?}", a.findings);
     assert_eq!(
         a.contract,
-        Contract::Tuple(vec![Contract::Equals(i.integer(1)), Contract::Kind(Kind::Number)]),
+        Contract::tuple(
+            vec![Contract::Equals(i.integer(1)), Contract::Kind(Kind::Number)],
+            &mut i
+        ),
     );
 
     // An unknown-shape spread survives as a Concat with a Kind(Tuple) tail.
@@ -615,8 +648,8 @@ fn tuple_spread_produces_concat_shape() {
     assert_eq!(
         a.contract,
         Contract::Concat(vec![
-            Contract::Tuple(vec![Contract::Equals(i.integer(1))]),
-            Contract::Kind(Kind::Tuple),
+            Contract::tuple(vec![Contract::Equals(i.integer(1))], &mut i).cref(&mut i),
+            Contract::Kind(Kind::Tuple).cref(&mut i)
         ]),
     );
 }
@@ -1338,16 +1371,24 @@ mod obligation {
         Contract::Equals(v)
     }
     fn two_params() -> Pat {
-        Pat::Tuple(vec![PatElem::Pat(Pat::Bind("a".into())), PatElem::Pat(Pat::Bind("b".into()))])
+        Pat::Tuple(vec![
+            PatElem::Pat(Pat::Bind("a".into())),
+            PatElem::Pat(Pat::Bind("b".into())),
+        ])
     }
     fn const_param(v: ValueRef) -> Pat {
         Pat::Tuple(vec![PatElem::Pat(Pat::Const(v))])
     }
     fn contract_param(nm: &str) -> Pat {
-        Pat::Tuple(vec![PatElem::Pat(Pat::Contract(Ref::Immutable(BindingRef::Name(nm.into()))))])
+        Pat::Tuple(vec![PatElem::Pat(Pat::Contract(Ref::Immutable(
+            BindingRef::Name(nm.into()),
+        )))])
     }
     fn rest_param() -> Pat {
-        Pat::Tuple(vec![PatElem::Pat(Pat::Bind("a".into())), PatElem::Rest(Some("rest".into()))])
+        Pat::Tuple(vec![
+            PatElem::Pat(Pat::Bind("a".into())),
+            PatElem::Rest(Some("rest".into())),
+        ])
     }
     fn proven(v: &SeatVerdict) -> bool {
         matches!(v, SeatVerdict::Proven)
@@ -1359,7 +1400,12 @@ mod obligation {
         let f = closure(&mut i, two_params(), name("a"), ActKind::Pure);
         let (a1, a2) = (i.integer(1), i.integer(2));
         // f(1, 2): arity matches → proven.
-        assert!(proven(&input_obligation(&f, &[eq(a1.clone()), eq(a2)], &cenv(), &mut i)));
+        assert!(proven(&input_obligation(
+            &f,
+            &[eq(a1.clone()), eq(a2)],
+            &cenv(),
+            &mut i
+        )));
         // f(1): wrong arity → refuted, with a represented (callee, args) witness.
         match input_obligation(&f, &[eq(a1)], &cenv(), &mut i) {
             SeatVerdict::Refuted(w) => {
@@ -1376,16 +1422,27 @@ mod obligation {
         let one = i.integer(1);
         let f = closure(&mut i, contract_param("Number"), konst(one), ActKind::Pure);
         // Sanity: the derived domain is a single-Number tuple.
-        assert_eq!(accepted_domain(&f, &cenv()), Some(Contract::Tuple(vec![Contract::Kind(Kind::Number)])));
+        assert_eq!(
+            accepted_domain(&f, &cenv(), &mut i),
+            Some(Contract::tuple(vec![Contract::Kind(Kind::Number)], &mut i))
+        );
         let five = i.integer(5);
         let hi = i.string("hi");
-        assert!(proven(&input_obligation(&f, &[eq(five)], &cenv(), &mut i)), "5 : Number accepted");
+        assert!(
+            proven(&input_obligation(&f, &[eq(five)], &cenv(), &mut i)),
+            "5 : Number accepted"
+        );
         match input_obligation(&f, &[eq(hi.clone())], &cenv(), &mut i) {
-            SeatVerdict::Refuted(w) => assert_eq!(w.arguments, vec![hi], "\"hi\" rejected, witnessed"),
+            SeatVerdict::Refuted(w) => {
+                assert_eq!(w.arguments, vec![hi], "\"hi\" rejected, witnessed")
+            }
             other => panic!("String arg must refute a Number param, got {other:?}"),
         }
         // A Top argument neither proves nor refutes.
-        assert!(matches!(input_obligation(&f, &[Contract::Top], &cenv(), &mut i), SeatVerdict::Unproven));
+        assert!(matches!(
+            input_obligation(&f, &[Contract::Top], &cenv(), &mut i),
+            SeatVerdict::Unproven
+        ));
     }
 
     #[test]
@@ -1394,9 +1451,18 @@ mod obligation {
         let zero = i.integer(0);
         let one = i.integer(1);
         let f = closure(&mut i, const_param(zero.clone()), konst(one), ActKind::Pure);
-        assert!(proven(&input_obligation(&f, &[eq(zero)], &cenv(), &mut i)), "0 accepted");
+        assert!(
+            proven(&input_obligation(&f, &[eq(zero)], &cenv(), &mut i)),
+            "0 accepted"
+        );
         let five = i.integer(5);
-        assert!(matches!(input_obligation(&f, &[eq(five)], &cenv(), &mut i), SeatVerdict::Refuted(_)), "5 rejected");
+        assert!(
+            matches!(
+                input_obligation(&f, &[eq(five)], &cenv(), &mut i),
+                SeatVerdict::Refuted(_)
+            ),
+            "5 rejected"
+        );
     }
 
     #[test]
@@ -1406,8 +1472,11 @@ mod obligation {
         // the unsound over-approximation that would bless f() against `(a, ...rest)`.
         let mut i = Interner::new();
         let f = closure(&mut i, rest_param(), name("a"), ActKind::Pure);
-        assert_eq!(accepted_domain(&f, &cenv()), None);
-        assert!(matches!(input_obligation(&f, &[], &cenv(), &mut i), SeatVerdict::Unproven));
+        assert_eq!(accepted_domain(&f, &cenv(), &mut i), None);
+        assert!(matches!(
+            input_obligation(&f, &[], &cenv(), &mut i),
+            SeatVerdict::Unproven
+        ));
     }
 }
 
@@ -1434,8 +1503,15 @@ mod outcome {
         let mut i = Interner::new();
         let f = closure(&mut i, one_param("n"), name("n"), ActKind::Pure);
         let o = summarize_instance(&f, &[num()], &cenv(), &mut i).unwrap();
-        assert_eq!(o.produced.erase(), num(), "(n) => n applied to Number produces Number");
-        assert!(matches!(o.completion, C::ProvenAbsent), "always produces — no fall-through");
+        assert_eq!(
+            o.produced.erase(&mut i),
+            num(),
+            "(n) => n applied to Number produces Number"
+        );
+        assert!(
+            matches!(o.completion, C::ProvenAbsent),
+            "always produces — no fall-through"
+        );
     }
 
     #[test]
@@ -1444,7 +1520,7 @@ mod outcome {
         let five = i.integer(5);
         let f = closure(&mut i, one_param("n"), konst(five.clone()), ActKind::Pure);
         let o = summarize_instance(&f, &[num()], &cenv(), &mut i).unwrap();
-        assert_eq!(o.produced.erase(), Contract::Equals(five));
+        assert_eq!(o.produced.erase(&mut i), Contract::Equals(five));
         assert!(matches!(o.completion, C::ProvenAbsent));
     }
 
@@ -1454,11 +1530,21 @@ mod outcome {
         // the body may complete without a value: UnprovenPossible.
         let mut i = Interner::new();
         let (zero, one) = (i.integer(0), i.integer(1));
-        let body = matchx(Some(name("n")), vec![arm(Some(Pat::Const(zero)), None, konst(one.clone()))]);
+        let body = matchx(
+            Some(name("n")),
+            vec![arm(Some(Pat::Const(zero)), None, konst(one.clone()))],
+        );
         let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
         let o = summarize_instance(&f, &[num()], &cenv(), &mut i).unwrap();
-        assert_eq!(o.produced.erase(), Contract::Equals(one), "the matching arm produces 1");
-        assert!(matches!(o.completion, C::UnprovenPossible), "may fall through");
+        assert_eq!(
+            o.produced.erase(&mut i),
+            Contract::Equals(one),
+            "the matching arm produces 1"
+        );
+        assert!(
+            matches!(o.completion, C::UnprovenPossible),
+            "may fall through"
+        );
     }
 
     #[test]
@@ -1473,9 +1559,18 @@ mod outcome {
         assert!(!o.produced.is_bottom(), "a real result contract");
         // The recursive branch coarsened to Top, so the produced contract admits
         // everything (Top ⊑ produced) — sound, and the summary terminated.
-        let erased = o.produced.erase();
-        assert!(matches!(subcontract(&Contract::Top, &erased, &mut i), Verdict::Proven), "coarse: {erased:?}");
-        assert!(matches!(o.completion, C::ProvenAbsent), "the total ternary never falls through");
+        let erased = o.produced.erase(&mut i);
+        assert!(
+            matches!(
+                subcontract(&Contract::Top, &erased, &mut i),
+                Verdict::Proven
+            ),
+            "coarse: {erased:?}"
+        );
+        assert!(
+            matches!(o.completion, C::ProvenAbsent),
+            "the total ternary never falls through"
+        );
     }
 }
 
@@ -1483,7 +1578,7 @@ mod outcome {
 
 mod induction {
     use crate::analyzer::bodywalk::callee_targets;
-    use crate::analyzer::induction::{Claim, Candidate, joint_vector_pass};
+    use crate::analyzer::induction::{Candidate, Claim, joint_vector_pass};
     use crate::contract::{Contract, ContractEnv, Kind};
     use crate::interner::Interner;
     use crate::oracle::run_source;
@@ -1499,25 +1594,41 @@ mod induction {
         Contract::Kind(Kind::Boolean)
     }
     fn cand(callee: ValueRef, contract: Contract) -> Candidate {
-        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], claim: Claim::Return(contract), cutoff: false }
+        Candidate {
+            callee,
+            args: vec![Contract::Kind(Kind::Number)],
+            claim: Claim::Return(contract),
+            cutoff: false,
+        }
     }
 
     #[test]
     fn factorial_returns_number_by_induction() {
         // Under the hypothesis `f : Number`, the recursive `f(n-1)` returns Number, so
         // `n * f(n-1)` is Number and the body produces ⊑ Number — the induction closes.
-        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf")
+            .unwrap()
+            .0;
         let mut i = Interner::new();
-        assert!(joint_vector_pass(&[cand(f, num())], &cenv(), &mut i), "f returns Number");
+        assert!(
+            joint_vector_pass(&[cand(f, num())], &cenv(), &mut i),
+            "f returns Number"
+        );
     }
 
     #[test]
     fn a_false_return_claim_is_rejected() {
         // Claiming `f : String` fails: under that hypothesis the body `n * f(n-1)` is a
         // type error and does not produce a String.
-        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf")
+            .unwrap()
+            .0;
         let mut i = Interner::new();
-        assert!(!joint_vector_pass(&[cand(f, Contract::Kind(Kind::String))], &cenv(), &mut i));
+        assert!(!joint_vector_pass(
+            &[cand(f, Contract::Kind(Kind::String))],
+            &cenv(),
+            &mut i
+        ));
     }
 
     #[test]
@@ -1534,11 +1645,17 @@ mod induction {
         let odd = callee_targets(&even)[0].clone();
         let mut i = Interner::new();
         let members = [cand(even.clone(), boolean()), cand(odd.clone(), boolean())];
-        assert!(joint_vector_pass(&members, &cenv(), &mut i), "even/odd jointly return Boolean");
+        assert!(
+            joint_vector_pass(&members, &cenv(), &mut i),
+            "even/odd jointly return Boolean"
+        );
 
         // Vector failure: a wrong claim on one member fails the whole component.
         let bad = [cand(even, boolean()), cand(odd, num())];
-        assert!(!joint_vector_pass(&bad, &cenv(), &mut i), "one wrong claim ⇒ component unproven");
+        assert!(
+            !joint_vector_pass(&bad, &cenv(), &mut i),
+            "one wrong claim ⇒ component unproven"
+        );
     }
 }
 
@@ -1546,7 +1663,7 @@ mod induction {
 
 mod driver {
     use crate::analyzer::bodywalk::callee_targets;
-    use crate::analyzer::induction::{Claim, Candidate, joint_vector_pass, prove_facts};
+    use crate::analyzer::induction::{Candidate, Claim, joint_vector_pass, prove_facts};
     use crate::contract::{Contract, ContractEnv, Kind};
     use crate::interner::Interner;
     use crate::oracle::run_source;
@@ -1581,10 +1698,17 @@ mod driver {
         // directly (Archive8 unification); `quad`'s body `double(n) + double(n)` is thus
         // Number, and quad proves — no reverse-topo hypothesis-carrying needed for a
         // non-recursive dependency (that path is exercised by the mutual even/odd test).
-        assert!(joint_vector_pass(&[cand(quad.clone(), num())], &cenv(), &mut i), "quad : Number via direct double");
+        assert!(
+            joint_vector_pass(&[cand(quad.clone(), num())], &cenv(), &mut i),
+            "quad : Number via direct double"
+        );
 
         // The multi-SCC driver still proves the whole set.
-        let r = prove_facts(vec![cand(double, num()), cand(quad, num())], &cenv(), &mut i);
+        let r = prove_facts(
+            vec![cand(double, num()), cand(quad, num())],
+            &cenv(),
+            &mut i,
+        );
         assert_eq!(r.proven.len(), 2, "double AND quad proven");
         assert!(r.unproven.is_empty());
     }
@@ -1593,10 +1717,22 @@ mod driver {
     fn the_driver_is_independent_of_candidate_list_order() {
         let (double, quad) = double_quad();
         let mut i = Interner::new();
-        let fwd = prove_facts(vec![cand(double.clone(), num()), cand(quad.clone(), num())], &cenv(), &mut i);
-        let rev = prove_facts(vec![cand(quad, num()), cand(double, num())], &cenv(), &mut i);
+        let fwd = prove_facts(
+            vec![cand(double.clone(), num()), cand(quad.clone(), num())],
+            &cenv(),
+            &mut i,
+        );
+        let rev = prove_facts(
+            vec![cand(quad, num()), cand(double, num())],
+            &cenv(),
+            &mut i,
+        );
         assert_eq!(fwd.proven.len(), 2);
-        assert_eq!(rev.proven.len(), 2, "reversing the candidate list changes nothing — SCC order is graph-intrinsic");
+        assert_eq!(
+            rev.proven.len(),
+            2,
+            "reversing the candidate list changes nothing — SCC order is graph-intrinsic"
+        );
     }
 
     #[test]
@@ -1606,7 +1742,14 @@ mod driver {
         // reduce `quad`'s body (which is why `quad` fails against String, not Top).
         let (double, quad) = double_quad();
         let mut i = Interner::new();
-        let r = prove_facts(vec![cand(double.clone(), num()), cand(quad, Contract::Kind(Kind::String))], &cenv(), &mut i);
+        let r = prove_facts(
+            vec![
+                cand(double.clone(), num()),
+                cand(quad, Contract::Kind(Kind::String)),
+            ],
+            &cenv(),
+            &mut i,
+        );
         assert_eq!(r.proven.len(), 1, "double still proven");
         assert!(r.proven.iter().any(|c| c.callee == double));
         assert_eq!(r.unproven.len(), 1, "only quad : String is unproven");
@@ -1625,8 +1768,16 @@ mod driver {
         .0;
         let odd = callee_targets(&even)[0].clone();
         let mut i = Interner::new();
-        let r = prove_facts(vec![cand(even, boolean()), cand(odd, boolean())], &cenv(), &mut i);
-        assert_eq!(r.proven.len(), 2, "even and odd proven together as one component");
+        let r = prove_facts(
+            vec![cand(even, boolean()), cand(odd, boolean())],
+            &cenv(),
+            &mut i,
+        );
+        assert_eq!(
+            r.proven.len(),
+            2,
+            "even and odd proven together as one component"
+        );
         assert!(r.unproven.is_empty());
     }
 }
@@ -1661,12 +1812,21 @@ mod inference {
         // the fact contains Number and is strictly tighter than Top (String excluded);
         // a call site that constrains `n : Number` sharpens it to pure Number (the
         // analyze_apply wiring).
-        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf")
+            .unwrap()
+            .0;
         let mut i = Interner::new();
-        let fact = infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
-        assert!(matches!(subcontract(&num(), &fact, &mut i), Verdict::Proven), "Number ⊑ inferred {fact:?}");
+        let fact =
+            infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
+        assert!(
+            matches!(subcontract(&num(), &fact, &mut i), Verdict::Proven),
+            "Number ⊑ inferred {fact:?}"
+        );
         let hi = i.string("hi");
-        assert!(!fact.contains(&hi), "the fact admits no String — tighter than Top: {fact:?}");
+        assert!(
+            !fact.contains(&hi),
+            "the fact admits no String — tighter than Top: {fact:?}"
+        );
     }
 
     #[test]
@@ -1682,8 +1842,12 @@ mod inference {
         .unwrap()
         .0;
         let mut i = Interner::new();
-        let fact = infer_return_fact(&even, None, &cenv(), &mut i).expect("even's return is inferred");
-        assert!(equiv(&fact, &Contract::Kind(Kind::Boolean), &mut i), "even returns Boolean, got {fact:?}");
+        let fact = infer_return_fact(&even, None, &cenv(), &mut i)
+            .expect("even's return is inferred");
+        assert!(
+            equiv(&fact, &Contract::Kind(Kind::Boolean), &mut i),
+            "even returns Boolean, got {fact:?}"
+        );
     }
 
     #[test]
@@ -1692,9 +1856,13 @@ mod inference {
         // claim is Number — a sound over-approximation (Equals(0) ⊑ Number).
         let f = run_source("f = (n) => n == 0 ? 0 : f(n - 1)\nf").unwrap().0;
         let mut i = Interner::new();
-        let fact = infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
+        let fact =
+            infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
         let zero = Contract::Equals(i.integer(0));
-        assert!(matches!(subcontract(&zero, &fact, &mut i), Verdict::Proven), "0 ⊑ inferred return {fact:?}");
+        assert!(
+            matches!(subcontract(&zero, &fact, &mut i), Verdict::Proven),
+            "0 ⊑ inferred return {fact:?}"
+        );
         assert!(equiv(&fact, &num(), &mut i), "and it generalizes to Number");
     }
 
@@ -1704,7 +1872,10 @@ mod inference {
         // fact is asserted (→ coarse Top at a call site, never an overclaim).
         let f = run_source("loop = (n) => loop(n)\nloop").unwrap().0;
         let mut i = Interner::new();
-        assert!(infer_return_fact(&f, None, &cenv(), &mut i).is_none(), "no fact for a baseless recursion");
+        assert!(
+            infer_return_fact(&f, None, &cenv(), &mut i).is_none(),
+            "no fact for a baseless recursion"
+        );
     }
 }
 
@@ -1833,10 +2004,19 @@ mod refute {
         // Proven by induction; refuted by a realized witness (permanent); and true but
         // neither provable (n could be negative → n·positive not provably positive) nor
         // disprovable (no *completing* input yields a non-positive) → Unproven.
-        assert!(matches!(check_return_claim(&f, &[num()], &num(), &cenv(), &mut i), ClaimVerdict::Proven));
-        assert!(matches!(check_return_claim(&f, &[num()], &string(), &cenv(), &mut i), ClaimVerdict::Refuted(_)));
+        assert!(matches!(
+            check_return_claim(&f, &[num()], &num(), &cenv(), &mut i),
+            ClaimVerdict::Proven
+        ));
+        assert!(matches!(
+            check_return_claim(&f, &[num()], &string(), &cenv(), &mut i),
+            ClaimVerdict::Refuted(_)
+        ));
         let positive = Contract::Greater(Rational::from(0));
-        assert!(matches!(check_return_claim(&f, &[num()], &positive, &cenv(), &mut i), ClaimVerdict::Unproven));
+        assert!(matches!(
+            check_return_claim(&f, &[num()], &positive, &cenv(), &mut i),
+            ClaimVerdict::Unproven
+        ));
     }
 
     #[test]
@@ -1866,7 +2046,10 @@ mod fact_identity {
         ContractEnv::new()
     }
     fn is_num(c: &Contract, i: &mut Interner) -> bool {
-        matches!(subcontract(c, &Contract::Kind(Kind::Number), i), Verdict::Proven)
+        matches!(
+            subcontract(c, &Contract::Kind(Kind::Number), i),
+            Verdict::Proven
+        )
     }
 
     #[test]
@@ -1886,15 +2069,23 @@ mod fact_identity {
         .0;
         let targets = callee_targets(&h);
         assert_eq!(targets.len(), 2, "h calls two closures");
-        assert_ne!(targets[0], targets[1], "a and b are distinct values despite one shape");
+        assert_ne!(
+            targets[0], targets[1],
+            "a and b are distinct values despite one shape"
+        );
 
         // Each closure keeps its own return fact — one Number, one String.
-        let facts: Vec<Contract> =
-            targets.iter().filter_map(|c| infer_return_fact(c, None, &cenv(), &mut i)).collect();
+        let facts: Vec<Contract> = targets
+            .iter()
+            .filter_map(|c| infer_return_fact(c, None, &cenv(), &mut i))
+            .collect();
         assert_eq!(facts.len(), 2, "both closures infer a fact: {facts:?}");
         let a_num = is_num(&facts[0], &mut i);
         let b_num = is_num(&facts[1], &mut i);
-        assert!(a_num ^ b_num, "exactly one is Number, one is String — not aliased: {facts:?}");
+        assert!(
+            a_num ^ b_num,
+            "exactly one is Number, one is String — not aliased: {facts:?}"
+        );
 
         // The adversarial payoff: with shape-only keying, `a()`/`b()` would share a fact
         // and `h : Number` could falsely close — but `h(false,false) → "s"`. The instance
@@ -2101,15 +2292,23 @@ mod body_safety {
         // §11.4: always() returns true, so `always() ? 1 : 1 + "x"`'s bad branch is dead.
         // The callee's *exact* non-recursive return (Equals(true), not generalized
         // Boolean) must be preserved for the dead-arm to fire.
-        let a = analyze_call("always = () => true\nroot = () => always() ? 1 : 1 + \"x\"\nroot", "root", &[]);
-        assert!(a.accepted(), "always() = true kills the bad branch: {:?}", a.findings);
+        let a = analyze_call(
+            "always = () => true\nroot = () => always() ? 1 : 1 + \"x\"\nroot",
+            "root",
+            &[],
+        );
+        assert!(
+            a.accepted(),
+            "always() = true kills the bad branch: {:?}",
+            a.findings
+        );
     }
 }
 
 // ── Archive9 §17 — alternative totality + widened-domain refutation discipline ──
 
 mod alternatives {
-    use super::{apply, empty, konst, name, nc, prim, analyze};
+    use super::{analyze, apply, empty, konst, name, nc, prim};
     use crate::ast::PrimOp;
     use crate::contract::{Contract, Kind, Verdict, subcontract};
     use crate::interner::Interner;
@@ -2139,7 +2338,11 @@ mod alternatives {
         let mut env = empty();
         env.insert(
             "f".into(),
-            Contract::Union(Box::new(Contract::Equals(good)), Box::new(Contract::Kind(Kind::Function))),
+            Contract::union(
+                Contract::Equals(good),
+                Contract::Kind(Kind::Function),
+                &mut i,
+            ),
         );
         let a = analyze(&apply(name("f"), vec![]), &env, &nc(), &mut i);
         let one = Contract::Equals(i.integer(1));
@@ -2254,29 +2457,38 @@ mod region {
     fn ternary_is_two_rows_equals0_then_top() {
         let mut i = Interner::new();
         let body = ternary(&mut i);
-        let rows = region_table(&body, "n", &cenv());
+        let rows = region_table(&body, "n", &cenv(), &mut i);
         assert_eq!(rows.len(), 2);
         // row 0: n == 0 → Range(0,0), exact; row 1: unconditional → Top, exact.
-        assert!(matches!(rows[0].region, Contract::Range(_, _)) && rows[0].exact, "row0 Equals(0) exact");
-        assert!(matches!(rows[1].region, Contract::Top) && rows[1].exact, "row1 Top exact");
+        assert!(
+            matches!(rows[0].region, Contract::Range(_, _)) && rows[0].exact,
+            "row0 Equals(0) exact"
+        );
+        assert!(
+            matches!(rows[1].region, Contract::Top) && rows[1].exact,
+            "row1 Top exact"
+        );
     }
 
     #[test]
     fn selection_walk_resolves_first_match_by_exactness() {
         let mut i = Interner::new();
         let body = ternary(&mut i);
-        let rows = region_table(&body, "n", &cenv());
+        let rows = region_table(&body, "n", &cenv(), &mut i);
         // Over Top: both rows selected; row 1's effective region is Top ∖ Equals(0).
-        let sel = select(&rows, &Contract::Top);
+        let sel = select(&rows, &Contract::Top, &mut i);
         assert_eq!(sel.len(), 2, "both branches carried");
-        assert!(matches!(sel[1].region, Contract::Difference(_, _)), "row1 effective = remaining");
+        assert!(
+            matches!(sel[1].region, Contract::Difference(_, _)),
+            "row1 effective = remaining"
+        );
         // f(0): only row 0 (the exact match consumes; remaining becomes empty).
         let z = eq(&mut i, 0);
-        let s0 = select(&rows, &z);
+        let s0 = select(&rows, &z, &mut i);
         assert_eq!(s0.len(), 1, "only the 0-arm reachable");
         // f(5): only row 1 (row 0 disjoint on the point).
         let five = eq(&mut i, 5);
-        let s5 = select(&rows, &five);
+        let s5 = select(&rows, &five, &mut i);
         assert_eq!(s5.len(), 1, "only the else-arm reachable");
     }
 
@@ -2287,12 +2499,21 @@ mod region {
         let (zero, a, b) = (i.integer(0), i.integer(10), i.integer(20));
         let body = matchx(
             Some(name("x")),
-            vec![arm(Some(Pat::Const(zero)), None, konst(a)), arm(Some(Pat::Wild), None, konst(b))],
+            vec![
+                arm(Some(Pat::Const(zero)), None, konst(a)),
+                arm(Some(Pat::Wild), None, konst(b)),
+            ],
         );
-        let rows = region_table(&body, "x", &cenv());
+        let rows = region_table(&body, "x", &cenv(), &mut i);
         assert_eq!(rows.len(), 2);
-        assert!(matches!(rows[0].region, Contract::Equals(_)) && rows[0].exact, "0 pattern exact");
-        assert!(matches!(rows[1].region, Contract::Top) && rows[1].exact, "wildcard Top exact");
+        assert!(
+            matches!(rows[0].region, Contract::Equals(_)) && rows[0].exact,
+            "0 pattern exact"
+        );
+        assert!(
+            matches!(rows[1].region, Contract::Top) && rows[1].exact,
+            "wildcard Top exact"
+        );
     }
 
     #[test]
@@ -2301,12 +2522,25 @@ mod region {
         // (d): Top, non-exact. On a point argument BOTH arms stay selected.
         let mut i = Interner::new();
         let (five, a, b) = (i.integer(5), i.integer(1), i.integer(2));
-        let guard = prim(PrimOp::Le, vec![prim(PrimOp::Mul, vec![name("n"), name("n")]), konst(five)]);
-        let body = matchx(None, vec![arm(None, Some(guard), konst(a)), arm(None, None, konst(b))]);
-        let rows = region_table(&body, "n", &cenv());
-        assert!(matches!(rows[0].region, Contract::Top) && !rows[0].exact, "opaque guard: Top, non-exact");
+        let guard = prim(
+            PrimOp::Le,
+            vec![prim(PrimOp::Mul, vec![name("n"), name("n")]), konst(five)],
+        );
+        let body = matchx(
+            None,
+            vec![arm(None, Some(guard), konst(a)), arm(None, None, konst(b))],
+        );
+        let rows = region_table(&body, "n", &cenv(), &mut i);
+        assert!(
+            matches!(rows[0].region, Contract::Top) && !rows[0].exact,
+            "opaque guard: Top, non-exact"
+        );
         let two = eq(&mut i, 2);
-        assert_eq!(select(&rows, &two).len(), 2, "non-exact consumes nothing — else stays live");
+        assert_eq!(
+            select(&rows, &two, &mut i).len(),
+            2,
+            "non-exact consumes nothing — else stays live"
+        );
     }
 
     #[test]
@@ -2314,28 +2548,42 @@ mod region {
         // n :: { when n<=3 => P  when n<=7 => Q  _ => R } — rows LE(3), LE(7), Top, all
         // exact; the walk derives the half-open middle region (3.5 lands in Q).
         let mut i = Interner::new();
-        let (three, seven, p, q, r) = (i.integer(3), i.integer(7), i.integer(1), i.integer(2), i.integer(3));
+        let (three, seven, p, q, r) = (
+            i.integer(3),
+            i.integer(7),
+            i.integer(1),
+            i.integer(2),
+            i.integer(3),
+        );
         let body = matchx(
             Some(name("n")),
             vec![
-                arm(None, Some(prim(PrimOp::Le, vec![name("n"), konst(three)])), konst(p)),
-                arm(None, Some(prim(PrimOp::Le, vec![name("n"), konst(seven)])), konst(q)),
+                arm(
+                    None,
+                    Some(prim(PrimOp::Le, vec![name("n"), konst(three)])),
+                    konst(p),
+                ),
+                arm(
+                    None,
+                    Some(prim(PrimOp::Le, vec![name("n"), konst(seven)])),
+                    konst(q),
+                ),
                 arm(None, None, konst(r)),
             ],
         );
-        let rows = region_table(&body, "n", &cenv());
+        let rows = region_table(&body, "n", &cenv(), &mut i);
         assert_eq!(rows.len(), 3);
         assert!(matches!(rows[0].region, Contract::LessEq(_)) && rows[0].exact);
         assert!(matches!(rows[1].region, Contract::LessEq(_)) && rows[1].exact);
         // n = 3.5 selects exactly the middle arm (Q).
         let half = i.number(Rational::new(7.into(), 2.into()));
-        let sel = select(&rows, &Contract::Equals(half));
+        let sel = select(&rows, &Contract::Equals(half), &mut i);
         assert_eq!(sel.len(), 1, "3.5 lands in exactly one arm");
         // n = 2 → first arm; n = 9 → last arm.
         let two = eq(&mut i, 2);
-        assert_eq!(select(&rows, &two).len(), 1);
+        assert_eq!(select(&rows, &two, &mut i).len(), 1);
         let nine = eq(&mut i, 9);
-        assert_eq!(select(&rows, &nine).len(), 1);
+        assert_eq!(select(&rows, &nine, &mut i).len(), 1);
     }
 }
 
@@ -2365,7 +2613,10 @@ mod bodycheck {
         let (one, x) = (i.integer(1), i.string("x"));
         let body = prim(PrimOp::Add, vec![konst(one), konst(x)]);
         let bad = closure(&mut i, Pat::Tuple(vec![]), body, ActKind::Pure);
-        assert!(has_error(&body_check(&bad, &[], &cenv(), &mut i)), "bad() must reject");
+        assert!(
+            has_error(&body_check(&bad, &[], &cenv(), &mut i)),
+            "bad() must reject"
+        );
     }
 
     #[test]
@@ -2374,12 +2625,36 @@ mod bodycheck {
         // rejected; f(Top) unproven (a warning, not a rejection).
         let mut i = Interner::new();
         let one = i.integer(1);
-        let f = closure(&mut i, one_param("x"), prim(PrimOp::Add, vec![name("x"), konst(one)]), ActKind::Pure);
-        assert!(!has_error(&body_check(&f, &[Contract::Kind(Kind::Number)], &cenv(), &mut i)), "f(Number) ok");
-        assert!(has_error(&body_check(&f, &[Contract::Kind(Kind::String)], &cenv(), &mut i)), "f(String) rejects");
+        let f = closure(
+            &mut i,
+            one_param("x"),
+            prim(PrimOp::Add, vec![name("x"), konst(one)]),
+            ActKind::Pure,
+        );
+        assert!(
+            !has_error(&body_check(
+                &f,
+                &[Contract::Kind(Kind::Number)],
+                &cenv(),
+                &mut i
+            )),
+            "f(Number) ok"
+        );
+        assert!(
+            has_error(&body_check(
+                &f,
+                &[Contract::Kind(Kind::String)],
+                &cenv(),
+                &mut i
+            )),
+            "f(String) rejects"
+        );
         // f(Top) is at least flagged (never silently accepted); severity is a precision
         // detail of the operation-safety sampler (warning today, could sharpen to error).
-        assert!(!body_check(&f, &[Contract::Top], &cenv(), &mut i).is_empty(), "f(Top) flagged");
+        assert!(
+            !body_check(&f, &[Contract::Top], &cenv(), &mut i).is_empty(),
+            "f(Top) flagged"
+        );
     }
 
     /// n == 0 ? 1 : n + "x"
@@ -2403,14 +2678,31 @@ mod bodycheck {
         let body = cond_body(&mut i);
         let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
         let zero = eqc(&mut i, 0);
-        assert!(!has_error(&body_check(&f, &[zero], &cenv(), &mut i)), "f(0) ok");
+        assert!(
+            !has_error(&body_check(&f, &[zero], &cenv(), &mut i)),
+            "f(0) ok"
+        );
         let five = eqc(&mut i, 5);
-        assert!(has_error(&body_check(&f, &[five], &cenv(), &mut i)), "f(5) rejects (5 + \"x\")");
-        assert!(!has_error(&body_check(&f, &[Contract::Kind(Kind::String)], &cenv(), &mut i)), "f(String) ok");
+        assert!(
+            has_error(&body_check(&f, &[five], &cenv(), &mut i)),
+            "f(5) rejects (5 + \"x\")"
+        );
+        assert!(
+            !has_error(&body_check(
+                &f,
+                &[Contract::Kind(Kind::String)],
+                &cenv(),
+                &mut i
+            )),
+            "f(String) ok"
+        );
         // f(Top): the else arm is exact and definitely reached, and a concrete witness
         // (n = 5, reaching `5 + "x"`) traps — so the unrestricted call is refuted, not
         // merely unproven. Top ⊄ (Equals(0) ∪ String).
-        assert!(has_error(&body_check(&f, &[Contract::Top], &cenv(), &mut i)), "f(Top) rejects (witness 5)");
+        assert!(
+            has_error(&body_check(&f, &[Contract::Top], &cenv(), &mut i)),
+            "f(Top) rejects (witness 5)"
+        );
     }
 
     #[test]
@@ -2420,18 +2712,31 @@ mod bodycheck {
         // the finding downgrades to a warning (RT-14 witness discipline).
         let mut i = Interner::new();
         let (five, x, zero) = (i.integer(5), i.string("x"), i.integer(0));
-        let guard = prim(PrimOp::Le, vec![prim(PrimOp::Mul, vec![name("n"), name("n")]), konst(five)]);
+        let guard = prim(
+            PrimOp::Le,
+            vec![prim(PrimOp::Mul, vec![name("n"), name("n")]), konst(five)],
+        );
         let body = matchx(
             None,
             vec![
-                arm(None, Some(guard), prim(PrimOp::Add, vec![name("n"), konst(x)])),
+                arm(
+                    None,
+                    Some(guard),
+                    prim(PrimOp::Add, vec![name("n"), konst(x)]),
+                ),
                 arm(None, None, konst(zero)),
             ],
         );
         let f = closure(&mut i, one_param("n"), body, ActKind::Pure);
         let fs = body_check(&f, &[Contract::Kind(Kind::Number)], &cenv(), &mut i);
-        assert!(!has_error(&fs), "opaque-guard row may not refute — warning only");
-        assert!(fs.iter().any(|f| f.severity == Severity::Warning), "but it is flagged unproven");
+        assert!(
+            !has_error(&fs),
+            "opaque-guard row may not refute — warning only"
+        );
+        assert!(
+            fs.iter().any(|f| f.severity == Severity::Warning),
+            "but it is flagged unproven"
+        );
     }
 }
 
