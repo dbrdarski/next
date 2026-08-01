@@ -3850,3 +3850,36 @@ That is the same rule violated in a second place, larger than this fix, and not 
 The layer-1-vs-layer-2 shape gap from earlier today is unchanged.
 
 400 lib + 111 conformance + 4 gate green, clippy clean.
+
+## 2026-08-01 — [author ruling] NEXT gets Enums; generic enum interning added, contracts interned
+
+**Ruling (author, 2026-08-01):** *"I will add Enums to the Language. Since Rust already
+implements Enums, NEXT enums will map to Rust enums directly. Simply add Enum interning and
+put the contracts there."* Not in the normative specs — recorded here as the author's forward
+design decision, with contracts as its first instance.
+
+**Built: `src/intern.rs`.** A generic hash-consing mechanism for tagged data — `Interned<T>`
+(pointer identity: compares and hashes by address, derefs to the term) over a type-indexed
+`EnumInterner`. Type-indexed rather than a field per type, so each future interned enum costs
+nothing to add — which is the point given the language feature is coming.
+
+**Two consumers, unified.** `Interner::intern_code` (canonical function shapes, added earlier
+today with a bespoke table) now delegates to it, and `Interner::contract` is new. Both are the
+same mechanism NEXT's enum values will use.
+
+**Every component of the fact-cache key is now an interned pointer**, which is what C§13.4
+asked for and what this morning's version did not do. The bespoke `CodePtr` wrapper is gone —
+`Interned<T>` already *is* pointer identity, so there was nothing left for it to add.
+
+**Proven rather than asserted:** equal contracts intern to one handle; compound contracts dedup
+through their parts (so a fact component's repeated domain `I` costs one allocation, not one
+per node); the same call yields the same key (a hit, not a re-settlement); a different demanded
+`C` is a different node.
+
+**Not done, and named so it is not mistaken for done:** `Contract`'s own children are still
+`Box<Contract>`, not `Interned<Contract>`. Dedup stays exact — the derived `Hash`/`Eq` walk
+them — but the walk is paid per *intern* rather than eliminated. Making children canonical is
+the children-first form the value interner already uses, and it is the ~1316-site sweep. It is
+an optimization and a conformance tidy, not a correctness gap.
+
+409 lib + 111 conformance + 4 gate green, clippy clean.

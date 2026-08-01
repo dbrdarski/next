@@ -109,7 +109,7 @@ pub(crate) fn prove_claim(
     // reference and resolves through its hypothesis; a query on any *other* node is
     // genuinely settled. A global flag answers both from hypotheses and so drops the traps
     // of callees that hold none — measured as a false accept on 2026-08-01.
-    let Some(key) = factcache::key(callee, args, &claim) else {
+    let Some(key) = factcache::key(callee, args, &claim, interner) else {
         let (nodes, edges) = discover(callee, args, cenv, interner);
         return settle(nodes, &edges, claim, cenv, interner);
     };

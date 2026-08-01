@@ -9,6 +9,7 @@ pub mod ast;
 pub mod contract;
 pub mod desugar;
 pub mod env;
+pub mod intern;
 pub mod interner;
 pub mod lex;
 pub mod normalize;

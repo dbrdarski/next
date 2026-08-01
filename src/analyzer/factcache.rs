@@ -51,13 +51,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 use crate::analyzer::induction::Claim;
 use crate::analyzer::safety::BodySafety;
 use crate::ast::Lambda;
 use crate::contract::Contract;
+use crate::intern::Interned;
+use crate::interner::Interner;
 use crate::value::ValueRef;
 
 /// A fact node: (analysis instance, row-set `I`, demanded `C`).
@@ -66,31 +66,10 @@ use crate::value::ValueRef;
 /// contract for a return fact and is the discriminator for safety/completion facts.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct FactKey {
-    shape: CodePtr,
-    captures: Vec<Contract>,
-    input: Vec<Contract>,
+    shape: Interned<Lambda>,
+    captures: Vec<Interned<Contract>>,
+    input: Vec<Interned<Contract>>,
     claim: Claim,
-}
-
-/// Interned canonical code, compared and hashed **by pointer**.
-///
-/// `Rc<Lambda>`'s derived `PartialEq`/`Hash` walk the whole syntax tree; since
-/// `Interner::intern_code` guarantees identical shapes share one allocation, the pointer
-/// already decides it. This is the "same value = same pointer" rule applied to code, and it
-/// turns a per-lookup tree walk into one word of comparison.
-#[derive(Clone, Debug)]
-struct CodePtr(Rc<Lambda>);
-
-impl PartialEq for CodePtr {
-    fn eq(&self, other: &CodePtr) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-impl Eq for CodePtr {}
-impl Hash for CodePtr {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.0).hash(state);
-    }
 }
 
 /// What the cache knows about a node.
@@ -111,12 +90,17 @@ thread_local! {
 
 /// The node for a call, or `None` when the callee is not a resolvable function instance
 /// (nothing to key on — the caller settles uncached).
-pub(crate) fn key(callee: &ValueRef, args: &[Contract], claim: &Claim) -> Option<FactKey> {
+pub(crate) fn key(
+    callee: &ValueRef,
+    args: &[Contract],
+    claim: &Claim,
+    interner: &mut Interner,
+) -> Option<FactKey> {
     let f = callee.as_fn()?;
     let closure = callee.as_closure()?;
     // De-Bruijn order: `free_vars` is the ordered capture-slot list `shape`'s `@cap`i
     // refer to, so iterating it gives a positional tuple independent of name spelling.
-    let captures = f
+    let capture_terms: Vec<Contract> = f
         .free_vars()
         .iter()
         .map(|n| match closure.env.lookup(n) {
@@ -124,7 +108,9 @@ pub(crate) fn key(callee: &ValueRef, args: &[Contract], claim: &Claim) -> Option
             _ => Contract::Top,
         })
         .collect();
-    Some(FactKey { shape: CodePtr(f.shape_rc()), captures, input: args.to_vec(), claim: claim.clone() })
+    let captures = capture_terms.into_iter().map(|c| interner.contract(c)).collect();
+    let input = args.iter().map(|c| interner.contract(c.clone())).collect();
+    Some(FactKey { shape: f.shape_rc(), captures, input, claim: claim.clone() })
 }
 
 /// What is known about `key`, if anything.
@@ -195,7 +181,7 @@ mod tests {
         let a = f("g = (n) => n + 1\ng", &mut i);
         let b = f("h = (n) => n + 1\nh", &mut i);
         assert!(
-            Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "same code must be one interned allocation"
         );
     }
@@ -209,7 +195,7 @@ mod tests {
         let a = f("g = (n) => n + 1\ng", &mut i);
         let b = f("h = (x) => x + 1\nh", &mut i);
         assert!(
-            Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "alpha-variants are the same shape"
         );
     }
@@ -221,7 +207,7 @@ mod tests {
         let a = f("g = (n) => n + 1\ng", &mut i);
         let b = f("h = (n) => n + 2\nh", &mut i);
         assert!(
-            !Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            !a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "different code is different shapes"
         );
     }
@@ -235,14 +221,73 @@ mod tests {
         let a = f("k = 1\ng = (n) => n + k\ng", &mut i);
         let b = f("k = 2\nh = (n) => n + k\nh", &mut i);
         assert!(
-            Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "same code, so one shape"
         );
         let args = [Contract::Top];
-        let (ka, kb) = (
-            key(&a, &args, &Claim::Safety).expect("keyed"),
-            key(&b, &args, &Claim::Safety).expect("keyed"),
-        );
+        let ka = key(&a, &args, &Claim::Safety, &mut i).expect("keyed");
+        let kb = key(&b, &args, &Claim::Safety, &mut i).expect("keyed");
         assert_ne!(ka, kb, "different captures are different fact nodes");
+    }
+}
+
+#[cfg(test)]
+mod interning_tests {
+    use super::*;
+    use crate::contract::Kind;
+    use crate::oracle::run_source_in;
+
+    fn f(src: &str, i: &mut Interner) -> ValueRef {
+        run_source_in(src, i).unwrap().0
+    }
+
+    /// Equal contracts are one allocation, so a key holding them compares by pointer.
+    #[test]
+    fn equal_contracts_intern_to_one_handle() {
+        let mut i = Interner::new();
+        let a = i.contract(Contract::Kind(Kind::Number));
+        let b = i.contract(Contract::Kind(Kind::Number));
+        assert!(a.ptr_eq(&b), "same contract must be one interned term");
+        assert!(!a.ptr_eq(&i.contract(Contract::Kind(Kind::String))));
+    }
+
+    /// Compound contracts dedup through their parts, so the fact-graph's repeated domains
+    /// (`I` appears on every node of a component) cost one allocation, not one per node.
+    #[test]
+    fn compound_contracts_dedup() {
+        let mut i = Interner::new();
+        let mk = |i: &mut Interner| {
+            i.contract(Contract::Union(
+                Box::new(Contract::Kind(Kind::Number)),
+                Box::new(Contract::Kind(Kind::String)),
+            ))
+        };
+        let (a, b) = (mk(&mut i), mk(&mut i));
+        assert!(a.ptr_eq(&b), "structurally equal compounds share one term");
+        assert_eq!(i.interned_count::<Contract>(), 1, "and only one is stored");
+    }
+
+    /// The key's whole point: two calls at the same fact node produce the *same* key, so the
+    /// second is a cache hit rather than a re-settlement.
+    #[test]
+    fn the_same_call_produces_the_same_key() {
+        let mut i = Interner::new();
+        let g = f("g = (n) => n + 1\ng", &mut i);
+        let args = [Contract::Kind(Kind::Number)];
+        let ka = key(&g, &args, &Claim::Safety, &mut i).expect("keyed");
+        let kb = key(&g, &args, &Claim::Safety, &mut i).expect("keyed");
+        assert_eq!(ka, kb, "same node, same key");
+    }
+
+    /// A different demanded contract is a different node, even for the same function and
+    /// domain — the `C` in (instance, I, C).
+    #[test]
+    fn a_different_demand_is_a_different_node() {
+        let mut i = Interner::new();
+        let g = f("g = (n) => n + 1\ng", &mut i);
+        let args = [Contract::Kind(Kind::Number)];
+        let ka = key(&g, &args, &Claim::Safety, &mut i).expect("keyed");
+        let kb = key(&g, &args, &Claim::Completes, &mut i).expect("keyed");
+        assert_ne!(ka, kb);
     }
 }

@@ -7,9 +7,10 @@
 //! canonical, this is exact structural deduplication.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::ast::Lambda;
+use crate::contract::Contract;
+use crate::intern::{EnumInterner, Interned};
 use crate::rational::Rational;
 use crate::value::{FnValue, IndetForm, NativeRef, RecordEntry, ValueData, ValueRef};
 
@@ -18,11 +19,12 @@ use crate::value::{FnValue, IndetForm, NativeRef, RecordEntry, ValueData, ValueR
 #[derive(Default)]
 pub struct Interner {
     table: HashMap<ValueData, ValueRef>,
-    /// Canonical function **code**, hash-consed so that identical shapes share one
-    /// allocation. Code is not a value, so it cannot live in `table`; it needs the same
-    /// treatment for the same reason — a closure's identity is `(code pointer, capture
-    /// pointers)`, and that is only a pointer comparison if the code is interned.
-    codes: HashMap<Lambda, Rc<Lambda>>,
+    /// Hash-consing for the tagged data the implementation is built from — canonical
+    /// function code and contracts today, NEXT's enum values when that feature lands
+    /// (author ruling 2026-08-01: NEXT enums map to Rust enums directly, so one mechanism
+    /// serves both). These are not NEXT values, so they cannot live in `table`; they need
+    /// the same treatment for the same reason — identity must be a pointer test.
+    enums: EnumInterner,
 }
 
 impl Interner {
@@ -47,13 +49,23 @@ impl Interner {
     /// never again: from then on the shape is compared and hashed by pointer. That is the
     /// whole point of the interning model, and the reason a cache key can be a small tuple
     /// of pointers rather than a walk over a syntax tree.
-    pub fn intern_code(&mut self, code: Lambda) -> Rc<Lambda> {
-        if let Some(existing) = self.codes.get(&code) {
-            return Rc::clone(existing);
-        }
-        let rc = Rc::new(code.clone());
-        self.codes.insert(code, Rc::clone(&rc));
-        rc
+    pub fn intern_code(&mut self, code: Lambda) -> Interned<Lambda> {
+        self.enums.intern(code)
+    }
+
+    /// The canonical handle for a contract.
+    ///
+    /// Contracts are an enum like any other, so they intern through the same mechanism —
+    /// which is what makes a fact-cache key a tuple of pointers rather than a walk over
+    /// contract trees. Structural hashing happens once, here; every later comparison is a
+    /// pointer test.
+    pub fn contract(&mut self, c: Contract) -> Interned<Contract> {
+        self.enums.intern(c)
+    }
+
+    /// Distinct interned terms of `T` — for tests and diagnostics.
+    pub fn interned_count<T: std::any::Any + std::hash::Hash + Eq + Clone>(&self) -> usize {
+        self.enums.count::<T>()
     }
 
     // ── Leaf constructors ────────────────────────────────────────────────────
