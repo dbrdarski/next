@@ -8,26 +8,40 @@ job is to prove at compile time that programs cannot trap at run time.
 The language design is fixed and recorded in the normative specifications in this
 repository; this repo is the implementation of that design.
 
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `src/` | the implementation |
+| `tests/` | the conformance suite (stable IDs) and the machinery gates |
+| `docs/normative/` | the design authority — manifest-verified, not edited by implementation work |
+| `docs/notes/` | working notes: status, changelog, plans, reviews, handovers |
+| `MANIFEST.sha256.txt` | content hashes for the normative set (the stale-upload guard) |
+
+Run `shasum -c MANIFEST.sha256.txt` before trusting a copy of the specifications.
+
 ## Design documents
 
 Read in this order:
 
-1. `next-design-compendium-v1-0.md` — the master: architecture, semantics, ledgers,
-   statuses. Wins on design intent.
-2. `next-grammar-specification-v0-1.md` — what parses.
-3. `next-kernel-ast-specification-v0-1.md` — what exists after parsing: the node
-   inventory and the closed desugaring catalog.
-4. `next-semantics-companion-v0-1.md` — what running means: per-node evaluation
-   rules, the oracle traps, and the trap ↔ compile-error concordance.
+1. `docs/normative/next-design-compendium-v1-0.md` — the master: architecture,
+   semantics, ledgers, statuses. Wins on design intent.
+2. `docs/normative/next-grammar-specification-v0-1.md` — what parses.
+3. `docs/normative/next-kernel-ast-specification-v0-1.md` — what exists after
+   parsing: the node inventory and the closed desugaring catalog.
+4. `docs/normative/next-semantics-companion-v0-1.md` — what running means: per-node
+   evaluation rules, the oracle traps, and the trap ↔ compile-error concordance.
 
 Design-closed subsystem packages: μ-canonicalization (v0.5), recursive contracts
-(v0.2), the tuple-length/concatenation family (v0.3), and the application &
-induction package (v0.8). The conformance suite is specified in
-`next-test-suite-specification-v0-1.md`.
+(v0.2), the tuple-length/concatenation family (v0.3), the application & induction
+package (v0.8), grounding (v0.5), region tables (v0.3), and late resolution (v0.5).
+The conformance suite is specified in
+`docs/normative/next-test-suite-specification-v0-1.md`.
 
-`DECISIONS.md` is the implementation changelog (what the specs mandated, what was
-chosen, what is being asked). `OwedItems.md` indexes the gaps the *documents* still
-owe, as distinct from work merely not yet built.
+`docs/notes/IMPLEMENTATION-STATUS.md` is **the authority on what is actually built**
+— where any other note disagrees with it, that file wins.
+`docs/notes/DECISIONS.md` is the implementation changelog (what the specs mandated,
+what was chosen, what is being asked).
 
 ## Architectural rule
 
@@ -41,19 +55,38 @@ green.
 ## Build and test
 
 ```sh
-cargo test      # the conformance and property suites
+cargo run -- program.next          # run a program
+cargo run -- --check program.next  # analyze without running
+
+cargo test                         # conformance, property and machinery suites
 cargo clippy --all-targets
+shasum -c MANIFEST.sha256.txt      # verify the normative documents
 ```
 
 ## Status
 
-Implemented: the value layer, lexer, parser and desugaring, the oracle interpreter,
-the normalization property harness, μ-canonicalization, the contract algebra
-(denotational membership, three-valued subcontract, operation transfer rules,
-recursive contracts), and an analyzer covering the expression layer with an exact
-trap ↔ error concordance against the oracle.
+| Suite | Result |
+|---|---|
+| library | 438 passed, 0 failed, 1 ignored |
+| conformance | 114 passed, 0 failed, 11 ignored |
+| machinery gates | 10 passed, 0 failed |
+| normative manifest | 19/19 verified |
 
-In progress: the tuple-length family and the application & induction package.
+**Implemented:** the value layer, lexer, parser and desugaring, the oracle
+interpreter with its traps and world admission, mutator staging, the normalization
+property harness, universal function interning including recursive groups (runtime
+`==` is pointer equality), the contract algebra, and a whole-program `--check` that
+originates typed operation-safety, body-safety and return demands and settles them
+against a domain-indexed fact graph.
+
+**In progress:** the demand core's remaining origins, grounding's coverage and its
+wiring, module linking, the divergence harness, and the lint tier. The twelve
+ignored tests each record the specific gate they wait on.
+
+**Not yet claimed:** general soundness. The analyzer has no demonstrated false
+acceptance, but the C§16 discharge and the executable soundness harness are
+unwritten, so that is an absence of evidence against, not evidence for. See
+`docs/notes/IMPLEMENTATION-STATUS.md` for the current, measured position.
 
 ## License
 
