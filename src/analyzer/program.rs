@@ -27,6 +27,7 @@ use super::{
     safety,
 };
 use crate::analyzer::TrapClass;
+use crate::analyzer::domain::AnalysisContract;
 use crate::analyzer::refute::ClaimVerdict;
 use crate::ast::{Bind, BindTarget, Expr, Item, Lambda, Module, Pat};
 use crate::contract::{Contract, ContractEnv, eval_contract};
@@ -59,6 +60,7 @@ pub struct ExecutableDemand {
     pub seat: ExecutableSeat,
     pub world: World,
     pub contract: Contract,
+    pub annotated_contract: AnalysisContract,
     pub completion: Completion,
     pub findings: Vec<Finding>,
 }
@@ -120,14 +122,12 @@ pub(crate) fn analyze_program_in(
     // Snapshot before `collect`: that pass installs every lambda into the shared
     // late-binding scope, but eager item analysis must still see module bindings
     // only after their source-order declaration.
-    let mut tenv: TypeEnv = scope
-        .visible_bindings()
-        .into_iter()
-        .filter_map(|(name, binding)| match binding {
-            Binding::Value(value) => Some((name, Contract::Equals(value))),
-            Binding::Slot(_) | Binding::UnderInit => None,
-        })
-        .collect();
+    let mut tenv = TypeEnv::new();
+    for (name, binding) in scope.visible_bindings() {
+        if let Binding::Value(value) = binding {
+            tenv.insert(name, AnalysisContract::of_value(value));
+        }
+    }
     let (values, cenv, contract_names) = collect(module, scope, interner);
     let top_world = if module.name.is_some() {
         World::Pure
@@ -156,17 +156,21 @@ pub(crate) fn analyze_program_in(
                     (BindTarget::Name(name), Expr::Lambda(_)) => values
                         .get(name)
                         .cloned()
-                        .map(|value| Analysis {
-                            contract: Contract::Equals(value),
-                            findings: Vec::new(),
-                            completion: Completion::Produces,
+                        .map(|value| {
+                            let annotated = AnalysisContract::of_value(value);
+                            Analysis {
+                                contract: annotated.erase(interner),
+                                annotated,
+                                findings: Vec::new(),
+                                completion: Completion::Produces,
+                            }
                         })
                         .unwrap_or_else(|| {
                             analyze_in_world(&b.value, &tenv, &cenv, top_world, interner)
                         }),
                     _ => analyze_in_world(&b.value, &tenv, &cenv, top_world, interner),
                 };
-                let contract = record_executable(
+                let annotated = record_executable(
                     ExecutableOrigin::Binding {
                         item: item_index,
                         name: name.clone(),
@@ -179,13 +183,15 @@ pub(crate) fn analyze_program_in(
                 );
                 analyze_bind(
                     &b.target,
-                    &contract,
+                    &annotated,
                     &mut tenv,
                     &mut findings,
                     &cenv,
                     interner,
                 );
-                if let (Some(name), Contract::Equals(value)) = (name, contract) {
+                if let (Some(name), Contract::Equals(value)) =
+                    (name, annotated.erase(interner))
+                {
                     scope.define(&name, Binding::Value(value));
                 }
             }
@@ -197,7 +203,7 @@ pub(crate) fn analyze_program_in(
                     World::Pure,
                     interner,
                 );
-                let contract = record_executable(
+                let annotated = record_executable(
                     ExecutableOrigin::SlotInitializer {
                         item: item_index,
                         name: slot.name.clone(),
@@ -208,11 +214,14 @@ pub(crate) fn analyze_program_in(
                     &mut findings,
                     &mut executable_demands,
                 );
-                tenv.insert(slot.name.clone(), contract);
+                tenv.insert(slot.name.clone(), annotated);
             }
             Item::ActBind(ab) => {
                 if let Some(value) = values.get(&ab.name) {
-                    tenv.insert(ab.name.clone(), Contract::Equals(value.clone()));
+                    tenv.insert(
+                        ab.name.clone(),
+                        AnalysisContract::of_value(value.clone()),
+                    );
                 }
             }
             Item::Stmt(expr) => {
@@ -323,23 +332,24 @@ fn record_executable(
     analysis: Analysis,
     findings: &mut Vec<Finding>,
     demands: &mut Vec<ExecutableDemand>,
-) -> Contract {
+) -> AnalysisContract {
     let mut local = Vec::new();
     if seat == ExecutableSeat::Expecting {
         demand(&analysis, &mut local);
     }
     local.extend(analysis.findings.iter().cloned());
     findings.extend(local.iter().cloned());
-    let contract = analysis.contract.clone();
+    let annotated = analysis.annotated.clone();
     demands.push(ExecutableDemand {
         origin,
         seat,
         world,
         contract: analysis.contract,
+        annotated_contract: analysis.annotated,
         completion: analysis.completion,
         findings: local,
     });
-    contract
+    annotated
 }
 
 /// Walk the items once, building the module environment (function values, so that late
@@ -645,6 +655,29 @@ mod tests {
         assert!(v.accepted(), "{:?}", v.findings);
         assert_eq!(v.return_demands.len(), 1, "the discharge is recorded: {v:?}");
         assert!(matches!(v.return_demands[0].verdict, ClaimVerdict::Proven));
+    }
+
+    /// AP-29 at the source boundary: both accesses project one immutable correlated
+    /// choice. The represented calls are `(numFn, 5)` and `(strFn, "hello")`; the
+    /// analyzer must not synthesize `(numFn, "hello")` while rebuilding the joint
+    /// application operand.
+    #[test]
+    fn correlated_choice_accesses_reach_the_joint_application_driver() {
+        let (v, _) = check(
+            "numFn = (n) => n + 1\n\
+             strFn = (s) => `${s}`\n\
+             apply where (Boolean) => Top\n\
+             apply = (cond) => {\n\
+              choice = cond ? [numFn, 5] : [strFn, \"hello\"]\n\
+              => choice[0](choice[1])\n\
+             }\n",
+        );
+        assert!(
+            v.accepted(),
+            "the two represented alternatives are safe; false cross-pairs are not executions: \
+             {:#?}",
+            v.findings
+        );
     }
 
     /// Analysis checks a binding's executable RHS without running it. This used to pass

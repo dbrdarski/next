@@ -64,6 +64,7 @@ pub(crate) fn analyze_instance_body(
     if repeated {
         return Some(Analysis {
             contract: Contract::Top,
+            annotated: AnalysisContract::of_contract(Contract::Top),
             findings: Vec::new(),
             completion: Completion::MayFallThrough,
         });
@@ -74,7 +75,7 @@ pub(crate) fn analyze_instance_body(
     // Captures first, so a same-named parameter shadows them.
     for name in &free {
         if let Some(Binding::Value(v)) = closure.env.lookup(name) {
-            tenv.insert(name.clone(), Contract::Equals(v));
+            tenv.insert(name.clone(), AnalysisContract::of_value(v));
         }
     }
     // Parameters narrowed by the argument tuple.
@@ -117,7 +118,7 @@ pub fn summarize_instance(
         }
     };
     Some(ApplicationOutcome {
-        produced: AnalysisContract::of_contract(a.contract),
+        produced: a.annotated,
         completion,
         may_not_complete: false,
     })

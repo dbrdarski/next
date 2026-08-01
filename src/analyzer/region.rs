@@ -45,11 +45,16 @@ pub struct Selected {
     pub result: Expr,
 }
 
-/// The region table of `body` over the single parameter `param`. A `Match` body yields
-/// one row per arm; any other body is a single unconditional row `(Top, exact, body)`.
+/// The region table of `body` over the single parameter `param`. An arm-only `Match`
+/// body yields one row per arm; any other body is a single unconditional row `(Top,
+/// exact, body)`. A `Match` containing a preceding bind/statement is a block: projecting
+/// only its arm results would erase that executable prefix and analyze those results in
+/// an environment where the local names were never bound.
 pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv, i: &mut Interner) -> Vec<Row> {
     match body {
-        Expr::Match(m) => region_rows(m, param, cenv, i),
+        Expr::Match(m) if m.items.iter().all(|item| matches!(item, MatchItem::Arm(_))) => {
+            region_rows(m, param, cenv, i)
+        }
         other => vec![Row {
             region: Contract::Top,
             exact: true,

@@ -96,9 +96,79 @@ impl AnalysisContract {
         AnalysisContract::Bottom
     }
 
-    /// A leaf with coarsened metadata `(C, Unknown)`, normalized.
+    /// Lift an ordinary contract with coarsened function metadata. Tuple/record
+    /// structure and union alternatives remain explicit; opaque leaves carry
+    /// `(C, Unknown)`.
     pub fn of_contract(contract: Contract) -> AnalysisContract {
-        AnalysisContract::leaf(contract, InstanceMetadata::Unknown)
+        match contract {
+            Contract::Bottom => AnalysisContract::Bottom,
+            Contract::Tuple(elements) => AnalysisContract::tuple(
+                elements
+                    .iter()
+                    .map(|element| AnalysisContract::of_contract((**element).clone()))
+                    .collect(),
+            ),
+            Contract::Record(fields) => AnalysisContract::record(
+                fields
+                    .iter()
+                    .map(|(key, value)| {
+                        (
+                            key.clone(),
+                            AnalysisContract::of_contract((**value).clone()),
+                        )
+                    })
+                    .collect(),
+            ),
+            Contract::Union(left, right) => AnalysisContract::alt(vec![
+                AnalysisContract::of_contract((*left).clone()),
+                AnalysisContract::of_contract((*right).clone()),
+            ]),
+            other => AnalysisContract::leaf(other, InstanceMetadata::Unknown),
+        }
+    }
+
+    /// The most precise fixed representation of a concrete value available from the
+    /// live value layer. Aggregate structure is retained, and a NEXT closure carries
+    /// its concrete shape plus exact capture contracts. A capture's own function
+    /// metadata may remain coarsened because `Equals(capture)` already fixes that value.
+    pub fn of_value(value: ValueRef) -> AnalysisContract {
+        if let Some(function) = value.as_fn() {
+            let mut environment = Vec::with_capacity(function.free_vars().len());
+            for name in function.free_vars() {
+                let Some(Binding::Value(capture)) = function.closure().env.lookup(name) else {
+                    return AnalysisContract::of_contract(Contract::Equals(value));
+                };
+                environment.push(AnalysisContract::of_contract(Contract::Equals(capture)));
+            }
+            let instance = Instance {
+                shape: function.shape().clone(),
+                env: environment,
+            };
+            return AnalysisContract::leaf(
+                Contract::Equals(value),
+                InstanceMetadata::Known(vec![instance]),
+            );
+        }
+        if let Some(items) = value.as_tuple() {
+            return AnalysisContract::tuple(
+                items
+                    .iter()
+                    .cloned()
+                    .map(AnalysisContract::of_value)
+                    .collect(),
+            );
+        }
+        if let Some(entries) = value.as_record() {
+            let mut fields = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let Ok(key) = String::from_utf16(&entry.key) else {
+                    return AnalysisContract::of_contract(Contract::Equals(value));
+                };
+                fields.push((key, AnalysisContract::of_value(entry.value.clone())));
+            }
+            return AnalysisContract::record(fields);
+        }
+        AnalysisContract::of_contract(Contract::Equals(value))
     }
 
     /// A leaf, **normalized** to the one canonical bottom (§2): `(Bottom, _) →
@@ -172,6 +242,113 @@ impl AnalysisContract {
         }
     }
 
+    /// Exact structural projection of tuple position `index`. `None` means this domain
+    /// cannot prove that every represented producer has that position; callers must
+    /// retain the ordinary access rule's conservative result instead.
+    pub fn project_index(&self, index: usize) -> Option<AnalysisContract> {
+        match self {
+            AnalysisContract::Bottom => Some(AnalysisContract::Bottom),
+            AnalysisContract::Tuple(elements) => elements.get(index).cloned(),
+            AnalysisContract::Alt(alternatives) => alternatives
+                .iter()
+                .map(|alternative| alternative.project_index(index))
+                .collect::<Option<Vec<_>>>()
+                .map(AnalysisContract::alt),
+            AnalysisContract::Leaf { contract, .. } => match contract {
+                Contract::Tuple(elements) => elements
+                    .get(index)
+                    .map(|element| AnalysisContract::of_contract((**element).clone())),
+                Contract::Equals(value) => value
+                    .as_tuple()
+                    .and_then(|items| items.get(index).cloned())
+                    .map(AnalysisContract::of_value),
+                Contract::Union(left, right) => AnalysisContract::alt(vec![
+                    AnalysisContract::of_contract((**left).clone()),
+                    AnalysisContract::of_contract((**right).clone()),
+                ])
+                .project_index(index),
+                _ => None,
+            },
+            AnalysisContract::Record(_) => None,
+        }
+    }
+
+    /// Exact structural projection of a statically named record field.
+    pub fn project_field(&self, name: &str) -> Option<AnalysisContract> {
+        match self {
+            AnalysisContract::Bottom => Some(AnalysisContract::Bottom),
+            AnalysisContract::Record(fields) => fields
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone()),
+            AnalysisContract::Alt(alternatives) => alternatives
+                .iter()
+                .map(|alternative| alternative.project_field(name))
+                .collect::<Option<Vec<_>>>()
+                .map(AnalysisContract::alt),
+            AnalysisContract::Leaf { contract, .. } => match contract {
+                Contract::Record(fields) => fields
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| AnalysisContract::of_contract((**value).clone())),
+                Contract::Equals(value) => {
+                    let entries = value.as_record()?;
+                    let key: Vec<u16> = name.encode_utf16().collect();
+                    entries
+                        .iter()
+                        .find(|entry| entry.key == key)
+                        .map(|entry| AnalysisContract::of_value(entry.value.clone()))
+                }
+                Contract::Union(left, right) => AnalysisContract::alt(vec![
+                    AnalysisContract::of_contract((**left).clone()),
+                    AnalysisContract::of_contract((**right).clone()),
+                ])
+                .project_field(name),
+                _ => None,
+            },
+            AnalysisContract::Tuple(_) => None,
+        }
+    }
+
+    /// Recover the one concrete value represented by this annotated contract, when it
+    /// is structurally singleton. This preserves exact-folding behavior even though an
+    /// exact aggregate is now carried as annotated tuple/record structure rather than
+    /// only as an opaque `Equals(aggregate)` leaf.
+    pub fn singleton_value(&self, interner: &mut Interner) -> Option<ValueRef> {
+        match self {
+            AnalysisContract::Bottom => None,
+            AnalysisContract::Leaf { contract, .. } => match contract {
+                Contract::Equals(value) => Some(value.clone()),
+                _ => None,
+            },
+            AnalysisContract::Tuple(elements) => {
+                let values = elements
+                    .iter()
+                    .map(|element| element.singleton_value(interner))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(interner.tuple(values))
+            }
+            AnalysisContract::Record(fields) => {
+                let values = fields
+                    .iter()
+                    .map(|(key, value)| {
+                        value
+                            .singleton_value(interner)
+                            .map(|value| (key.encode_utf16().collect(), value))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(interner.record(values))
+            }
+            AnalysisContract::Alt(alternatives) => {
+                let mut values = alternatives
+                    .iter()
+                    .map(|alternative| alternative.singleton_value(interner));
+                let first = values.next()??;
+                values.all(|value| value.is_some_and(|value| value == first)).then_some(first)
+            }
+        }
+    }
+
     /// Whether the whole annotated contract carries **no** restrictive metadata — every
     /// leaf is `Unknown`. Then `γ(ac) = ⟦erase(ac)⟧`, so an erased-contract inclusion
     /// into it is a sound ⊑ᴬ proof.
@@ -183,6 +360,12 @@ impl AnalysisContract {
             AnalysisContract::Record(fs) => fs.iter().all(|(_, v)| v.metadata_free()),
             AnalysisContract::Alt(alts) => alts.iter().all(AnalysisContract::metadata_free),
         }
+    }
+}
+
+impl From<Contract> for AnalysisContract {
+    fn from(contract: Contract) -> AnalysisContract {
+        AnalysisContract::of_contract(contract)
     }
 }
 

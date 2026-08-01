@@ -4247,3 +4247,48 @@ three-voice demand path. **`// [ask-author]`: none.**
 **Verification:** 424 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 6 machinery gates
 passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
 `cargo fmt --check` remains the separately recorded pre-existing gate (8,438 output lines).
+
+## 2026-08-01 — Recovery slice 8: source correlation reaches the joint application driver
+
+**Measured red before implementation:** the normative AP-29 source program
+
+```next
+choice = cond ? [numFn, 5] : [strFn, "hello"]
+choice[0](choice[1])
+```
+
+was rejected. The source environment stored only erased `Contract`s, so the two accesses could not
+deliver the represented relation to `drive_application`. The first safety pass also reported
+`choice` unbound because `region_table` projected a block-shaped Match to its final arm result and
+silently discarded the preceding local bind. A machinery gate independently failed while the live
+`TypeEnv` and application bridge still admitted erased-only routing.
+
+**Annotated source state:** `Analysis` now carries both its ordinary contract and the structural
+`AnalysisContract` whose erasure is that contract. `TypeEnv` stores the annotated form. Literal and
+constructed tuples/records, immutable references and bindings, Match alternatives/narrowing,
+pattern projections, closure captures, and acyclic call outcomes preserve annotated structure and
+instance metadata. Ordinary tuple/record/union contracts lift structurally; exact aggregate values
+can be reconstructed from that structure for the existing oracle-backed constant-folding path.
+
+**AP-29 projection rule:** a field/exact-index access projects each correlated source alternative
+without flattening it. At an application whose callee and ordinary arguments are immutable
+projections of the same source binding, the adapter forms one joint operand alternative per source
+alternative. The flagship therefore analyzes only `(numFn, 5)` and `(strFn, "hello")`. Different
+sources keep the legal positional projection: any resulting cross-pair failure is weakened once by
+the canonical driver to Unproven, never promoted to a represented refutation. Per-alternative fact
+machinery still consumes ordinary contracts only after the joint driver has selected one live
+alternative; no second application traversal or erased pre-driver bridge remains.
+
+**Block prefix preservation:** `region_table` now decomposes only arm-only Matches. A Match carrying
+a preceding bind/statement is one unconditional whole-body row, preserving source execution and its
+local environment for safety, completion, return, and grounding consumers. A direct regression
+pins the local-binding prefix, while the AP-29 program pins the end-to-end consequence.
+
+**Mechanical enforcement:** the new gate forbids restoring the erased `TypeEnv` alias or calling
+the retired `operand_from_erased` bridge from `analyze_apply`. The gate was observed red before the
+source path was changed. No reaching fixpoint, widening, candidate synthesis, runtime code analysis,
+or new semantic mechanism was introduced. **`// [ask-author]`: none.**
+
+**Verification:** 426 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 7 machinery gates
+passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
+`cargo fmt --check` remains the separately recorded pre-existing formatting gate.

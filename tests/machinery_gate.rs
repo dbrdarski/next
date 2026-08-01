@@ -209,3 +209,29 @@ fn realized_return_refutation_is_explicitly_pure_only() {
          Effect or Mutator while searching for evidence"
     );
 }
+
+/// The live expression adapter must carry the annotated domain to the joint driver.
+/// Restoring the erased bridge discards nested function metadata and source correlation.
+#[test]
+fn source_application_does_not_reenter_the_erased_bridge() {
+    let src = std::fs::read_to_string(root().join("src/analyzer/mod.rs")).expect("readable");
+    assert!(
+        !src.contains("pub type TypeEnv = HashMap<String, Contract>"),
+        "TypeEnv still erases AnalysisContract metadata at every source binding"
+    );
+    let body = src
+        .split_once("fn analyze_apply")
+        .expect("analyze_apply exists")
+        .1
+        .split_once("\nfn ")
+        .map_or_else(|| src.clone(), |(b, _)| b.to_string());
+    let code: String = body
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !has_ident(&code, "operand_from_erased"),
+        "analyze_apply still projects annotated source operands back to ordinary contracts"
+    );
+}

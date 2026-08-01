@@ -33,6 +33,8 @@
 
 use std::collections::HashMap;
 
+use num_traits::ToPrimitive;
+
 use crate::ast::{
     AccessForm, ActKind, Arg, BindingRef, Element, Expr, Field, PrimOp, Ref, SlotRef,
     TemplatePart,
@@ -49,6 +51,7 @@ use self::application::{
     AlternativeContribution, ApplicationOutcome, ApplicationWitness, CalleeAlternative,
     CompletionWithoutValue, SeatVerdict,
 };
+use self::domain::AnalysisContract;
 
 pub mod demand;
 pub(crate) mod factcache;
@@ -116,6 +119,9 @@ pub enum CompletionWitness {
 #[derive(Clone, Debug)]
 pub struct Analysis {
     pub contract: Contract,
+    /// The same produced values in the structural annotated domain. `contract` is
+    /// `erase(annotated)` and remains the ordinary language-facing denotation.
+    pub annotated: AnalysisContract,
     pub findings: Vec<Finding>,
     pub completion: Completion,
 }
@@ -123,7 +129,25 @@ pub struct Analysis {
 impl Analysis {
     /// An expression that always produces a value.
     fn produced(contract: Contract, findings: Vec<Finding>) -> Analysis {
-        Analysis { contract, findings, completion: Completion::Produces }
+        Analysis {
+            annotated: AnalysisContract::of_contract(contract.clone()),
+            contract,
+            findings,
+            completion: Completion::Produces,
+        }
+    }
+
+    fn produced_annotated(
+        annotated: AnalysisContract,
+        findings: Vec<Finding>,
+        interner: &mut Interner,
+    ) -> Analysis {
+        Analysis {
+            contract: annotated.erase(interner),
+            annotated,
+            findings,
+            completion: Completion::Produces,
+        }
     }
 
     /// Whether the expression is accepted — no error-level findings.
@@ -156,8 +180,29 @@ fn demand(a: &Analysis, findings: &mut Vec<Finding>) {
     findings.push(Finding { class: TrapClass::ExpectingSeat, severity, message: message.into() });
 }
 
-/// A contract environment: immutable-binding name → its contract.
-pub type TypeEnv = HashMap<String, Contract>;
+/// The annotated expression environment. Ordinary contracts inserted by older
+/// operation/fact code are lifted with `Unknown` metadata; source expressions insert
+/// their complete [`AnalysisContract`] so structure and correlation survive references.
+#[derive(Clone, Debug, Default)]
+pub struct TypeEnv(HashMap<String, AnalysisContract>);
+
+impl TypeEnv {
+    pub fn new() -> TypeEnv {
+        TypeEnv(HashMap::new())
+    }
+
+    pub fn insert(
+        &mut self,
+        name: String,
+        value: impl Into<AnalysisContract>,
+    ) -> Option<AnalysisContract> {
+        self.0.insert(name, value.into())
+    }
+
+    pub fn get(&self, name: &str) -> Option<&AnalysisContract> {
+        self.0.get(name)
+    }
+}
 
 /// Analyze a kernel expression against a contract environment.
 pub fn analyze(expr: &Expr, env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
@@ -176,12 +221,16 @@ pub(crate) fn analyze_in_world(
 ) -> Analysis {
     match expr {
         // A literal denotes exactly itself.
-        Expr::Const(v) => exact(Contract::Equals(v.clone())),
+        Expr::Const(v) => Analysis::produced_annotated(
+            AnalysisContract::of_value(v.clone()),
+            vec![],
+            interner,
+        ),
 
         // An immutable reference takes its bound contract; an unbound name is the
         // unbound-evaluation trap's compile-time mirror.
         Expr::Ref(Ref::Immutable(BindingRef::Name(name))) => match env.get(name) {
-            Some(c) => exact(c.clone()),
+            Some(c) => Analysis::produced_annotated(c.clone(), vec![], interner),
             None => Analysis::produced(
                 Contract::Top,
                 vec![Finding {
@@ -305,6 +354,8 @@ fn analyze_tuple(
     let mut findings = Vec::new();
     let mut segments: Vec<Contract> = Vec::new();
     let mut run: Vec<Contract> = Vec::new(); // the current spread-free element run
+    let mut annotated_elements = Vec::new();
+    let mut has_spread = false;
     for el in elems {
         match el {
             Element::Expr(e) => {
@@ -312,11 +363,13 @@ fn analyze_tuple(
                 demand(&r, &mut findings); // elements are expecting seats
                 findings.append(&mut r.findings);
                 run.push(r.contract);
+                annotated_elements.push(r.annotated);
             }
             // A spread must be a Tuple (E5 — else the spread-kind trap); the
             // result shape is a Concat with the spread's contract as a segment
             // (the tuple family's constructor, §1).
             Element::Spread(e) => {
+                has_spread = true;
                 let mut r = analyze_in_world(e, env, cenv, world, interner);
                 demand(&r, &mut findings); // the spread operand is an expecting seat
                 check_spread_kind(
@@ -338,7 +391,15 @@ fn analyze_tuple(
         segments.push(Contract::tuple(run, interner));
     }
     // With no spreads this normalizes straight back to the exact Tuple.
-    Analysis::produced(Contract::concat(segments, interner), findings)
+    if has_spread {
+        Analysis::produced(Contract::concat(segments, interner), findings)
+    } else {
+        Analysis::produced_annotated(
+            AnalysisContract::tuple(annotated_elements),
+            findings,
+            interner,
+        )
+    }
 }
 
 /// The spread operand's contract as a Concat segment. On the non-trapping path
@@ -361,6 +422,7 @@ fn analyze_record(
 ) -> Analysis {
     let mut findings = Vec::new();
     let mut pairs = Vec::new();
+    let mut annotated_pairs = Vec::new();
     let mut exact_shape = true;
     for field in fields {
         match field {
@@ -369,6 +431,7 @@ fn analyze_record(
                 demand(&r, &mut findings); // field values are expecting seats
                 findings.append(&mut r.findings);
                 pairs.push((key.clone(), r.contract));
+                annotated_pairs.push((key.clone(), r.annotated));
             }
             // A computed key must be a String at runtime (the computed-key trap)
             // and a **proven-finite string set** for the analyzer (E5, fork 12 = R;
@@ -404,7 +467,15 @@ fn analyze_record(
     } else {
         Contract::Top
     };
-    Analysis::produced(contract, findings)
+    if exact_shape {
+        Analysis::produced_annotated(
+            AnalysisContract::record(annotated_pairs),
+            findings,
+            interner,
+        )
+    } else {
+        Analysis::produced(contract, findings)
+    }
 }
 
 /// A template always produces a String. **Structure interpolation is total**
@@ -452,8 +523,9 @@ fn analyze_access(
     let mut findings = Vec::new();
     let ta = analyze_in_world(target, env, cenv, world, interner);
     demand(&ta, &mut findings); // the receiver is an expecting seat
+    let target_annotated = ta.annotated.clone();
+    let tc = ta.contract.clone();
     findings.extend(ta.findings);
-    let tc = ta.contract;
 
     // Analyze the index/bound subexpressions for their findings and fold values.
     let mut child = |e: &Expr, findings: &mut Vec<Finding>| -> Contract {
@@ -475,19 +547,45 @@ fn analyze_access(
     };
 
     // Try an exact fold: target and every relevant bound must be singletons.
-    let folded = match &tc {
-        Contract::Equals(tv) => fold_node(tv, form, total, idx_c.as_ref(), lo_c.as_ref(), hi_c.as_ref()),
-        _ => None,
-    };
+    let folded_target = target_annotated.singleton_value(interner);
+    let folded = folded_target.as_ref().and_then(|target| {
+        fold_node(
+            target,
+            form,
+            total,
+            idx_c.as_ref(),
+            lo_c.as_ref(),
+            hi_c.as_ref(),
+        )
+    });
     if let Some(node) = folded {
         return match eval_expr(&node, interner) {
-            Ok(Outcome::Produced(v)) => Analysis::produced(Contract::Equals(v), findings),
+            Ok(Outcome::Produced(v)) => Analysis::produced_annotated(
+                AnalysisContract::of_value(v),
+                findings,
+                interner,
+            ),
             Ok(Outcome::CompletedWithoutValue) => Analysis::produced(Contract::Top, findings),
             Err(trap) => {
                 findings.push(Finding { class: trap.class, severity: Severity::Error, message: trap.message });
                 Analysis::produced(Contract::Bottom, findings)
             }
         };
+    }
+
+    // Structural source contracts can prove an access safe without flattening their
+    // alternatives. This is the access half of AP-29: project each represented source
+    // alternative, retaining branch correlation for a later joint application.
+    let projected = match form {
+        AccessForm::Field(name) => target_annotated.project_field(name),
+        AccessForm::Index(_) => idx_c
+            .as_ref()
+            .and_then(singleton_index)
+            .and_then(|index| target_annotated.project_index(index)),
+        AccessForm::Slice { .. } => None,
+    };
+    if let Some(projected) = projected {
+        return Analysis::produced_annotated(projected, findings, interner);
     }
 
     // Open path.
@@ -497,6 +595,17 @@ fn analyze_access(
         AccessForm::Slice { .. } => analyze_slice(&tc, &mut findings, interner),
     };
     Analysis::produced(contract, findings)
+}
+
+fn singleton_index(contract: &Contract) -> Option<usize> {
+    let Contract::Equals(value) = contract else {
+        return None;
+    };
+    let number = value.as_number()?;
+    if !number.is_integer() {
+        return None;
+    }
+    number.as_ratio().numer().to_usize()
 }
 
 /// Reconstruct a closed `Access` node from singleton operand values, or `None` if
@@ -676,6 +785,7 @@ fn analyze_write(
     findings.append(&mut rhs.findings);
     Analysis {
         contract: Contract::Bottom,
+        annotated: AnalysisContract::bottom(),
         findings,
         completion: Completion::FallsThrough(CompletionWitness::Write { slot: slot.clone() }),
     }
@@ -709,17 +819,17 @@ fn analyze_apply(
 
     let ca = analyze_in_world(callee, env, cenv, world, interner);
     demand(&ca, &mut findings); // the callee is an expecting seat
-    let cc = ca.contract.clone();
+    let callee_annotated = ca.annotated.clone();
     findings.extend(ca.findings);
 
-    let mut arg_contracts: Vec<Contract> = Vec::new();
+    let mut argument_annotated: Vec<AnalysisContract> = Vec::new();
     let mut has_spread = false;
     for a in args {
         match a {
             Arg::Expr(e) => {
                 let aa = analyze_in_world(e, env, cenv, world, interner);
                 demand(&aa, &mut findings);
-                arg_contracts.push(aa.contract.clone());
+                argument_annotated.push(aa.annotated.clone());
                 findings.extend(aa.findings);
             }
             Arg::Spread(e) => {
@@ -732,30 +842,27 @@ fn analyze_apply(
         }
     }
 
-    // The expression layer supplies erased contracts; `application.rs` owns the one
-    // alternative traversal and outcome join. Each callback contribution remains
-    // fact-backed over its actual `(instance, input-domain)` pair.
-    let (operand, callees) = application::operand_from_erased(&cc, &arg_contracts, interner);
-    let mut callees = callees.into_iter();
+    // Preserve a joint source relation when every position is an immutable projection
+    // of the same correlated binding (AP-29). Otherwise form the legal projected
+    // operand from the independently analyzed positions.
+    let operand = correlated_access_operand(callee, args, env).unwrap_or_else(|| {
+        application::operand_from_annotated(&callee_annotated, &argument_annotated)
+    });
     let transfer = application::drive_application(&operand, |alternative, _| {
         analyze_application_alternative(
             alternative,
-            callees.next(),
             has_spread,
             world,
             cenv,
             interner,
         )
     });
-    debug_assert!(
-        callees.next().is_none(),
-        "every classified callee has one driver alternative"
-    );
     for mut alternative_findings in transfer.details {
         findings.append(&mut alternative_findings);
     }
     Analysis {
         contract: transfer.outcome.produced.erase(interner),
+        annotated: transfer.outcome.produced,
         findings,
         completion: completion_from_application(transfer.outcome.completion),
     }
@@ -767,7 +874,6 @@ fn analyze_apply(
 /// complete outcome plus diagnostics without performing an alternative join.
 fn analyze_application_alternative(
     alternative: &application::Alternative,
-    callee: Option<CalleeAlternative>,
     has_spread: bool,
     world: World,
     cenv: &ContractEnv,
@@ -778,15 +884,15 @@ fn analyze_application_alternative(
         .iter()
         .map(|argument| argument.erase(interner))
         .collect();
-    let callee = callee.unwrap_or_else(|| {
-        // `operand_from_erased` places one classified callee leaf in each tuple.
-        // Anything else is an unstructured/coarsened alternative, never a reason to
-        // drop an execution or manufacture a known function.
-        CalleeAlternative::UnknownFunction(alternative.callee.erase(interner))
-    });
+    let erased_callee = alternative.callee.erase(interner);
+    let classified = application::classify_callees(&erased_callee, interner);
+    let callee = match classified.as_slice() {
+        [callee] => callee.clone(),
+        _ => CalleeAlternative::UnknownFunction,
+    };
 
     match callee {
-        CalleeAlternative::NotAFunction { inhabited, .. } => {
+        CalleeAlternative::NotAFunction { inhabited } => {
             let message = if inhabited {
                 "callee is not a function"
             } else {
@@ -802,7 +908,7 @@ fn analyze_application_alternative(
                 Completion::Produces,
             )
         }
-        CalleeAlternative::UnknownFunction(_) => application_contribution(
+        CalleeAlternative::UnknownFunction => application_contribution(
             vec![Finding {
                 class: TrapClass::OperationSafety,
                 severity: Severity::Error,
@@ -822,6 +928,82 @@ fn analyze_application_alternative(
             interner,
         ),
     }
+}
+
+#[derive(Clone)]
+enum AccessProjection {
+    Index(usize),
+    Field(String),
+}
+
+/// Rebuild the exact joint relation for immutable projections of one correlated
+/// source binding. This is deliberately narrow: if any position has a different
+/// source, a spread, a total access, or a projection the structural domain cannot
+/// certify, the ordinary projected operand is used instead.
+fn correlated_access_operand(
+    callee: &Expr,
+    args: &[Arg],
+    env: &TypeEnv,
+) -> Option<AnalysisContract> {
+    let (source, callee_projection) = source_projection(callee)?;
+    let mut projections = vec![callee_projection];
+    for argument in args {
+        let Arg::Expr(expr) = argument else {
+            return None;
+        };
+        let (argument_source, projection) = source_projection(expr)?;
+        if argument_source != source {
+            return None;
+        }
+        projections.push(projection);
+    }
+
+    let source_contract = env.get(&source)?;
+    let alternatives: Vec<AnalysisContract> = match source_contract {
+        AnalysisContract::Alt(alternatives) => alternatives.clone(),
+        other => vec![other.clone()],
+    };
+    let mut operand_alternatives = Vec::with_capacity(alternatives.len());
+    for alternative in alternatives {
+        let positions = projections
+            .iter()
+            .map(|projection| match projection {
+                AccessProjection::Index(index) => alternative.project_index(*index),
+                AccessProjection::Field(name) => alternative.project_field(name),
+            })
+            .collect::<Option<Vec<_>>>()?;
+        operand_alternatives.push(AnalysisContract::tuple(positions));
+    }
+    Some(AnalysisContract::alt(operand_alternatives))
+}
+
+fn source_projection(expr: &Expr) -> Option<(String, AccessProjection)> {
+    let Expr::Access {
+        target,
+        form,
+        total: false,
+    } = expr
+    else {
+        return None;
+    };
+    let Expr::Ref(Ref::Immutable(BindingRef::Name(source))) = &**target else {
+        return None;
+    };
+    let projection = match form {
+        AccessForm::Field(name) => AccessProjection::Field(name.clone()),
+        AccessForm::Index(index) => {
+            let Expr::Const(value) = &**index else {
+                return None;
+            };
+            let number = value.as_number()?;
+            if !number.is_integer() {
+                return None;
+            }
+            AccessProjection::Index(number.as_ratio().numer().to_usize()?)
+        }
+        AccessForm::Slice { .. } => return None,
+    };
+    Some((source.clone(), projection))
 }
 
 fn analyze_known_application_alternative(
@@ -863,7 +1045,7 @@ fn analyze_known_application_alternative(
             .expect("a known closure has a body outcome");
         let completes = matches!(&observed.completion, Completion::Produces);
         let completion = callee_completion(callee, arg_contracts, completes, interner);
-        return application_contribution(findings, observed.contract, completion);
+        return application_contribution(findings, observed.annotated, completion);
     }
 
     // Candidate-graph verification may consume only the active/settled graph. Starting
@@ -890,24 +1072,32 @@ fn analyze_known_application_alternative(
     let observed = outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
         .unwrap_or_else(|| Analysis {
             contract: Contract::Top,
+            annotated: AnalysisContract::of_contract(Contract::Top),
             findings: Vec::new(),
             completion: Completion::MayFallThrough,
         });
     let completes = safety::completes(callee, arg_contracts, cenv, interner);
     let completion = callee_completion(callee, arg_contracts, completes, interner);
     let produced = if induction::is_recursive(callee) {
-        call_return(callee, arg_contracts, has_spread, cenv, interner)
+        AnalysisContract::of_contract(call_return(
+            callee,
+            arg_contracts,
+            has_spread,
+            cenv,
+            interner,
+        ))
     } else {
-        observed.contract
+        observed.annotated
     };
     application_contribution(findings, produced, completion)
 }
 
 fn application_contribution(
     findings: Vec<Finding>,
-    produced: Contract,
+    produced: impl Into<AnalysisContract>,
     completion: Completion,
 ) -> AlternativeContribution<Vec<Finding>> {
+    let produced = produced.into();
     let verdict = if findings
         .iter()
         .any(|finding| finding.severity == Severity::Error)
@@ -928,7 +1118,7 @@ fn application_contribution(
     AlternativeContribution {
         verdict,
         outcome: ApplicationOutcome {
-            produced: domain::AnalysisContract::of_contract(produced),
+            produced,
             completion,
             may_not_complete: false,
         },
@@ -1176,20 +1366,25 @@ fn analyze_match(
     let mut findings = Vec::new();
 
     // The scrutinee is evaluated once, in an expecting seat.
-    let scrut = match &m.scrutinee {
+    let (scrut, scrut_annotated) = match &m.scrutinee {
         Some(e) => {
             let a = analyze_in_world(e, env, cenv, world, interner);
             demand(&a, &mut findings);
+            let pair = (a.contract.clone(), a.annotated.clone());
             findings.extend(a.findings);
-            a.contract
+            pair
         }
-        None => Contract::Top,
+        None => (
+            Contract::Top,
+            AnalysisContract::of_contract(Contract::Top),
+        ),
     };
 
     // `body_env` accumulates Bind / Stmt bindings; each item runs against it.
     let mut body_env = env.clone();
     let mut remainder = scrut.clone();
     let mut results: Vec<Contract> = Vec::new();
+    let mut annotated_results: Vec<AnalysisContract> = Vec::new();
     let mut completions: Vec<Completion> = Vec::new();
     // Any guarded arm makes the remainder an *over*-approximation (a guard, not the
     // pattern, decides, and guards consume nothing) — so an inhabited remainder no
@@ -1202,7 +1397,14 @@ fn analyze_match(
                 let a = analyze_in_world(&b.value, &body_env, cenv, world, interner);
                 demand(&a, &mut findings); // a bind RHS is an expecting seat
                 findings.extend(a.findings);
-                analyze_bind(&b.target, &a.contract, &mut body_env, &mut findings, cenv, interner);
+                analyze_bind(
+                    &b.target,
+                    &a.annotated,
+                    &mut body_env,
+                    &mut findings,
+                    cenv,
+                    interner,
+                );
             }
             MatchItem::Stmt(e) => {
                 // A statement's value is discarded — *not* an expecting seat.
@@ -1216,6 +1418,11 @@ fn analyze_match(
                     .map(|p| pattern_contract(p, cenv, interner))
                     .unwrap_or(Contract::Top);
                 let narrowed = intersect(&remainder, &pc, interner);
+                let narrowed_annotated = domain::intersect_a(
+                    &scrut_annotated,
+                    &AnalysisContract::of_contract(narrowed.clone()),
+                    interner,
+                );
 
                 // **Dead arm** (Archive7 §11.3): its scrutinee region is already empty —
                 // a prior total arm consumed the remainder, or the pattern is disjoint
@@ -1231,7 +1438,7 @@ fn analyze_match(
                 // Arm-local environment: the outer bindings plus the pattern's.
                 let mut arm_env = body_env.clone();
                 if let Some(p) = &arm.pattern {
-                    bind_pattern(p, &narrowed, &mut arm_env);
+                    bind_pattern_annotated(p, &narrowed_annotated, &mut arm_env);
                 }
 
                 // Guard: a strict Boolean tested seat. A guard **proven false** makes the
@@ -1261,6 +1468,7 @@ fn analyze_match(
                 let ra = analyze_in_world(&arm.result, &arm_env, cenv, world, interner);
                 findings.extend(ra.findings);
                 results.push(ra.contract);
+                annotated_results.push(ra.annotated);
                 let arm_is_represented = !opaque_guard && narrowed.has_proven_inhabitant(interner);
                 completions.push(if arm_is_represented {
                     ra.completion
@@ -1284,6 +1492,11 @@ fn analyze_match(
     }
 
     let contract = union_of(results, interner);
+    let annotated = if annotated_results.is_empty() {
+        AnalysisContract::of_contract(contract.clone())
+    } else {
+        AnalysisContract::alt(annotated_results)
+    };
     completions.push(classify_remainder(
         &remainder,
         any_guarded,
@@ -1292,6 +1505,7 @@ fn analyze_match(
     ));
     Analysis {
         contract,
+        annotated,
         findings,
         completion: join_completions(&completions),
     }
@@ -1406,6 +1620,20 @@ fn contract_ref(r: &Ref, cenv: &ContractEnv, i: &mut Interner) -> Option<Contrac
 /// Bind a pattern's names to their narrowed contracts in `env` (best-effort; a
 /// name whose position is not tracked binds to `Top`).
 pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut TypeEnv) {
+    bind_pattern_annotated(
+        pat,
+        &AnalysisContract::of_contract(narrowed.clone()),
+        env,
+    );
+}
+
+/// Annotated pattern binding. Structural tuple/record positions and correlated
+/// alternatives survive into the bound names; an untracked position widens to Top.
+fn bind_pattern_annotated(
+    pat: &crate::ast::Pat,
+    narrowed: &AnalysisContract,
+    env: &mut TypeEnv,
+) {
     use crate::ast::{Pat, PatElem, PatField};
     match pat {
         Pat::Bind(name) => {
@@ -1414,15 +1642,20 @@ pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut
         Pat::Tuple(elems) => {
             for (pos, e) in elems.iter().enumerate() {
                 if let PatElem::Pat(p) = e {
-                    let sub = tuple_element(narrowed, pos);
-                    bind_pattern(p, &sub, env);
+                    let sub = narrowed
+                        .project_index(pos)
+                        .unwrap_or_else(|| AnalysisContract::of_contract(Contract::Top));
+                    bind_pattern_annotated(p, &sub, env);
                 }
             }
         }
         Pat::Record { fields, .. } => {
             for f in fields {
                 if let PatField::Field { key, pat } = f {
-                    bind_pattern(pat, &field_output(narrowed, key), env);
+                    let sub = narrowed
+                        .project_field(key)
+                        .unwrap_or_else(|| AnalysisContract::of_contract(Contract::Top));
+                    bind_pattern_annotated(pat, &sub, env);
                 }
             }
         }
@@ -1431,33 +1664,27 @@ pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut
     }
 }
 
-fn tuple_element(c: &Contract, i: usize) -> Contract {
-    match c {
-        Contract::Tuple(parts) => parts.get(i).map(|c| (**c).clone()).unwrap_or(Contract::Top),
-        _ => Contract::Top,
-    }
-}
-
 /// A destructuring `Bind` must be irrefutable (E9): its pattern always matches the
 /// value. A `Name` target always binds.
 fn analyze_bind(
     target: &crate::ast::BindTarget,
-    value: &Contract,
+    value: &AnalysisContract,
     env: &mut TypeEnv,
     findings: &mut Vec<Finding>,
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) {
     use crate::ast::BindTarget;
+    let erased = value.erase(interner);
     match target {
         BindTarget::Name(name) => {
             env.insert(name.clone(), value.clone());
         }
         BindTarget::Pattern(p) => {
             let pc = pattern_contract(p, cenv, interner);
-            if matches!(subcontract(value, &pc, interner), Verdict::Proven) {
+            if matches!(subcontract(&erased, &pc, interner), Verdict::Proven) {
                 // Irrefutable — always matches.
-            } else if disjoint(value, &pc) {
+            } else if disjoint(&erased, &pc) {
                 findings.push(Finding {
                     class: TrapClass::RefutedBinding,
                     severity: Severity::Error,
@@ -1470,8 +1697,12 @@ fn analyze_bind(
                     message: "cannot prove this destructuring binding irrefutable".into(),
                 });
             }
-            let narrowed = intersect(value, &pc, interner);
-            bind_pattern(p, &narrowed, env);
+            let narrowed = domain::intersect_a(
+                value,
+                &AnalysisContract::of_contract(pc),
+                interner,
+            );
+            bind_pattern_annotated(p, &narrowed, env);
         }
     }
 }

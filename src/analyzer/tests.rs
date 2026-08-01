@@ -2594,7 +2594,7 @@ fn a_growing_union_recursive_domain_terminates() {
 mod region {
     use super::{arm, konst, matchx, name, prim};
     use crate::analyzer::region::{region_table, select};
-    use crate::ast::{Expr, Pat, PrimOp};
+    use crate::ast::{Bind, BindTarget, Expr, MatchItem, Pat, PrimOp};
     use crate::contract::{Contract, ContractEnv};
     use crate::interner::Interner;
     use crate::rational::Rational;
@@ -2634,6 +2634,28 @@ mod region {
             matches!(rows[1].region, Contract::Top) && rows[1].exact,
             "row1 Top exact"
         );
+    }
+
+    #[test]
+    fn block_prefix_is_not_erased_into_result_only_rows() {
+        let mut i = Interner::new();
+        let one = i.integer(1);
+        let body = matchx(
+            None,
+            vec![
+                MatchItem::Bind(Bind {
+                    target: BindTarget::Name("local".into()),
+                    value: konst(one),
+                    exported: false,
+                }),
+                arm(None, None, name("local")),
+            ],
+        );
+
+        let rows = region_table(&body, "n", &cenv(), &mut i);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].exact);
+        assert_eq!(rows[0].result, body, "the local-binding prefix must remain executable");
     }
 
     #[test]

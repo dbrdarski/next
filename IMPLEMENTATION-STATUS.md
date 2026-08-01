@@ -70,10 +70,9 @@ The sixth repair completes T2.3's application-path unification. `application.rs`
 alternative traversal, AP-29/AP-30 projection weakening, and componentwise outcome join;
 `analyze_apply` analyzes operand expressions and supplies each alternative's settled safety,
 completion, and return contribution. The old inline callee loop and application-specific join are
-deleted, and a machinery gate forbids routing around `drive_application`. The current expression
-environment still carries erased `Contract`s, so the bridge keeps argument contracts opaque and
-does not falsely claim source-level annotated correlation; propagating `AnalysisContract` through
-source bindings/accesses remains owed.
+deleted, and a machinery gate forbids routing around `drive_application`. At that slice boundary the
+expression environment still carried erased `Contract`s, so its bridge kept argument contracts
+opaque and made no source-level correlation claim; the eighth repair below closes that obligation.
 
 The seventh repair makes the existing `where` return demand consume the canonical three-voice
 return judgment. A represented completing Pure call outside the declared return contract now
@@ -85,23 +84,34 @@ every checked declaration as a typed `ReturnDemand` through policy, so the two r
 receive distinct diagnostics without losing their evidence. Realized probes have an explicit
 Pure-closure guard; Effect and Mutator bodies are never executed during this check.
 
+The eighth repair carries `AnalysisContract` through the live source-expression path. `TypeEnv`,
+expression outcomes, static tuple/record construction, Match alternatives, narrowing, immutable
+bindings, and exact accesses now retain annotated structure and function-instance metadata. The
+normative AP-29 source example therefore reaches the canonical application driver as the joint
+alternatives `(numFn, 5)` and `(strFn, "hello")`, never the synthesized cross-pairs. When the
+callee and arguments are immutable projections of the same correlated source binding, the access
+adapter projects each source alternative as one tuple; unrelated projected sources retain the
+driver's legal cross-product approximation and its unproven-only failure price. Exact aggregate
+folding remains available by recovering a singleton value from annotated tuple/record structure.
+The adjacent region-table bug exposed by this test is also closed: a block-shaped Match with a
+preceding bind/statement remains one whole-body row, so safety/return/grounding consumers cannot
+discard its executable prefix and then analyze an unbound result expression.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
 1. Body-safety and executable-operation voices are still partly collapsed into findings at program
    boundaries; declared return demands now retain Proven / Refuted(witness) / Unproven through policy.
 2. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
-3. The live expression environment erases `AnalysisContract` metadata/correlation before an
-   application reaches the canonical driver; full source-level AP-24/AP-29 correlation remains owed.
-4. The repository-wide formatting gate is red (8,439 diff lines on 2026-08-01).
+3. The repository-wide formatting gate is red (measured separately below).
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
-demand's realized-refutation consumer are complete. Next is propagating `AnalysisContract` through
-source bindings/accesses so the canonical application driver receives the normative correlated
-operand. Normative files remain manifest-protected and are not edited by these implementation
-slices.
+demand's realized-refutation consumer and source-level AP-29 operand propagation are complete. Next
+is preserving the remaining body-safety and executable-operation voices through program policy
+instead of reducing them early to findings. Normative files remain manifest-protected and are not
+edited by these implementation slices.
 
 ---
 
@@ -304,11 +314,11 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **424 passed, 0 failed, 1 ignored** (exact-singleton chain) |
+| `cargo test --lib` | **426 passed, 0 failed, 1 ignored** (exact-singleton chain) |
 | `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
-| `cargo test --test machinery_gate` | **6 passed, 0 failed** |
-| `cargo clippy --all-targets` | **0 warnings** |
-| `cargo fmt --check` | **FAILED** — 8,438 formatting output lines |
+| `cargo test --test machinery_gate` | **7 passed, 0 failed** |
+| `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
+| `cargo fmt --check` | **FAILED** — 8,540 formatting output lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /

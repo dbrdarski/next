@@ -280,7 +280,10 @@ fn capture_env(callee: &ValueRef) -> TypeEnv {
     };
     for name in f.free_vars() {
         if let Some(Binding::Value(v)) = closure.env.lookup(name) {
-            env.insert(name.clone(), Contract::Equals(v));
+            env.insert(
+                name.clone(),
+                crate::analyzer::domain::AnalysisContract::of_value(v),
+            );
         }
     }
     env

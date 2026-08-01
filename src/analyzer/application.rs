@@ -176,18 +176,8 @@ pub struct Alternative {
 #[derive(Clone, Debug)]
 pub(crate) enum CalleeAlternative {
     Known(ValueRef),
-    UnknownFunction(Contract),
-    NotAFunction { contract: Contract, inhabited: bool },
-}
-
-impl CalleeAlternative {
-    fn contract(&self) -> Contract {
-        match self {
-            CalleeAlternative::Known(value) => Contract::Equals(value.clone()),
-            CalleeAlternative::UnknownFunction(contract)
-            | CalleeAlternative::NotAFunction { contract, .. } => contract.clone(),
-        }
-    }
+    UnknownFunction,
+    NotAFunction { inhabited: bool },
 }
 
 /// Classify every live leaf of an erased callee contract exactly once. `Bottom` is the
@@ -214,11 +204,10 @@ pub(crate) fn classify_callees(
             }
             _ if disjoint(contract, &Contract::Kind(Kind::Function)) => {
                 out.push(CalleeAlternative::NotAFunction {
-                    contract: contract.clone(),
                     inhabited: contract.has_proven_inhabitant(interner),
                 });
             }
-            _ => out.push(CalleeAlternative::UnknownFunction(contract.clone())),
+            _ => out.push(CalleeAlternative::UnknownFunction),
         }
     }
 
@@ -227,31 +216,47 @@ pub(crate) fn classify_callees(
     out
 }
 
-/// Bridge the current erased expression contracts into the joint-driver interface.
-/// Callee union leaves become complete tuple alternatives, while each argument remains
-/// one opaque erased leaf. This preserves the live path's behavior without pretending
-/// that source-level annotated correlation has survived the expression environment.
-pub(crate) fn operand_from_erased(
-    callee: &Contract,
-    arguments: &[Contract],
-    interner: &mut Interner,
-) -> (AnalysisContract, Vec<CalleeAlternative>) {
-    let argument_leaves: Vec<AnalysisContract> = arguments
-        .iter()
-        .cloned()
-        .map(AnalysisContract::of_contract)
-        .collect();
-    let callees = classify_callees(callee, interner);
-    let alternatives = callees
-        .iter()
+/// Form the joint application operand from annotated source positions. Callee unions
+/// become alternatives, while argument alternatives remain positional unless a caller
+/// supplies an already-correlated `Alt(Tuple(...))`. That distinction is AP-29's
+/// represented-vs-projected boundary.
+pub(crate) fn operand_from_annotated(
+    callee: &AnalysisContract,
+    arguments: &[AnalysisContract],
+) -> AnalysisContract {
+    let alternatives = callee_branches(callee)
+        .into_iter()
         .map(|callee| {
-            let mut positions = Vec::with_capacity(argument_leaves.len() + 1);
-            positions.push(AnalysisContract::of_contract(callee.contract()));
-            positions.extend(argument_leaves.iter().cloned());
+            let mut positions = Vec::with_capacity(arguments.len() + 1);
+            positions.push(callee);
+            positions.extend(arguments.iter().cloned());
             AnalysisContract::tuple(positions)
         })
         .collect();
-    (AnalysisContract::alt(alternatives), callees)
+    AnalysisContract::alt(alternatives)
+}
+
+fn callee_branches(callee: &AnalysisContract) -> Vec<AnalysisContract> {
+    match callee {
+        AnalysisContract::Bottom => Vec::new(),
+        AnalysisContract::Alt(alternatives) => alternatives
+            .iter()
+            .flat_map(callee_branches)
+            .collect(),
+        AnalysisContract::Leaf { contract, metadata } => match contract {
+            Contract::Union(left, right) => [left, right]
+                .into_iter()
+                .flat_map(|branch| {
+                    callee_branches(&AnalysisContract::leaf(
+                        (**branch).clone(),
+                        metadata.clone(),
+                    ))
+                })
+                .collect(),
+            _ => vec![callee.clone()],
+        },
+        AnalysisContract::Tuple(_) | AnalysisContract::Record(_) => vec![callee.clone()],
+    }
 }
 
 /// One alternative's contribution to the canonical application driver. The caller
