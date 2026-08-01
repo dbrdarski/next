@@ -1,5 +1,5 @@
 //! Algorithm A — eager code canonicalization of binding groups
-//! (μ-Canonicalization Spec v0.1, §2/§3/§4A).
+//! (μ-Canonicalization Specification v0.5, layer-2 template artifact).
 //!
 //! This canonicalizes a set of (possibly mutually recursive) bindings into
 //! **canonical code**: mutual references become positional **μ-refs**, the
@@ -23,8 +23,9 @@
 //! partition refinement; law 5 already gives permutation-invariance, just not
 //! slot *merging*).
 //!
-//! No runtime consumer yet — the analyzer's cache keys (C§13.4) will use this;
-//! until then it is exercised only by the MU conformance tests.
+//! The reference-SCC half has a runtime consumer: evaluator construction windows. The
+//! serialized layer-2 template returned by `canonicalize_group` remains test-only; analyzer
+//! cache keys (C§13.4) are its intended consumer.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};

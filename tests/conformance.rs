@@ -1134,9 +1134,8 @@ mod phase4 {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Phase A — Analyzer verdict suite (stubs; activates when the analyzer phase
-// opens on whole programs — the expression analyzer exists, program-level
-// verdicts and worlds do not yet).
+// Phase A — Analyzer verdict suite. Whole-program analysis and worlds now exist;
+// these broad rows remain stubs for their recorded demand/family/grounding gates.
 // ═════════════════════════════════════════════════════════════════════════════
 
 mod phase_a {
@@ -1207,6 +1206,6 @@ mod phase_a {
     #[test]
     #[ignore = "Phase A: RECOVER discharged — grids are in `next-phase-a-worked-examples-recovered.md` (verbatim from transcripts). Verification still needs the program-level analyzer (Part D recursion arc): factorial/countdown/where contract derivation, drift, fact-cycle pairs."]
     fn a_wrk_worked_example_grids() {
-        unreachable!("blocked on the transcript grids");
+        unreachable!("verification awaits the remaining recursion arc");
     }
 }

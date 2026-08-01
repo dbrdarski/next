@@ -16,9 +16,10 @@
 //! induction, C§13.2a); a query on a *different* node is genuinely settled.
 //!
 //! **The instance half of the key is the canonical shape** — `FnValue::shape()`, produced by
-//! `oracle::canon` — paired with the de-Bruijn-ordered capture contracts. Without it the key
-//! would be a closure allocation, and closures are plain allocations rather than hash-consed
-//! values, so two spellings of one function would miss each other.
+//! `oracle::canon` — paired with the de-Bruijn-ordered capture contracts. Runtime closures are
+//! universally interned, but a fact depends on the *abstract contracts* of its captures rather
+//! than only their concrete value pointers; spelling variants must therefore meet at canonical
+//! code plus those contract arguments.
 //!
 //! The shape is **interned** (`Interner::intern_code`) and the key compares it by pointer,
 //! per "every key interned pointers". Structural hashing happens once per distinct shape at
@@ -27,19 +28,17 @@
 //! pointer.
 //!
 //! **KNOWN GAP — this is the layer-1 shape, and C§13.4 specifies the layer-2 shape.**
-//! `oracle::canon` implements algorithm A (α-renaming, capture slots, polynomial NF).
-//! The μ-binder minimization — SCC grouping, positional μ-refs, canonical slot order — lives
-//! in `oracle::mu`, whose own header says it "is the layer-2 shape used by C§13.4 cache keys
-//! … it has no runtime consumer yet". This cache is not that consumer, because the join does
-//! not exist: `mu::canonicalize_group` takes `(name, Expr)` binding lists while `make_closure`
-//! builds from one `Lambda` + env and stores the raw body, so no closure knows it belongs to
-//! a group (a separate function-identity conformance gap). Law 4 (bisimulation slot merging)
-//! is absent outright.
+//! `oracle::canon` supplies α-renaming, capture slots, and polynomial NF. The separate
+//! μ-binder template — SCC grouping, positional μ-refs, and canonical slot order — lives in
+//! `oracle::mu`, but its serialized result is not yet an input to this key. Runtime value
+//! identity does not depend on that join: recursive construction closes value graphs through
+//! the interner and uses Algorithm B as the exact bucket verifier. The missing artifact here is
+//! specifically the analyzer-facing layer-2 key; law 2 and law 4 refinements are also deferred.
 //!
-//! Consequence: mutually recursive members do not share keys the way C§13.4 intends. The
-//! failure direction is **false negatives** — a missed hit, never a wrong verdict — so this
-//! is a precision and completeness gap, not a soundness one. It must be closed before the
-//! cache can be claimed conformant.
+//! Consequence: equivalent mutually recursive groups need not share keys the way C§13.4
+//! intends. The failure direction is **false negatives** — a missed hit, never a wrong verdict —
+//! so this is a precision and completeness gap, not a runtime-identity or soundness one. It must
+//! be closed before the cache can be claimed conformant.
 //!
 //! **Pure memoization.** A settled entry is a deterministic fact of the complete semantic key.
 //! Reusing the table across compilations is therefore sound. In particular, the complete

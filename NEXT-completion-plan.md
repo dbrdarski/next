@@ -9,9 +9,12 @@
 > completion witnesses through Match to the consuming seat. The only remaining lib pin is 1b
 > (exact-singleton chains). T2.3 now routes the live expression adapter through the one canonical
 > application driver. The existing `where` return-demand consumer now preserves the canonical
-> Proven / Refuted(realized witness) / Unproven judgment through program policy. Erased source
-> environments still owe full annotated correlation; that propagation is next. Older scan counts
-> and “no top / bodycheck live” passages below are historical where this delta supersedes them.
+> Proven / Refuted(realized witness) / Unproven judgment through program policy. `AnalysisContract`
+> now survives the live source environment and correlated application path; typed safety evidence
+> survives program policy; universal runtime function interning and MU-18 are complete; all measured
+> P0 gates, including repository formatting, are green. The remaining critical-path work is the
+> consumer-led breadth of T1.2 and Phase A. Older scan counts and “no top / bodycheck live” passages
+> below are historical where this delta supersedes them.
 
 # NEXT — Feature-by-feature completion plan
 
@@ -146,17 +149,12 @@ if it is to be canonical, manifested.
 
 ## TIER 1 — The spine (critical path; each step's consumer is the previous step)
 
-### T1.1 — Program-level analyzer entry point + `where` as the first demand origin
-**The missing top.** `analyze_program(module) → ProgramVerdict { accept/reject, findings }`: walk
-module items, analyze each binding's expression, and — per **E-8** — verify each `Where` as
-`BodySafe(instance, DeclaredInput)`. Author already confirmed the direction: *an explicit contract
-given by the author is the source of truth*, so `where` is the first, cleanest demand origin (its
-domain is **declared**, nothing to guess). Wire it into `main.rs` behind a check mode.
-- **Consumer:** the six Phase-A conformance rows; `main.rs`.
-- **Unblocks:** everything below — this is what originates demands.
-- **Done means:** A-VER and at least the accept/reject half of Phase A run un-ignored; `main.rs`
-  can check a file; a deliberately-trapping program is rejected.
-- *Note:* thin is fine and correct here. What it *cannot* answer becomes the demand that pulls T1.2.
+### T1.1 — ✅ COMPLETE 2026-08-01: program-level analyzer entry point + `where` origin
+`analyze_program(module) → ProgramVerdict` walks executable items, retains typed demands and
+three-voice declaration records, and checks `Where` as `BodySafe(instance, DeclaredInput)` plus its
+return claim. `main.rs --check` supplies the inert runtime prelude and a deliberately trapping
+program rejects. The six broad Phase-A rows remain gated on their own T1.2/family/grounding/lint/
+soundness work; they are no longer evidence that the program-level entry point is missing.
 
 ### T1.2 — Demand core (C§13.1) — pulled by T1.1
 Backward demand propagation to origins with three-valued adjudication; **eager preimage as the
@@ -192,7 +190,7 @@ honestly pinned at T1.4; T2.2 has since released 3.
 |---|---|---|
 | **T2.1 Grounding corrections — COMPLETE; still unwired** | The three prerequisite corrections are complete: forced recursive transitions, witness-bearing refutation, and the behavioural-judgment header correction. Wiring remains consumer-gated; do not wire merely because the implementation exists. | T1.3, A-NEG |
 | **T2.2 AP-30 + `refute` — COMPLETE 2026-08-01** | Expression completion carries structured evidence; bounded Pure-call realization mints `ApplicationWitness` only on actual `CompletedWithoutValue`; Match preserves selected-arm outcomes for the enclosing consumer; completion claims use the row partition. Blocker 3 is live. | T1.2 (seat demands), T1.4 |
-| **T2.3 Application path unification — COMPLETE 2026-08-01** | `drive_application` owns live-alternative traversal, projection weakening, and outcome joining. `analyze_apply` is the expression/fact adapter; its parallel callee loop is deleted and mechanically forbidden. The bridge intentionally keeps erased arguments opaque: propagating annotated source correlation remains a separate owed feature, not a false T2.3 claim. | T1.2 |
+| **T2.3 Application path unification — COMPLETE 2026-08-01** | `drive_application` owns live-alternative traversal, projection weakening, and outcome joining. `analyze_apply` is the expression/fact adapter; its parallel callee loop is deleted and mechanically forbidden. The later source-path repair carries `AnalysisContract` through bindings/accesses, so AP-29 correlation reaches this driver without false cross-pairs. | T1.2 |
 | **T2.4 Recursive source contracts → `RecGroup`** | Nothing live constructs `Contract::Ref`, so `contract::recursive` (and via it `length`) is dead. Building named recursive *source* contracts gives it its first real consumer. | T1.1 (`where`/named contracts) |
 | **T2.5 String-length contract form** | Tuple-family §5 lift. No string-length contract exists — this is what F0's `Add(String,String)` length lift is blocked on, and it gives `contract::length` + `grapheme` their consumer. | F0 residual |
 
@@ -208,10 +206,12 @@ honestly pinned at T1.4; T2.2 has since released 3.
   (GR-08), nonlinear measures, oscillator composition, closed-orbit refutation (GR-11), §4
   exact-singleton chains, **§8 WorldDecided classifier**, multi-param mutual; **Phase GR
   GR-01…GR-30 tests (currently zero exist)**.
-- **T3.3 μ §5/§6 canonicalizer:** universal interning at construction + group construction windows.
-  Un-ignores **MU-18** and retires the PENDING-§5 register (FE-03/04/05/06, H-05).
+- **T3.3 μ §5/§6 runtime canonicalizer — COMPLETE 2026-08-01:** universal interning at
+  construction + group construction windows. MU-18 is live; FE-03/04/05/06 and H-05 are green.
+  The separate serialized layer-2 GroupTemplate needed by C§13.4 analyzer keys remains under T3.7.
 - **T3.4 Module system (E12):** linking, module-file top-level world, store modules, duplicate-module
-  error. Un-ignores **5** conformance rows (P-27b, MOD-01/03/04/05).
+  error. MOD-01 is already live; completion un-ignores the remaining **4** rows
+  (P-27b, MOD-03/04/05).
 - **T3.5 Program-level fuel harness:** bounded `run_module` → **M-04** `DIVERGES`.
 - **T3.6 Lint tier:** goes-nowhere, discarded effect result, identity slice, redundant `?.`/`~`,
   `||`-non-Boolean, leading-minus continuation, self-prefix (A-LNT).
@@ -270,18 +270,19 @@ synthesis — *may not be resurrected by any reading*) · **Part D** (candidate,
 | Ignored tests | Count | Released by |
 |---|---|---|
 | Blocker 1b exact-singleton chain (lib) | 1 | **T3.2** |
-| Phase A (A-VER, A-ACC, A-SND, verdicts, A-LNT, A-WRK) | 6 | **T1.1** (+ T3.6 for lints, T5 for A-SND) |
+| Phase A (A-VER, A-ACC, A-SND, A-NEG, A-LNT, A-WRK) | 6 | consumer-led **T1.2** breadth and family/grounding work (+ T3.6 for lints, T5 for A-SND) |
 | MOD-03/04/05, P-27b | 4 | **T3.4** |
-| MU-18 | 1 | **T3.3** |
 | M-04 | 1 | **T3.5** |
 
 ---
 
 ## Recommended immediate order
 
-1. Carry `AnalysisContract` through source bindings/accesses so the now-live driver receives the
-   normative joint operand rather than the legal-but-projecting erased bridge.
-2. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
+1. Select the smallest concrete Phase-A consumer whose missing judgment is T1.2, and pin it red.
+2. Extend the canonical demand path only far enough to serve that consumer; do not build a standalone
+   backward-analysis framework.
+3. Pull grounding from an actual consumer, beginning with the exact-singleton-chain pin; do not wire
+   it merely because the implementation exists.
 
 *The remaining T1.2 breadth is pulled by these consumers; it is not a licence for a standalone
 backward-analysis rebuild.*

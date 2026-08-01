@@ -4419,3 +4419,14 @@ none.**
 **Verification after formatting:** 437 lib passed / 1 ignored; 113 conformance passed / 11 ignored;
 10 machinery gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative
 manifest 19/19 OK (with the manifest's pre-existing malformed-line warning).
+
+## 2026-08-01 — Post-recovery authority synchronization
+
+The recovery record had superseded several present-tense descriptions without updating them in
+place. Maintainer guidance and code comments now distinguish two μ layers: runtime value-graph
+construction/interner identity is complete (including MU-18 and MU-14/15/16), while the serialized
+Algorithm-A GroupTemplate remains partial and absent from C§13.4 analyzer keys. That remaining join
+can cost memo hits/precision but is not a runtime function-identity gap. The completion plan now marks
+T1.1, source `AnalysisContract` propagation, runtime T3.3, and the formatting gate complete; its live
+ignore register is 1 library pin plus 11 conformance rows. Phase-A headers now describe their actual
+consumer gates. No normative document or language rule changed. **`// [ask-author]`: none.**
