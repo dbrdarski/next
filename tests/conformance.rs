@@ -1139,6 +1139,55 @@ mod phase4 {
 // ═════════════════════════════════════════════════════════════════════════════
 
 mod phase_a {
+    use super::*;
+
+    /// Live A-VER subset: a boundary union rejects field access until an exhaustive
+    /// contract-pattern match narrows the receiver. This is the program-level counterpart
+    /// of E9 remainder semantics feeding the declared return demand.
+    #[test]
+    fn a_ver_union_boundary_narrowing_and_indeterminate_discharge() {
+        let contracts = "Response = {body: String}\n\
+            Result = Union(Response, Failure)\n";
+        let direct = check_source(&format!(
+            "{contracts}get where (Result) => String\n\
+             get = (data) => data.body\n"
+        ))
+        .expect("the direct-access case parses and checks")
+        .0;
+        assert!(
+            !direct.accepted(),
+            "Failure does not promise `body`, so direct access rejects"
+        );
+
+        let narrowed = check_source(&format!(
+            "{contracts}get where (Result) => String\n\
+             get = (data) => data :: {{\n\
+              Response => data.body\n\
+              Failure => \"failed\"\n\
+             }}\n"
+        ))
+        .expect("the narrowed case parses and checks")
+        .0;
+        assert!(
+            narrowed.accepted(),
+            "both exhaustive arms produce String after receiver narrowing: {narrowed:#?}"
+        );
+
+        let indeterminate = check_source(
+            "safe where (Number, Number) => Top\n\
+             safe = (a, b) => (a / b) :: {\n\
+              Indeterminate => \"undefined\"\n\
+              value => value\n\
+             }\n",
+        )
+        .expect("the Indeterminate discharge case parses and checks")
+        .0;
+        assert!(
+            indeterminate.accepted(),
+            "the ordinary Indeterminate contract arm discharges division: {indeterminate:#?}"
+        );
+    }
+
     #[test]
     #[ignore = "Phase A: program-level entry NOW EXISTS (analyzer::program::analyze_program, 2026-08-01) — this row is no longer blocked on it. Remaining: the battery body is an unreachable!() stub, and its verdicts need (a) a GRAY/third-voice verdict representation at program level, (b) drift for the recursion arc. Write it after the demand core (T1.2)."]
     fn a_neg_negative_battery() {
@@ -1182,7 +1231,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "Phase A: program-level analysis NOW EXISTS (2026-08-01). Remaining: body is an unreachable!() stub; the listed cases need per-case seat diagnostics (chain hint), exhaustiveness at program level, and union-at-boundary narrowing — none of which T1.1 supplied."]
+    #[ignore = "Phase A: program-level analysis exists, and the union-at-boundary + Indeterminate-discharge subset is live. Remaining broad-row cases include the comparison-chain hint, full exhaustiveness diagnostics, Failure-wrapper propagation, and act-kind admission over source unions."]
     fn a_ver_verdict_cases() {
         // a < b < c → REJECT with the chain hint · (a == b) == c legal iff c
         // Boolean · exhaustiveness over the E9 remainder · computed keys: finite

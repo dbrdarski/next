@@ -150,6 +150,16 @@ rewrite.
 the language implementation is complete: the ignored and staged work recorded below remains outside
 the P0 recovery set.
 
+The first post-recovery Phase-A slice activates A-VER's union-boundary and Indeterminate-discharge
+subset. `data.body` over `Union(Response, Failure)` still rejects because `Failure` does not guarantee
+that field; after an exhaustive `Response` / `Failure` contract-pattern match, the selected Response
+row now carries its field image into the declared return demand and proves `String`. The defect was in
+forward result resolution: field output recognized only a top-level exact `Record`, so the effective
+row contract `(Response ∪ Failure) ∩ Response` produced `Top` even though safety had proved the access.
+Field output now follows `Union`, `Intersection`, and `Difference` with `Bottom` for branches on which
+access cannot succeed. The direct-reject/narrowed-accept pair is live at both analyzer and conformance
+boundaries; the broad A-VER row remains ignored for its other cases.
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -252,7 +262,8 @@ Resolved by the 2026-08-01 wiring:
 - Direct tests of the deleted checker were removed with it. They tested implementation internals,
   not stable language IDs; their live application/graph counterparts remain.
 
-Conformance holds 11 `#[ignore]`s (6 Phase A · 4 module/linking · M-04). MU-18 is live and green.
+Conformance holds 11 `#[ignore]`s (6 broad Phase A · 4 module/linking · M-04). A split A-VER
+union-boundary/Indeterminate row and MU-18 are live and green.
 
 ---
 
@@ -366,8 +377,8 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **437 passed, 0 failed, 1 ignored** (exact-singleton chain) |
-| `cargo test --test conformance` | **113 passed, 0 failed, 11 ignored** (MU-18 activated) |
+| `cargo test --lib` | **438 passed, 0 failed, 1 ignored** (exact-singleton chain) |
+| `cargo test --test conformance` | **114 passed, 0 failed, 11 ignored** (A-VER subset activated) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

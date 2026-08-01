@@ -447,6 +447,29 @@ fn open_field_access_reasoning() {
     let a = analyze(&afield(name("r"), "b", false), &tenv, &nc(), &mut i);
     assert!(!a.accepted(), "safety-unproven blocks");
     assert_eq!(a.findings[0].severity, Severity::Error);
+
+    // A-VER union boundary: the union itself does not promise `body`; intersecting it
+    // with the selected Response pattern does, and the field image retains String.
+    let response = Contract::record(vec![("body".into(), Contract::Kind(Kind::String))], &mut i);
+    let failure = Contract::intersection(
+        Contract::HasField("path".into()),
+        Contract::HasField("reason".into()),
+        &mut i,
+    );
+    let result = Contract::union(response.clone(), failure, &mut i);
+    let mut union_env = TypeEnv::new();
+    union_env.insert("r".into(), result.clone());
+    let direct = analyze(&afield(name("r"), "body", false), &union_env, &nc(), &mut i);
+    assert!(!direct.accepted(), "Failure does not guarantee `body`");
+
+    let selected = Contract::intersection(result, response, &mut i);
+    union_env.insert("r".into(), selected);
+    let narrowed = analyze(&afield(name("r"), "body", false), &union_env, &nc(), &mut i);
+    assert!(narrowed.accepted(), "the Response row guarantees `body`");
+    assert!(matches!(
+        subcontract(&narrowed.contract, &Contract::Kind(Kind::String), &mut i),
+        Verdict::Proven
+    ));
 }
 
 #[test]

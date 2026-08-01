@@ -729,6 +729,48 @@ mod tests {
         );
     }
 
+    /// A-VER's union-at-boundary pair. Direct access is unsafe because `Failure` does not
+    /// guarantee `body`; after an exhaustive contract-pattern match, the `Response` arm has the
+    /// narrowed receiver and both arms produce String. The return demand must consume that
+    /// same arm-local analysis rather than re-summarizing an erased whole body.
+    #[test]
+    fn a_union_receiver_rejects_until_an_exhaustive_match_narrows_it() {
+        const CONTRACTS: &str = "Response = {body: String}\n\
+            Result = Union(Response, Failure)\n";
+
+        let (direct, _) = check(&format!(
+            "{CONTRACTS}get where (Result) => String\n\
+             get = (data) => data.body\n"
+        ));
+        assert!(
+            !direct.accepted(),
+            "the Failure alternative makes direct `.body` unsafe"
+        );
+        assert!(
+            direct
+                .findings
+                .iter()
+                .any(|finding| finding.class == TrapClass::AbsentField),
+            "the rejection must retain the field-access demand: {direct:?}"
+        );
+
+        let (narrowed, _) = check(&format!(
+            "{CONTRACTS}get where (Result) => String\n\
+             get = (data) => data :: {{\n\
+              Response => data.body\n\
+              Failure => \"failed\"\n\
+             }}\n"
+        ));
+        assert!(
+            narrowed.accepted(),
+            "the exhaustive match discharges `.body` in the Response arm: {narrowed:#?}"
+        );
+        assert!(matches!(
+            narrowed.return_demands[0].verdict,
+            ClaimVerdict::Proven
+        ));
+    }
+
     /// A fact depends on every named contract its function body reads. Reusing one pure
     /// memo table is sound only when that dependency is part of the semantic key: changing
     /// `N` changes which arm is reachable even though the canonical function body, value

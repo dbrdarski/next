@@ -168,6 +168,12 @@ the broader backward propagation remains partial.
 - **Done means:** a demand registered at an operation reaches the parameter origin and is
   adjudicated there; the `where`-declared contract is the truth checked against.
 
+**First post-recovery consumer slice (2026-08-01):** A-VER's union-at-boundary pair is live.
+The declared return demand now retains a field's produced contract through an exhaustive
+contract-pattern row: direct access on `Response ∪ Failure` rejects, while the Response arm's
+effective intersection proves `body : String`. The Indeterminate-discharge acceptance case is live
+beside it. This closes one forward-resolution loss; it does not claim the remaining T1.2 origins.
+
 ### T1.3 — ✅ COMPLETE: domain-indexed safety facts `BodySafe(instance, I)` (C§13.2a)
 The **safety** analogue of the existing return facts, settled by the **kept** `joint_vector_pass`
 induction. `I` comes from the demand (T1.2) — which is exactly why F3-before-F2 would have had to

@@ -4430,3 +4430,24 @@ can cost memo hits/precision but is not a runtime function-identity gap. The com
 T1.1, source `AnalysisContract` propagation, runtime T3.3, and the formatting gate complete; its live
 ignore register is 1 library pin plus 11 conformance rows. Phase-A headers now describe their actual
 consumer gates. No normative document or language rule changed. **`// [ask-author]`: none.**
+
+## 2026-08-01 — Post-recovery Phase A slice 1: union-boundary field resolution
+
+**Red boundary:** with `Result = Union(Response, Failure)`, direct `data.body` correctly rejected,
+and body safety proved after an exhaustive `Response` / `Failure` match, but the declared
+`String` return remained Unproven. The selected Response row reached result analysis as the effective
+contract `(Result ∩ Response)`. Field safety could prove that intersection had `body`; field output
+recognized only a top-level `Record` and returned `Top`, so the return demand lost the very narrowing
+that discharged safety.
+
+**Consumer-led repair:** successful field output is now a forward image over the existing contract
+constructors. Union joins branch images; Intersection combines simultaneous field constraints;
+Difference conservatively uses its base image; a branch on which access cannot succeed contributes
+Bottom; open record information contributes Top. No demand is pushed backward, no region is grown,
+and no reaching/fixpoint machinery was added. The program-level direct-reject/narrowed-accept pair is
+green, and a live A-VER conformance subset also pins ordinary `Indeterminate` pattern discharge.
+The broad A-VER row remains ignored for its remaining independent cases. **`// [ask-author]`: none.**
+
+**Verification:** 438 lib passed / 1 ignored; 114 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK (with the manifest's pre-existing malformed-line warning).

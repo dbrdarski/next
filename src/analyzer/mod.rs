@@ -774,7 +774,7 @@ fn analyze_field(
     interner: &mut Interner,
 ) -> Contract {
     let has_field = Contract::HasField(name.to_string());
-    let output = field_output(tc, name);
+    let output = field_output(tc, name, interner);
     let null = Contract::Kind(Kind::Null);
 
     if matches!(subcontract(tc, &has_field, interner), Verdict::Proven) {
@@ -813,15 +813,63 @@ fn analyze_field(
     output
 }
 
-/// The contract of field `name` if the receiver is an exact record naming it.
-fn field_output(tc: &Contract, name: &str) -> Contract {
+/// The values a successful field access can produce.
+///
+/// A selected Match row carries the effective input as an intersection such as
+/// `(Response ∪ Failure) ∩ Response`. Looking only for a top-level `Record` loses the
+/// contract of `body` at exactly the boundary where the pattern proved it. Projection
+/// therefore follows the ordinary set constructors: union joins branch images,
+/// intersection combines simultaneous field constraints, and difference can safely use
+/// its base image. A branch on which the access cannot succeed contributes `Bottom`;
+/// an open record constraint contributes `Top`.
+fn field_output(tc: &Contract, name: &str, interner: &mut Interner) -> Contract {
     match tc {
+        Contract::Bottom => Contract::Bottom,
+        Contract::Equals(value) => value
+            .as_record()
+            .and_then(|entries| {
+                let key: Vec<u16> = name.encode_utf16().collect();
+                entries
+                    .iter()
+                    .find(|entry| entry.key == key)
+                    .map(|entry| Contract::Equals(entry.value.clone()))
+            })
+            .unwrap_or(Contract::Bottom),
         Contract::Record(fields) => fields
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, c)| (**c).clone())
-            .unwrap_or(Contract::Top),
-        _ => Contract::Top,
+            .unwrap_or(Contract::Bottom),
+        Contract::Union(left, right) => union_of(
+            vec![
+                field_output(left, name, interner),
+                field_output(right, name, interner),
+            ],
+            interner,
+        ),
+        Contract::Intersection(left, right) => intersect(
+            &field_output(left, name, interner),
+            &field_output(right, name, interner),
+            interner,
+        ),
+        Contract::Difference(base, _) => field_output(base, name, interner),
+        Contract::Kind(
+            Kind::Boolean | Kind::Function | Kind::Null | Kind::Number | Kind::String | Kind::Tuple,
+        )
+        | Contract::Indeterminate(_)
+        | Contract::Range(..)
+        | Contract::Greater(_)
+        | Contract::GreaterEq(_)
+        | Contract::Less(_)
+        | Contract::LessEq(_)
+        | Contract::Mod { .. }
+        | Contract::Geo { .. }
+        | Contract::Tuple(_)
+        | Contract::Concat(_)
+        | Contract::LengthRestricted(..) => Contract::Bottom,
+        Contract::Top | Contract::Kind(Kind::Record) | Contract::HasField(_) | Contract::Ref(_) => {
+            Contract::Top
+        }
     }
 }
 
