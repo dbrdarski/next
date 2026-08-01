@@ -321,6 +321,53 @@ mod tests {
         assert!(v.accepted(), "a named contract resolves as the declared domain: {:?}", v.findings);
     }
 
+    /// A fact depends on every named contract its function body reads. Reusing one pure
+    /// memo table is sound only when that dependency is part of the semantic key: changing
+    /// `N` changes which arm is reachable even though the canonical function body, value
+    /// captures, call input, and claim are otherwise identical.
+    #[test]
+    fn fact_memo_records_named_contract_dependencies() {
+        const SAFE: &str = "N = String\n\
+            f where (Number) => Number\n\
+            f = (x) => x :: {\n\
+             N => 1 + \"s\"\n\
+             _ => 1\n\
+            }\n";
+        const UNSAFE: &str = "N = Number\n\
+            f where (Number) => Number\n\
+            f = (x) => x :: {\n\
+             N => 1 + \"s\"\n\
+             _ => 1\n\
+            }\n";
+
+        super::super::factcache::clear();
+        let mut interner = Interner::new();
+        let safe = crate::oracle::harness::check_source_in(SAFE, &mut interner)
+            .expect("safe variant parses and checks");
+        assert!(safe.accepted(), "String does not select the trapping arm: {safe:?}");
+        let unsafe_variant = crate::oracle::harness::check_source_in(UNSAFE, &mut interner)
+            .expect("unsafe variant parses and checks");
+        assert!(
+            !unsafe_variant.accepted(),
+            "Number selects the trapping arm; a fact for N=String must not be reused: \
+             {unsafe_variant:?}"
+        );
+
+        // The reverse order catches the symmetric stale-refutation failure mode too.
+        super::super::factcache::clear();
+        let mut interner = Interner::new();
+        let unsafe_variant = crate::oracle::harness::check_source_in(UNSAFE, &mut interner)
+            .expect("unsafe variant parses and checks");
+        assert!(!unsafe_variant.accepted(), "the unsafe variant rejects from a cold memo");
+        let safe = crate::oracle::harness::check_source_in(SAFE, &mut interner)
+            .expect("safe variant parses and checks");
+        assert!(
+            safe.accepted(),
+            "a refutation for N=Number must not be reused when N=String: {safe:?}"
+        );
+        super::super::factcache::clear();
+    }
+
     /// The declared **return** contract is now checked (demand core, C§13.1). This test
     /// previously asserted the opposite — that the contract was recorded but unverified —
     /// and it is the flip that slice was written to produce.

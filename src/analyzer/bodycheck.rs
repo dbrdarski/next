@@ -429,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "blocker 2b: mutual/helper domain-changing recursion accepted silently (false accept) — PARKED. Blocker: NOT 'build Algorithm A' — oracle/mu.rs ALREADY computes SCC grouping + positional mu-refs + law 5 slot order, but is #![allow(dead_code)] with no runtime consumer. The gap is the JOIN: mu::canonicalize_group takes (name, Expr) binding lists, while make_closure (eval.rs:239) builds closures from one Lambda + env and stores the RAW body, so no closure knows it is a group member and a mutual partner stays an ordinary capture. Law 4 (bisimulation slot merging) is also genuinely absent"]
+    #[ignore = "blocker 2b: mutual/helper domain-changing recursion accepted silently (false accept) — PARKED. Actual blocker: ordinary application is still wired to this quarantined body_summary path instead of the candidate graph, which already discovers and rejects the mutual trap by chasing closure captures. The missing mu construction join is a separate function-identity conformance gap, not this safety blocker's cause"]
     fn mutual_domain_changing_recursion_is_caught() {
         // f(0) → g("x") → f("x") → "x" + 1 traps. f's closure follows syntactic self-calls
         // only, so the helper edge into the trapping f row is never added.

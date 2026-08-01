@@ -22,9 +22,9 @@
 //!
 //! The shape is **interned** (`Interner::intern_code`) and the key compares it by pointer,
 //! per "every key interned pointers". Structural hashing happens once per distinct shape at
-//! closure construction, never per lookup. The capture and input contracts are still compared
-//! structurally — contracts are not interned anywhere in this implementation, which is a
-//! separate and larger gap against the same rule, recorded here rather than fixed.
+//! closure construction, never per lookup. Value-capture, named-contract-environment, input,
+//! and demanded-return contracts are interned too, so every semantic component compares by
+//! pointer.
 //!
 //! **KNOWN GAP — this is the layer-1 shape, and C§13.4 specifies the layer-2 shape.**
 //! `oracle::canon` implements algorithm A (α-renaming, capture slots, polynomial NF).
@@ -33,17 +33,19 @@
 //! … it has no runtime consumer yet". This cache is not that consumer, because the join does
 //! not exist: `mu::canonicalize_group` takes `(name, Expr)` binding lists while `make_closure`
 //! builds from one `Lambda` + env and stores the raw body, so no closure knows it belongs to
-//! a group (the obstacle already recorded in blocker 2b's pin). Law 4 (bisimulation slot
-//! merging) is absent outright.
+//! a group (a separate function-identity conformance gap). Law 4 (bisimulation slot merging)
+//! is absent outright.
 //!
 //! Consequence: mutually recursive members do not share keys the way C§13.4 intends. The
 //! failure direction is **false negatives** — a missed hit, never a wrong verdict — so this
 //! is a precision and completeness gap, not a soundness one. It must be closed before the
 //! cache can be claimed conformant.
 //!
-//! **Scope: per-compilation.** The cache lives for one analysis run and is not persisted, so
-//! the namespace/versioning regime C§13.4 requires for durable entries does not apply yet.
-//! Unproven entries are per-compilation *by construction* rather than by policy.
+//! **Pure memoization.** A settled entry is a deterministic fact of the complete semantic key.
+//! Reusing the table across compilations is therefore sound. In particular, the complete
+//! named-contract environment is an explicit key argument: the same shape under `N = String`
+//! and `N = Number` is not the same fact. A compilation-bound clear would only hide an omitted
+//! dependency; it cannot make an incomplete key correct.
 //!
 //! **Only top-level settlements are cached.** A settlement running inside another one sees
 //! ambient hypotheses, so its verdict is hypothesis-relative and must not be recorded as a
@@ -55,21 +57,40 @@ use std::collections::HashMap;
 use crate::analyzer::induction::Claim;
 use crate::analyzer::safety::BodySafety;
 use crate::ast::Lambda;
-use crate::contract::Contract;
+use crate::contract::{Contract, ContractEnv};
 use crate::intern::Interned;
 use crate::interner::Interner;
 use crate::value::ValueRef;
 
 /// A fact node: (analysis instance, row-set `I`, demanded `C`).
 ///
-/// The instance is `(canonical shape, capture contracts)`; the claim carries the demanded
-/// contract for a return fact and is the discriminator for safety/completion facts.
+/// The instance is `(canonical shape, value-capture contracts)`. The complete named-contract
+/// environment is a further analyzer input until named contracts become ordinary annotated
+/// captures. The claim carries the demanded contract for a return fact and is the discriminator
+/// for safety/completion facts.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct FactKey {
     shape: Interned<Lambda>,
     captures: Vec<Interned<Contract>>,
+    named_contracts: Interned<NamedContractEnvironment>,
     input: Vec<Interned<Contract>>,
-    claim: Claim,
+    claim: MemoClaim,
+}
+
+/// A canonical snapshot of `ContractEnv`. Sorting removes `HashMap` iteration order; interning
+/// makes the fact key itself compare one pointer. Including the complete environment is a
+/// conservative dependency key: an unrelated binding may cost a hit, but can never reuse a fact
+/// under a different meaning of a referenced contract such as `N`.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct NamedContractEnvironment(Vec<(String, Interned<Contract>)>);
+
+/// The claim component of a memo key. A demanded return contract is interned just like
+/// every other contract in the key; safety and completion are nullary discriminators.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum MemoClaim {
+    Safety,
+    Return(Interned<Contract>),
+    Completes,
 }
 
 /// What the cache knows about a node.
@@ -94,6 +115,7 @@ pub(crate) fn key(
     callee: &ValueRef,
     args: &[Contract],
     claim: &Claim,
+    cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> Option<FactKey> {
     let f = callee.as_fn()?;
@@ -109,8 +131,28 @@ pub(crate) fn key(
         })
         .collect();
     let captures = capture_terms.into_iter().map(|c| interner.contract(c)).collect();
+    let mut named_contracts: Vec<(&String, &Contract)> = cenv.iter().collect();
+    named_contracts.sort_by_key(|(name, _)| *name);
+    let named_contracts = NamedContractEnvironment(
+        named_contracts
+            .into_iter()
+            .map(|(name, contract)| (name.clone(), interner.contract(contract.clone())))
+            .collect(),
+    );
+    let named_contracts = interner.intern_enum(named_contracts);
     let input = args.iter().map(|c| interner.contract(c.clone())).collect();
-    Some(FactKey { shape: f.shape_rc(), captures, input, claim: claim.clone() })
+    let claim = match claim {
+        Claim::Safety => MemoClaim::Safety,
+        Claim::Return(c) => MemoClaim::Return(interner.contract(c.clone())),
+        Claim::Completes => MemoClaim::Completes,
+    };
+    Some(FactKey {
+        shape: f.shape_rc(),
+        captures,
+        named_contracts,
+        input,
+        claim,
+    })
 }
 
 /// What is known about `key`, if anything.
@@ -149,13 +191,8 @@ pub(crate) fn finish(key: &FactKey, verdict: &BodySafety) {
     });
 }
 
-/// Drop everything. The cache is per-compilation; tests that build several programs in one
-/// process are several compilations.
-///
-/// Unused today: `analyze_program` is a single compilation per process and the entries are
-/// keyed by canonical shape + captures, so cross-program collisions do not arise. Kept
-/// because a driver that checks several modules in one process needs it, and finding out
-/// then is worse than having it now.
+/// Drop everything for test isolation or explicit memory reclamation. Correctness does not
+/// depend on clearing: settled entries are facts of complete semantic keys.
 #[allow(dead_code)]
 pub(crate) fn clear() {
     CACHE.with(|c| c.borrow_mut().clear());
@@ -225,8 +262,9 @@ mod tests {
             "same code, so one shape"
         );
         let args = [Contract::Top];
-        let ka = key(&a, &args, &Claim::Safety, &mut i).expect("keyed");
-        let kb = key(&b, &args, &Claim::Safety, &mut i).expect("keyed");
+        let cenv = ContractEnv::new();
+        let ka = key(&a, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
+        let kb = key(&b, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
         assert_ne!(ka, kb, "different captures are different fact nodes");
     }
 }
@@ -334,8 +372,9 @@ mod interning_tests {
         let mut i = Interner::new();
         let g = f("g = (n) => n + 1\ng", &mut i);
         let args = [Contract::Kind(Kind::Number)];
-        let ka = key(&g, &args, &Claim::Safety, &mut i).expect("keyed");
-        let kb = key(&g, &args, &Claim::Safety, &mut i).expect("keyed");
+        let cenv = ContractEnv::new();
+        let ka = key(&g, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
+        let kb = key(&g, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
         assert_eq!(ka, kb, "same node, same key");
     }
 
@@ -346,8 +385,54 @@ mod interning_tests {
         let mut i = Interner::new();
         let g = f("g = (n) => n + 1\ng", &mut i);
         let args = [Contract::Kind(Kind::Number)];
-        let ka = key(&g, &args, &Claim::Safety, &mut i).expect("keyed");
-        let kb = key(&g, &args, &Claim::Completes, &mut i).expect("keyed");
+        let cenv = ContractEnv::new();
+        let ka = key(&g, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
+        let kb = key(&g, &args, &Claim::Completes, &cenv, &mut i).expect("keyed");
         assert_ne!(ka, kb);
+    }
+
+    /// The contract environment is not ambient metadata: a named contract read by the
+    /// root or a statically reachable helper is an argument to the analysis fact.
+    #[test]
+    fn named_contract_environment_is_part_of_fact_identity() {
+        let mut i = Interner::new();
+        let f = f(
+            "g = (x) => x :: {\n N => 1 + \"s\"\n _ => 1\n }\n\
+             f = (x) => g(x)\n\
+             f",
+            &mut i,
+        );
+        let args = [Contract::Kind(Kind::Number)];
+        let strings = ContractEnv::from([("N".to_string(), Contract::Kind(Kind::String))]);
+        let numbers = ContractEnv::from([("N".to_string(), Contract::Kind(Kind::Number))]);
+
+        let string_key = key(&f, &args, &Claim::Safety, &strings, &mut i).expect("keyed");
+        let same_string_key = key(&f, &args, &Claim::Safety, &strings, &mut i).expect("keyed");
+        let number_key = key(&f, &args, &Claim::Safety, &numbers, &mut i).expect("keyed");
+
+        assert_eq!(string_key, same_string_key, "same contract dependency, same fact");
+        assert_ne!(
+            string_key, number_key,
+            "changing helper pattern N from String to Number changes the root fact"
+        );
+    }
+
+    /// `ContractEnv` is a `HashMap`, whose iteration order is not semantic. Canonical sorting
+    /// must produce one interned environment pointer for the same bindings in any insert order.
+    #[test]
+    fn named_contract_environment_order_does_not_change_fact_identity() {
+        let mut i = Interner::new();
+        let g = f("g = (n) => n + 1\ng", &mut i);
+        let args = [Contract::Kind(Kind::Number)];
+        let mut first = ContractEnv::new();
+        first.insert("N".to_string(), Contract::Kind(Kind::String));
+        first.insert("M".to_string(), Contract::Kind(Kind::Number));
+        let mut reversed = ContractEnv::new();
+        reversed.insert("M".to_string(), Contract::Kind(Kind::Number));
+        reversed.insert("N".to_string(), Contract::Kind(Kind::String));
+
+        let first_key = key(&g, &args, &Claim::Safety, &first, &mut i).expect("keyed");
+        let reversed_key = key(&g, &args, &Claim::Safety, &reversed, &mut i).expect("keyed");
+        assert_eq!(first_key, reversed_key, "map insertion order is not fact identity");
     }
 }

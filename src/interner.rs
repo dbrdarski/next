@@ -43,6 +43,16 @@ impl Interner {
         vref
     }
 
+    /// The canonical handle for implementation enums and other immutable analyzer keys.
+    /// Concrete public constructors below keep ordinary callers type-specific; this generic
+    /// entry is crate-local for key components such as the named-contract environment.
+    pub(crate) fn intern_enum<T: std::any::Any + std::hash::Hash + Eq + Clone>(
+        &mut self,
+        value: T,
+    ) -> Interned<T> {
+        self.enums.intern(value)
+    }
+
     /// The canonical `Rc` for a function shape, creating it if absent.
     ///
     /// Structural hashing happens **once per distinct shape at closure construction**,
@@ -50,7 +60,7 @@ impl Interner {
     /// whole point of the interning model, and the reason a cache key can be a small tuple
     /// of pointers rather than a walk over a syntax tree.
     pub fn intern_code(&mut self, code: Lambda) -> Interned<Lambda> {
-        self.enums.intern(code)
+        self.intern_enum(code)
     }
 
     /// The canonical handle for a contract.
@@ -60,7 +70,7 @@ impl Interner {
     /// contract trees. Structural hashing happens once, here; every later comparison is a
     /// pointer test.
     pub fn contract(&mut self, c: Contract) -> Interned<Contract> {
-        self.enums.intern(c)
+        self.intern_enum(c)
     }
 
     /// Distinct interned terms of `T` — for tests and diagnostics.

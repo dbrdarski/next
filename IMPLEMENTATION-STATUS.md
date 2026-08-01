@@ -12,6 +12,34 @@ below. Design authority remains entirely with the manifest-verified normative sp
 `SUPERSEDED` (contains guidance that must not be followed) · `KNOWN UNSOUND` (code that can return
 a wrong verdict).
 
+### Recovery rebaseline — 2026-08-01
+
+Recovery starts from measured behavior, not from the last completion claim. The first code repair is
+now complete: the proven-fact memo key previously recorded value captures and call inputs, but not the
+named contracts that the function body reads from `ContractEnv`. The same canonical body containing a
+pattern `N => ...` therefore collided under `N = String` and `N = Number`. The key now records the
+complete named-contract environment as a canonical interned key argument, and both memo orders are
+regression-tested. This was an **incomplete pure-memoization key**, not a mutable-cache or
+cache-lifetime problem. Clearing the memo between compilations only hid the missing dependency.
+
+Other measured P0 implementation drift, to be recovered in authority order:
+
+1. `--check` asks only the demands created by `where`; executable top-level statements are not checked.
+2. Function construction is not universally interned, while equality uses a separate coinductive path;
+   operation transfer also assumes an unsound singleton function instance.
+3. Runtime division still constructs the old generic `_ / 0` form. The 2026-07-27 ruling requires
+   specific `a/0` identity and the umbrella `Numeric = Number ∪ ZeroDen` contract.
+4. Recursive application is still wired through the quarantined `bodycheck` path even though the fact
+   graph exists.
+5. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
+   remaining typed verdicts until policy is applied.
+6. The repository-wide formatting gate is red (8,602 diff lines on 2026-08-01).
+
+**Recovery order:** complete and test the memo key; restore the ruled oracle/value semantics; add typed
+program demands (including executable statements); wire ordinary application to settled facts and retire
+the quarantined checker; only then advance Phase A. Normative files remain manifest-protected and are not
+edited by these implementation slices.
+
 ---
 
 ## 1. Normative specifications — CURRENT (design authority)
@@ -36,7 +64,7 @@ noted so no one implements a phantom; correcting them is an author/design action
 |---|---|---|
 | region-table §6 / §11 | describes a "separate, deliberately small specification" deriving `InferredAcceptedDomain` | **Dissolved** by the 2026-07-24 erratum (compendium Appendix M): no accepted-domain object exists |
 | region-table header | title says patch 0.3.1; body describes 0.3.2 | body is the later text |
-| compendium C§7 | generic `x/0 → Indeterminate(_/0)` marker model | a **later ruling** (`HANDOVER-indeterminate-…-2026-07-24.md` Part XI, 2026-07-27) adopts specific `a/0` identity + `Numeric`; **not yet carried into any spec** — unresolved, author-owned |
+| compendium C§7 | generic `x/0 → Indeterminate(_/0)` marker model | the later manifest-governed ruling (`HANDOVER-indeterminate-…-2026-07-24.md` Part XI, 2026-07-27) adopts specific `a/0` identity + the umbrella `Numeric` contract. The core text is stale; the ruling is settled and implementation drift must follow it |
 | grounding v0.5 header | "DRAFT … nothing herein is closed until stamped" | compendium 1.0.18 records it DESIGN-CLOSED; the stamp record itself is **not present** — author-owned |
 
 ---
@@ -75,7 +103,7 @@ treated as a settled judgment, and no new work may be layered on them.
 | `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT, not yet wired** | Discovery closure (candidates + edges, **no verification during discovery**) → SCC collapse → reverse-topological → **one joint vector pass** per component, with §5's partition rule as each member's verification. Finiteness = C§13.3(2)'s shape cutoff + domain-covering reuse, **not** a budget. Measured: mutual `f→g→f` **Refuted**; `countDown` over its declared domain **Proven**; a divergent body **Proven and terminating**; an uncovered concrete chain **cut off, not expanded**. **Not the wired path** — `analyze_apply` still calls `bodycheck::body_summary`, which is why nine pins are unmoved |
 | `oracle::mu` — **Algorithm A group canonicalization** | **BUILT but UNWIRED** (`#![allow(dead_code)]`) | SCC grouping (Tarjan over the binding-reference graph), positional μ-refs `⟨d,i⟩`, law 1/3 (only genuine cycles become groups), law 5 canonical slot order. Its own header: *"No runtime consumer yet."* **Deferred inside it: law 2 (nested-binder merge) and law 4 (bisimulation slot merging / partition refinement — spec step 3)**, on which the MU-14/15/16 identity claims rest |
 | `oracle::canon` — per-lambda shape | **BUILT, wired** | α-renaming (`$0`), capture slots (`@cap0`), polynomial NF. This is what `make_closure` (`eval.rs:239`) actually calls |
-| **The join between them** | **MISSING — this is 2b's real blocker** | `mu::canonicalize_group` takes `(name, Expr)` binding lists; `make_closure` builds closures from a single `Lambda` + env and stores the **raw** body. So no constructed closure knows it belongs to a μ-group, and a mutual partner remains an ordinary *capture* rather than a μ-ref. The group structure is computed and discarded |
+| **The join between them** | **MISSING — function-identity conformance gap** | `mu::canonicalize_group` takes `(name, Expr)` binding lists; `make_closure` builds closures from a single `Lambda` + env and stores the **raw** body. So no constructed closure knows it belongs to a μ-group, and a mutual partner remains an ordinary *capture* rather than a μ-ref. The group structure is computed and discarded. This does **not** explain blocker 2b: the live application path still bypasses the candidate graph entirely |
 | `analyzer::induction` pipeline — candidate discovery, domain derivation (`obligation::accepted_domain`, a **dissolved** concept), `summarize_instance` consumption, same-arity domain propagation (marked interim), candidate-to-candidate-only edges | **NON-AUTHORITATIVE** | Not a ready foundation. **Its independently valid SCC utilities (e.g. `scc_reverse_topo`, the reverse-topological order) may be reused.** There is **no** authorized broad replace-and-rebuild project |
 
 **Not quarantined** (trusted): the lexer, parser, desugar, oracle interpreter, normalization harness,
@@ -93,7 +121,7 @@ them still fail is exactly when someone reaches for machinery to close the gap.
 
 | Gate | How it fails | Its actual blocker |
 |---|---|---|
-| **2b** mutual/helper domain-changing recursion (**false acceptance**, reports `[]`) | `f → g → f`: the loop is discoverable only by chasing name → value → body, so the changed domain never returns to `f`'s trapping row | **μ-canonicalization Algorithm A** — the group/SCC layer. In canonical μ-form the pair is **one group** with entry slots and the mutual edge is a **μ-marker**, structurally visible. `canon.rs`'s own header says this layer "ships with the analyzer"; it has not |
+| **2b** mutual/helper domain-changing recursion (**false acceptance**, reports `[]`) | `f → g → f`: the quarantined body checker follows its own coarse recursion path and misses the changed-domain re-entry | **T1.4 application wiring** — ordinary application still calls `bodycheck::body_summary` instead of settling the already-built global candidate graph. The graph can discover the helper edge by chasing closure captures; μ-canonicalization remains a separate identity/conformance gap |
 | **1b** coarse recursive target (**false rejection**) | `bodycheck.rs:213` binds the parameter to the **row region**, so `x-1` becomes "anything above −1" | **RE-FILED 2026-07-31 (oracle-verified): grounding §4 exact-singleton fact chains** — *not* the fact graph. `f(0.5)` genuinely **traps**, and `0.5` sits in the **same row** as `1`, so `BodySafe(f, {row x>0})` is **false**. No row-set-keyed fact can prove `f(1)` safe; it needs the exact chain `1 → 0`, a domain finer than a row |
 | **2a** multi-parameter domain-changing recursion (**false acceptance**, reports `[]`) | no multi-parameter branch map, so the whole-body fallback **cuts** the recursion and never sees `a` become a String | **region-table §5** (argument-tuple projection), plus the same fact bound |
 | **3** recursive fall-through completion lost (reports `Produces`) | the cycle assumption *asserts* `completion: Produces` rather than settling it | **completion carried on the fact** (the same fact layer as 1b) — not canonicalization |
@@ -165,7 +193,7 @@ reported, not merely the outcome. If a check fires, the fix is never to relax it
 yields `unproven`, never another prerequisite and never a growth loop.
 
 
-### T1.4 (the wiring) — ATTEMPTED 2026-08-01, REVERTED. Gated on a per-node in-progress key.
+### T1.4 (the wiring) — ATTEMPTED 2026-08-01, REVERTED. Memo-key containment first.
 
 The swap of `analyze_apply` off `bodycheck::body_summary` and onto the settled facts was
 attempted and reverted whole. All three inputs now exist (`safety::prove` for findings,
@@ -181,11 +209,12 @@ trap. Measured effect: 10 lib failures, of which
 `safety::graph_tests::mutual_recursion_closes_via_the_joint_vector_pass` reported **Proven
 where it must refute** — a false accept, the dangerous direction.
 
-**What it needs:** the in-progress key must be the fact node `(instance, I)`, not a global
-flag — so a member resolves through its hypothesis (vector induction, correct) while a
-non-member is genuinely verified. That is C§13.4's proven-fact cache keyed
-`(analysis instance, row-set I, demanded C)`, and the quarantined `bodycheck` carried the
-weaker per-callee form of it in its `ACTIVE` stack.
+**What it needs:** the in-progress key must be the complete fact node, not a global flag — so a
+member resolves through its hypothesis (vector induction, correct) while a non-member is genuinely
+verified. The first implementation added `(canonical shape, value-capture contracts, I, C)` but
+omitted **named-contract dependencies read by the shape**. Therefore `N = String` and `N = Number`
+can collide for a body containing `N => ...`. Recovery first completes that pure memoization key;
+cache scope or an explicit clear cannot repair semantic aliasing.
 
 **Consequence for ordering:** C§13.4's fact cache moves *before* T1.4, not after. The
 canonicalizer lands with that cache (it is the key's consumer), so the two travel together.
@@ -238,10 +267,11 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **410 passed, 0 failed, 10 ignored** (4 parked blockers + 6 pinned false positives) |
+| `cargo test --lib` | **413 passed, 0 failed, 10 ignored** (4 parked blockers + 6 pinned false positives) |
 | `cargo test --test conformance` | **111 passed, 0 failed, 13 ignored** |
 | `cargo test --test machinery_gate` | **4 passed, 0 failed** |
 | `cargo clippy --all-targets` | **0 warnings** |
+| `cargo fmt --check` | **FAILED** — 8,602 formatting diff lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409) are

@@ -3935,3 +3935,44 @@ machinery-gate checks pass; the four pinned blockers and the six pinned false po
 and were re-checked rather than assumed.
 
 410 lib (409 + the new sharing test) + 111 conformance + 4 gate green, clippy clean, manifest 19/19.
+
+## 2026-08-01 — Recovery slice 1: dependency-complete proven-fact memoization
+
+**Corrected diagnosis [user]:** the problem was not that the table is thread-global or that it is
+mutable internally. This is pure memoization: reuse is sound when, and only when, the key contains
+every semantic argument. The implemented key omitted the named-contract environment read by contract
+patterns. A per-compilation clear would hide that omission without repairing it.
+
+**Measured red before implementation:** two checks reused one `Interner` and one memo table over an
+identical canonical function body. With `N = String`, the trapping `N` arm was unreachable and the
+fact proved. The following `N = Number` check selected that arm but incorrectly returned the earlier
+`Proven`, accepting with `findings: []`. The reverse ordering carried the symmetric stale-refutation
+risk. The end-to-end regression was run red before the key changed.
+
+**Built:** `FactKey` now contains interned pointers for:
+
+- canonical function shape;
+- value-capture contracts;
+- the complete named-contract environment, canonicalized by name and interned as one pointer;
+- input/row contracts;
+- the claim discriminator, including an interned demanded return contract.
+
+`ContractEnv` is a `HashMap`, so its entries are sorted by name before interning. The names remain in
+the canonical snapshot: `{N: Number}` must differ from `{M: Number}` because a body naming `N` sees
+`Top` in the latter environment. Including the full environment is deliberately conservative. A
+change to an unrelated named contract can cost a memo hit, but cannot reuse a fact under a changed
+meaning of `N`. Exact dependency slicing is only an optimization and is not needed for correctness.
+
+**Proven, not inferred:** the end-to-end regression passes safe→unsafe and unsafe→safe reuse orders;
+a direct key test changes only `N` and observes distinct fact keys; another constructs identical
+environments in opposite insertion orders and observes one key. `clear()` remains solely test
+isolation / memory reclamation and is not part of correctness.
+
+**Documentation rebaseline:** `IMPLEMENTATION-STATUS.md` now records the ruled specific `a/0` +
+umbrella `Numeric` semantics as settled implementation work, and reattributes blocker 2b from the
+separate μ-construction identity gap to the live application's continued use of quarantined
+`bodycheck`. The stale blocker-2b `#[ignore]` explanation was corrected too.
+
+**Verification:** 413 lib passed / 10 ignored; 111 conformance passed / 13 ignored; 4 machinery gates
+passed; clippy clean; manifest 19/19 OK. Repository-wide `cargo fmt --check` remains a pre-existing red
+gate (8,602 diff lines) and is explicitly recorded for a separate mechanical recovery slice.
