@@ -3793,3 +3793,28 @@ real — a live test process, no completion. The earlier withdrawal was still ri
 timed out in compilation); the theory simply turned out to describe a different run.
 
 396 lib + 111 conformance + 4 gate green, clippy clean.
+
+## 2026-08-01 — Correction: the fact cache keys on the layer-1 shape, not C§13.4's layer-2
+
+I committed `factcache` claiming its key was "exactly as C§13.4 specifies". It is not.
+`oracle::canon` gives the **layer-1** shape (algorithm A: α-renaming, capture slots,
+polynomial NF). C§13.4 cache keys are specified over the **layer-2** μ-minimized shape, which
+`oracle::mu` implements (SCC grouping, positional μ-refs, canonical slot order) and whose own
+header says it "has no runtime consumer yet". The cache is not that consumer.
+
+The obstacle is the one already recorded in blocker 2b's pin: `mu::canonicalize_group` takes
+`(name, Expr)` binding lists, while `make_closure` builds a closure from one `Lambda` + env and
+stores the raw body, so no closure knows it belongs to a binding group and a mutual partner
+stays an ordinary capture. Law 4 (bisimulation slot merging) is absent outright.
+
+Effect: mutually recursive members do not share keys as C§13.4 intends. Direction is **false
+negatives** — a missed cache hit, never a wrong verdict — so it is a completeness gap, not a
+soundness one. Recorded in the module docs; the cache is not conformant until it closes.
+
+**Prerequisite audit for the global-discovery restructure (C§13.2a/13.3(1)), asked and
+answered rather than assumed:** present — `analyze_program`, SCC + reverse-topological order,
+the joint vector pass, region tables, the F0 rulebook. Missing — the layer-2 instance key
+(above), **per-row grounded fact admission** (`I ⊆ GroundedRows(instance)`, C§13.2a; grounding
+is corrected but still unwired, its only importer the quarantined `bodycheck`), and global
+discovery itself. §5 group canonicalization is also absent but is value/group identity, not
+fact-graph machinery, so it blocks other pinned rows rather than this restructure.

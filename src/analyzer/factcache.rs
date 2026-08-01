@@ -16,11 +16,24 @@
 //! induction, C§13.2a); a query on a *different* node is genuinely settled.
 //!
 //! **The instance half of the key is the canonical shape** — `FnValue::shape()`, produced by
-//! `oracle::canon` — paired with the de-Bruijn-ordered capture contracts, exactly as C§13.4
-//! specifies. This is where canonicalization earns its keep: without it the key would be a
-//! closure allocation, and closures are plain allocations rather than hash-consed values, so
-//! two spellings of the same function would miss each other. Missing is only a lost cache
-//! hit, never a wrong answer — the failure direction here is false negatives.
+//! `oracle::canon` — paired with the de-Bruijn-ordered capture contracts. Without it the key
+//! would be a closure allocation, and closures are plain allocations rather than hash-consed
+//! values, so two spellings of one function would miss each other.
+//!
+//! **KNOWN GAP — this is the layer-1 shape, and C§13.4 specifies the layer-2 shape.**
+//! `oracle::canon` implements algorithm A (α-renaming, capture slots, polynomial NF).
+//! The μ-binder minimization — SCC grouping, positional μ-refs, canonical slot order — lives
+//! in `oracle::mu`, whose own header says it "is the layer-2 shape used by C§13.4 cache keys
+//! … it has no runtime consumer yet". This cache is not that consumer, because the join does
+//! not exist: `mu::canonicalize_group` takes `(name, Expr)` binding lists while `make_closure`
+//! builds from one `Lambda` + env and stores the raw body, so no closure knows it belongs to
+//! a group (the obstacle already recorded in blocker 2b's pin). Law 4 (bisimulation slot
+//! merging) is absent outright.
+//!
+//! Consequence: mutually recursive members do not share keys the way C§13.4 intends. The
+//! failure direction is **false negatives** — a missed hit, never a wrong verdict — so this
+//! is a precision and completeness gap, not a soundness one. It must be closed before the
+//! cache can be claimed conformant.
 //!
 //! **Scope: per-compilation.** The cache lives for one analysis run and is not persisted, so
 //! the namespace/versioning regime C§13.4 requires for durable entries does not apply yet.
