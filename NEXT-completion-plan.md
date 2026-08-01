@@ -7,7 +7,9 @@
 > the memo key is dependency-complete; grounding's T2.1 corrections are complete but unwired; T1.3
 > and T1.4 are complete; the reaching checker is deleted; T2.2 carries realized structural
 > completion witnesses through Match to the consuming seat. The only remaining lib pin is 1b
-> (exact-singleton chains). T2.3 is next. Older scan counts
+> (exact-singleton chains). T2.3 now routes the live expression adapter through the one canonical
+> application driver; erased source environments still owe full annotated correlation. The
+> realized-refutation voice at the existing `where` return-demand consumer is next. Older scan counts
 > and “no top / bodycheck live” passages below are historical where this delta supersedes them.
 
 # NEXT — Feature-by-feature completion plan
@@ -189,7 +191,7 @@ honestly pinned at T1.4; T2.2 has since released 3.
 |---|---|---|
 | **T2.1 Grounding corrections — COMPLETE; still unwired** | The three prerequisite corrections are complete: forced recursive transitions, witness-bearing refutation, and the behavioural-judgment header correction. Wiring remains consumer-gated; do not wire merely because the implementation exists. | T1.3, A-NEG |
 | **T2.2 AP-30 + `refute` — COMPLETE 2026-08-01** | Expression completion carries structured evidence; bounded Pure-call realization mints `ApplicationWitness` only on actual `CompletedWithoutValue`; Match preserves selected-arm outcomes for the enclosing consumer; completion claims use the row partition. Blocker 3 is live. | T1.2 (seat demands), T1.4 |
-| **T2.3 Application path unification** | Choose **one**: wire `application.rs`'s driver into `analyze_apply`, or delete it and keep the inline version. Today both exist; `analyze_apply` reimplements `live_alternatives`/`admit_callee`/`join`/`seat_demand` inline. Note the driver's admission is *weaker* (never refutes) than the live inline one — reconcile, don't blindly swap. | T1.2 |
+| **T2.3 Application path unification — COMPLETE 2026-08-01** | `drive_application` owns live-alternative traversal, projection weakening, and outcome joining. `analyze_apply` is the expression/fact adapter; its parallel callee loop is deleted and mechanically forbidden. The bridge intentionally keeps erased arguments opaque: propagating annotated source correlation remains a separate owed feature, not a false T2.3 claim. | T1.2 |
 | **T2.4 Recursive source contracts → `RecGroup`** | Nothing live constructs `Contract::Ref`, so `contract::recursive` (and via it `length`) is dead. Building named recursive *source* contracts gives it its first real consumer. | T1.1 (`where`/named contracts) |
 | **T2.5 String-length contract form** | Tuple-family §5 lift. No string-length contract exists — this is what F0's `Add(String,String)` length lift is blocked on, and it gives `contract::length` + `grapheme` their consumer. | F0 residual |
 
@@ -276,8 +278,11 @@ synthesis — *may not be resurrected by any reading*) · **Part D** (candidate,
 
 ## Recommended immediate order
 
-1. **T2.3** — reconcile the still-duplicated application driver with the now-live inline path.
-2. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
+1. Make the existing `where` return demand consume `check_return_claim`, preserving realized
+   Refuted evidence instead of collapsing it into generic Unproven.
+2. Carry `AnalysisContract` through source bindings/accesses so the now-live driver receives the
+   normative joint operand rather than the legal-but-projecting erased bridge.
+3. Then select the next consumer-led Phase-A slice; do not wire grounding merely because it exists.
 
 *The remaining T1.2 breadth is pulled by these consumers; it is not a licence for a standalone
 backward-analysis rebuild.*

@@ -4178,3 +4178,41 @@ library test and remains correctly assigned to grounding §4. **`// [ask-author]
 **Verification:** 419 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 3 machinery gates
 passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
 `cargo fmt --check` remains the separately recorded pre-existing gate (8,519 diff lines).
+
+## 2026-08-01 — Recovery slice 6: one application driver, fact-backed adapter
+
+**Measured red before implementation:** a new machinery gate inspected the live
+`analyze_apply` body and failed because it never called `drive_application`; it still owned its own
+callee-alternative loop and application-specific join beside `application.rs`'s driver.
+
+**Boundary chosen:** `application.rs` owns the one traversal of live alternatives, AP-29/AP-30
+projection weakening, conjunctive seat verdict, componentwise `ApplicationOutcome` join, and the
+vacuous Bottom identity. The existing `analyze_application` operation facade now delegates to that
+driver. The expression-facing `analyze_apply` evaluates operand expressions, then supplies one
+fact-backed contribution per driver alternative: world/argument findings, `BodySafe(instance, I)`,
+completion fact plus AP-30 evidence, and recursive return fact. It no longer enumerates or joins
+application alternatives.
+
+**No blind swap:** the old standalone driver's weak admission callback did not replace the live
+fact machinery. Instead, the live decisions became contributions to the specification-shaped
+driver. Unknown and non-function alternatives remain total; no union member disappears. Match still
+owns its separate generic completion join because it composes non-application witnesses.
+
+**Projection evidence:** direct correlated contributions retain a `ProvenPresent` /
+`Refuted(ApplicationWitness)` voice. A projected cross-product contribution weakens once to
+`UnprovenPossible` / Unproven before joining, so a synthesized AP-29/AP-30 pair cannot become a
+refutation. A canonical Bottom operand invokes no callback and returns the empty/vacuous outcome.
+
+**Honest bridge limit:** the live `TypeEnv` still stores erased `Contract`s. The bridge therefore
+turns each callee-union leaf into a complete tuple alternative but keeps argument contracts opaque;
+this preserves the corrected live behavior and activates the canonical driver without claiming that
+source bindings/accesses retain full `AnalysisContract` correlation. That propagation remains an
+implementation obligation, not a design question. **`// [ask-author]`: none.**
+
+**Mechanical enforcement:** the machinery suite now requires `analyze_apply` to call
+`drive_application` and forbids the retired inline callee enumeration/application join from
+returning there. The gate was observed red first and green after consolidation.
+
+**Verification:** 421 lib passed / 1 ignored; 112 conformance passed / 12 ignored; 4 machinery gates
+passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide
+`cargo fmt --check` remains the separately recorded pre-existing gate (8,439 diff lines).

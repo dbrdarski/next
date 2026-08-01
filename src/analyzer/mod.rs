@@ -45,7 +45,10 @@ use crate::interner::Interner;
 use crate::oracle::{Outcome, TrapClass, World, eval_expr, eval_prim};
 use crate::value::ValueRef;
 
-use self::application::ApplicationWitness;
+use self::application::{
+    AlternativeContribution, ApplicationOutcome, ApplicationWitness, CalleeAlternative,
+    CompletionWithoutValue, SeatVerdict,
+};
 
 pub mod demand;
 pub(crate) mod factcache;
@@ -729,165 +732,235 @@ fn analyze_apply(
         }
     }
 
-    // Enumerate the **live callee alternatives** (Archive8 §6, totalized Archive9
-    // §9–§11) and combine them **conjunctively**: every alternative contributes, so a
-    // union callee can neither bypass safety nor be sharpened from its known branch
-    // alone. Each known alternative is analyzed over the actual argument domain through
-    // its `(instance, input-domain)` body summary.
-    let callees = callee_alternatives(&cc, interner);
-    let (contract, completion) = if callees.is_empty() {
-        (Contract::Top, Completion::Produces) // no live alternative (proven empty)
-    } else {
-        let mut produced: Vec<Contract> = Vec::new();
-        let mut completions: Vec<Completion> = Vec::new();
-        for alt in &callees {
-            match alt {
-                // Not callable. A **represented** inhabitant refutes; an alternative whose
-                // inhabitance is unproven stays the third voice (Archive10 §14–§16).
-                // Either way it produces no value, so it contributes `Bottom`.
-                CalleeAlt::NotAFunction { inhabited } => {
-                    let (severity, message) = if *inhabited {
-                        (Severity::Error, "callee is not a function")
-                    } else {
-                        (Severity::Error, "callee may not be a function (no represented inhabitant to confirm)")
-                    };
-                    findings.push(Finding { class: TrapClass::OperationSafety, severity, message: message.into() });
-                    produced.push(Contract::Bottom);
-                    completions.push(Completion::Produces);
-                }
-                // Possibly a function, origin unknown: it may return anything, may fall
-                // through, and its body cannot be inspected — conservative throughout,
-                // never a sharpening (Archive9 §11).
-                CalleeAlt::UnknownFunction => {
-                    findings.push(Finding {
-                        class: TrapClass::OperationSafety,
-                        severity: Severity::Error,
-                        message: "cannot prove this callee's body safe (callee not resolved to a known function)".into(),
-                    });
-                    produced.push(Contract::Top);
-                    completions.push(Completion::MayFallThrough);
-                }
-                CalleeAlt::Known(cv) => {
-                    analyze_known_callee(
-                        cv,
-                        &arg_contracts,
-                        has_spread,
-                        world,
-                        &mut findings,
-                        cenv,
-                        interner,
-                    );
-                    // Effect primitives are total-return by the B6 user ruling: host
-                    // failure is ordinary `Failure` data, never a trap. Their Rust body
-                    // is not analyzer input and must not enter the NEXT body graph.
-                    if cv.as_native().is_some() {
-                        produced.push(Contract::Top);
-                        completions.push(Completion::Produces);
-                        continue;
-                    }
-                    // A recursive reference covered by an **assumed safety fact** resolves
-                    // through that fact (C§13.2) — the body is not re-entered, so nothing
-                    // accumulates across depths. Acyclic dependencies retain their exact
-                    // body outcome (`always() -> Equals(true)`); only recursive returns
-                    // need the induction/coarse fallback.
-                    if !has_spread && induction::safety_assumed(cv, &arg_contracts, interner) {
-                        if induction::is_recursive(cv) {
-                            produced.push(call_return(cv, &arg_contracts, has_spread, cenv, interner));
-                            // Safety of an expecting use also depends on completion. Read
-                            // an active completion hypothesis when one covers the call;
-                            // otherwise settle that cross-claim through the same fact graph.
-                            let completes = induction::completes_assumed(
-                                cv,
-                                &arg_contracts,
-                                interner,
-                            ) || safety::completes(cv, &arg_contracts, cenv, interner);
-                            completions.push(callee_completion(
-                                cv,
-                                &arg_contracts,
-                                completes,
-                                interner,
-                            ));
-                        } else {
-                            let observed = outcome::analyze_instance_body(
-                                cv,
-                                &arg_contracts,
-                                cenv,
-                                interner,
-                            )
-                            .expect("a known closure has a body outcome");
-                            let completes = matches!(&observed.completion, Completion::Produces);
-                            produced.push(observed.contract);
-                            completions.push(callee_completion(
-                                cv,
-                                &arg_contracts,
-                                completes,
-                                interner,
-                            ));
-                        }
-                        continue;
-                    }
-                    // Inside candidate-graph verification, every admissible dependency
-                    // must resolve through a settled/current safety fact. Launching a
-                    // nested settlement here would pass a cutoff dependency behind the
-                    // graph's back and could turn its required `Unproven` into `Proven`.
-                    if !has_spread && safety::safety_context_active() {
-                        findings.push(Finding {
-                            class: TrapClass::OperationSafety,
-                            severity: Severity::Warning,
-                            message: "callee safety is not established by the active fact graph".into(),
-                        });
-                        produced.push(Contract::Top);
-                        completions.push(Completion::MayFallThrough);
-                        continue;
-                    }
-                    if has_spread {
-                        produced.push(Contract::Top);
-                        completions.push(Completion::Produces);
-                        continue;
-                    }
-                    let body_safe = safety::prove(cv, &arg_contracts, cenv, interner);
-                    if !discharge_body_safety(body_safe, &mut findings) {
-                        produced.push(Contract::Top);
-                        completions.push(Completion::MayFallThrough);
-                        continue;
-                    }
-
-                    // Safety has settled the complete dependency graph. Read the
-                    // seat/world-independent body outcome; recursive results are
-                    // sharpened separately by the return fact below.
-                    let observed = outcome::analyze_instance_body(
-                        cv,
-                        &arg_contracts,
-                        cenv,
-                        interner,
-                    )
-                    .unwrap_or_else(|| Analysis {
-                        contract: Contract::Top,
-                        findings: Vec::new(),
-                        completion: Completion::MayFallThrough,
-                    });
-                    // Completion comes from the **fact** (settled over the candidate
-                    // graph), not from a coarse whole-body pass.
-                    let completes = safety::completes(cv, &arg_contracts, cenv, interner);
-                    completions.push(callee_completion(cv, &arg_contracts, completes, interner));
-                    // A recursive/mutual return needs the induction (`call_return`
-                    // sharpens the coarse cycle assumption); a non-recursive return is its
-                    // body's **exact** contract, so `always() → Equals(true)` and the
-                    // dependent guard's dead branch is pruned (Archive8 §8/§11.4).
-                    produced.push(if induction::is_recursive(cv) {
-                        call_return(cv, &arg_contracts, has_spread, cenv, interner)
-                    } else {
-                        observed.contract
-                    });
-                }
-            }
-        }
-        (union_of(produced, interner), join_completions(&completions))
-    };
+    // The expression layer supplies erased contracts; `application.rs` owns the one
+    // alternative traversal and outcome join. Each callback contribution remains
+    // fact-backed over its actual `(instance, input-domain)` pair.
+    let (operand, callees) = application::operand_from_erased(&cc, &arg_contracts, interner);
+    let mut callees = callees.into_iter();
+    let transfer = application::drive_application(&operand, |alternative, _| {
+        analyze_application_alternative(
+            alternative,
+            callees.next(),
+            has_spread,
+            world,
+            cenv,
+            interner,
+        )
+    });
+    debug_assert!(
+        callees.next().is_none(),
+        "every classified callee has one driver alternative"
+    );
+    for mut alternative_findings in transfer.details {
+        findings.append(&mut alternative_findings);
+    }
     Analysis {
-        contract,
+        contract: transfer.outcome.produced.erase(interner),
         findings,
-        completion,
+        completion: completion_from_application(transfer.outcome.completion),
+    }
+}
+
+/// Supply one fact-backed contribution to the canonical application driver. This is
+/// the only expression-layer adapter: it erases the driver's annotated positions for
+/// the currently-live fact machinery, classifies the one callee leaf, and returns the
+/// complete outcome plus diagnostics without performing an alternative join.
+fn analyze_application_alternative(
+    alternative: &application::Alternative,
+    callee: Option<CalleeAlternative>,
+    has_spread: bool,
+    world: World,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> AlternativeContribution<Vec<Finding>> {
+    let arg_contracts: Vec<Contract> = alternative
+        .arguments
+        .iter()
+        .map(|argument| argument.erase(interner))
+        .collect();
+    let callee = callee.unwrap_or_else(|| {
+        // `operand_from_erased` places one classified callee leaf in each tuple.
+        // Anything else is an unstructured/coarsened alternative, never a reason to
+        // drop an execution or manufacture a known function.
+        CalleeAlternative::UnknownFunction(alternative.callee.erase(interner))
+    });
+
+    match callee {
+        CalleeAlternative::NotAFunction { inhabited, .. } => {
+            let message = if inhabited {
+                "callee is not a function"
+            } else {
+                "callee may not be a function (no represented inhabitant to confirm)"
+            };
+            application_contribution(
+                vec![Finding {
+                    class: TrapClass::OperationSafety,
+                    severity: Severity::Error,
+                    message: message.into(),
+                }],
+                Contract::Bottom,
+                Completion::Produces,
+            )
+        }
+        CalleeAlternative::UnknownFunction(_) => application_contribution(
+            vec![Finding {
+                class: TrapClass::OperationSafety,
+                severity: Severity::Error,
+                message:
+                    "cannot prove this callee's body safe (callee not resolved to a known function)"
+                        .into(),
+            }],
+            Contract::Top,
+            Completion::MayFallThrough,
+        ),
+        CalleeAlternative::Known(callee) => analyze_known_application_alternative(
+            &callee,
+            &arg_contracts,
+            has_spread,
+            world,
+            cenv,
+            interner,
+        ),
+    }
+}
+
+fn analyze_known_application_alternative(
+    callee: &ValueRef,
+    arg_contracts: &[Contract],
+    has_spread: bool,
+    world: World,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> AlternativeContribution<Vec<Finding>> {
+    let mut findings = Vec::new();
+    analyze_known_callee(
+        callee,
+        arg_contracts,
+        has_spread,
+        world,
+        &mut findings,
+        cenv,
+        interner,
+    );
+
+    // Effect primitives are total-return by the B6 user ruling: host failure is
+    // ordinary `Failure` data, never a trap. Their Rust body is not analyzer input.
+    if callee.as_native().is_some() {
+        return application_contribution(findings, Contract::Top, Completion::Produces);
+    }
+
+    // A recursive reference covered by an active safety fact resolves through that
+    // fact; acyclic dependencies retain their exact body outcome.
+    if !has_spread && induction::safety_assumed(callee, arg_contracts, interner) {
+        if induction::is_recursive(callee) {
+            let produced = call_return(callee, arg_contracts, has_spread, cenv, interner);
+            let completes = induction::completes_assumed(callee, arg_contracts, interner)
+                || safety::completes(callee, arg_contracts, cenv, interner);
+            let completion = callee_completion(callee, arg_contracts, completes, interner);
+            return application_contribution(findings, produced, completion);
+        }
+        let observed = outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
+            .expect("a known closure has a body outcome");
+        let completes = matches!(&observed.completion, Completion::Produces);
+        let completion = callee_completion(callee, arg_contracts, completes, interner);
+        return application_contribution(findings, observed.contract, completion);
+    }
+
+    // Candidate-graph verification may consume only the active/settled graph. Starting
+    // another settlement here would bypass a cutoff dependency.
+    if !has_spread && safety::safety_context_active() {
+        findings.push(Finding {
+            class: TrapClass::OperationSafety,
+            severity: Severity::Warning,
+            message: "callee safety is not established by the active fact graph".into(),
+        });
+        return application_contribution(findings, Contract::Top, Completion::MayFallThrough);
+    }
+    if has_spread {
+        return application_contribution(findings, Contract::Top, Completion::Produces);
+    }
+
+    let body_safe = safety::prove(callee, arg_contracts, cenv, interner);
+    if !discharge_body_safety(body_safe, &mut findings) {
+        return application_contribution(findings, Contract::Top, Completion::MayFallThrough);
+    }
+
+    // Safety has settled the complete dependency graph. Completion and recursive
+    // returns come from their own domain-indexed facts; an acyclic result stays exact.
+    let observed = outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
+        .unwrap_or_else(|| Analysis {
+            contract: Contract::Top,
+            findings: Vec::new(),
+            completion: Completion::MayFallThrough,
+        });
+    let completes = safety::completes(callee, arg_contracts, cenv, interner);
+    let completion = callee_completion(callee, arg_contracts, completes, interner);
+    let produced = if induction::is_recursive(callee) {
+        call_return(callee, arg_contracts, has_spread, cenv, interner)
+    } else {
+        observed.contract
+    };
+    application_contribution(findings, produced, completion)
+}
+
+fn application_contribution(
+    findings: Vec<Finding>,
+    produced: Contract,
+    completion: Completion,
+) -> AlternativeContribution<Vec<Finding>> {
+    let verdict = if findings
+        .iter()
+        .any(|finding| finding.severity == Severity::Error)
+    {
+        SeatVerdict::Unproven
+    } else {
+        SeatVerdict::Proven
+    };
+    let completion = match completion {
+        Completion::Produces => CompletionWithoutValue::ProvenAbsent,
+        Completion::FallsThrough(CompletionWitness::Application(witness)) => {
+            CompletionWithoutValue::ProvenPresent(witness)
+        }
+        Completion::MayFallThrough | Completion::FallsThrough(_) => {
+            CompletionWithoutValue::UnprovenPossible
+        }
+    };
+    AlternativeContribution {
+        verdict,
+        outcome: ApplicationOutcome {
+            produced: domain::AnalysisContract::of_contract(produced),
+            completion,
+            may_not_complete: false,
+        },
+        detail: findings,
+    }
+}
+
+fn completion_from_application(completion: CompletionWithoutValue) -> Completion {
+    match completion {
+        CompletionWithoutValue::ProvenAbsent => Completion::Produces,
+        CompletionWithoutValue::ProvenPresent(witness) => {
+            Completion::FallsThrough(CompletionWitness::Application(witness))
+        }
+        CompletionWithoutValue::UnprovenPossible => Completion::MayFallThrough,
+    }
+}
+
+/// Evidence-preserving completion join for non-application expression composition
+/// (currently Match). Application alternatives join in the canonical driver.
+fn join_completions(completions: &[Completion]) -> Completion {
+    if let Some(witness) = completions.iter().find_map(|completion| match completion {
+        Completion::FallsThrough(witness) => Some(witness.clone()),
+        Completion::Produces | Completion::MayFallThrough => None,
+    }) {
+        Completion::FallsThrough(witness)
+    } else if completions
+        .iter()
+        .any(|completion| matches!(completion, Completion::MayFallThrough))
+    {
+        Completion::MayFallThrough
+    } else {
+        Completion::Produces
     }
 }
 
@@ -949,74 +1022,6 @@ fn callee_completion(
     refute::realized_completion(cv, args, interner).map_or(Completion::MayFallThrough, |witness| {
         Completion::FallsThrough(CompletionWitness::Application(witness))
     })
-}
-
-/// One live alternative of a callee contract (Archive9 §9–§11). The enumeration is
-/// **total**: every live leaf classifies into exactly one of these, so no alternative
-/// can silently disappear from the combined outcome.
-enum CalleeAlt {
-    /// A known concrete function — analyze its body precisely.
-    Known(ValueRef),
-    /// Possibly a function, origin coarsened away (`Kind(Function)`, `Top`, an open
-    /// `Ref`) — contributes a conservative outcome, never a sharpening.
-    UnknownFunction,
-    /// Provably **not** a function — an inhabitant of it would trap operation-safety.
-    /// `inhabited` records whether such an inhabitant is *represented*: disjointness
-    /// proves what happens **if** a value exists, never that one **does** (Archive10
-    /// §14–§16). Only a represented inhabitant may refute.
-    NotAFunction { inhabited: bool },
-}
-
-/// The live callee alternatives of a callee contract, **totally** classified: a
-/// singleton `Equals(fn)`, a leaf proven non-function, or an unknown (possibly-function)
-/// leaf; `Union`s recurse. `Bottom` alternatives are dropped (proven empty — no
-/// represented execution). Every other live leaf contributes, so a union mixing a known
-/// function with a non-function (`b ? good : 1`) or with an unknown function cannot lose
-/// the non-`Known` alternative (Archive9 §10/§11).
-fn callee_alternatives(cc: &Contract, interner: &mut Interner) -> Vec<CalleeAlt> {
-    fn go(c: &Contract, out: &mut Vec<CalleeAlt>, interner: &mut Interner) {
-        match c {
-            Contract::Union(a, b) => {
-                go(a, out, interner);
-                go(b, out, interner);
-            }
-            Contract::Bottom => {} // proven empty — no represented execution
-            Contract::Equals(v)
-                if v.is_function()
-                    || v
-                        .as_native()
-                        .is_some_and(|native| native.get().act_kind == ActKind::Effect) =>
-            {
-                out.push(CalleeAlt::Known(v.clone()))
-            }
-            // Not callable. Refuting demands a *represented* inhabitant: an empty leaf
-            // that is not syntactically `Bottom` (`Intersection(Number, String)`, which
-            // narrowing can build) denotes no execution at all, so it must not refute.
-            _ if disjoint(c, &Contract::Kind(Kind::Function)) => {
-                out.push(CalleeAlt::NotAFunction { inhabited: c.has_proven_inhabitant(interner) });
-            }
-            _ => out.push(CalleeAlt::UnknownFunction),
-        }
-    }
-    let mut out = Vec::new();
-    go(cc, &mut out, interner);
-    out
-}
-
-/// Join the completions of a union of callees (E10 / §1.7): a **proven** fall-through in
-/// any alternative dominates (the represented execution may complete without a value);
-/// else a **possible** one; else every alternative produces.
-fn join_completions(cs: &[Completion]) -> Completion {
-    if let Some(witness) = cs.iter().find_map(|c| match c {
-        Completion::FallsThrough(witness) => Some(witness.clone()),
-        Completion::Produces | Completion::MayFallThrough => None,
-    }) {
-        Completion::FallsThrough(witness)
-    } else if cs.iter().any(|c| matches!(c, Completion::MayFallThrough)) {
-        Completion::MayFallThrough
-    } else {
-        Completion::Produces
-    }
 }
 
 /// The inferred return contract for a call to the known closure `cv` over

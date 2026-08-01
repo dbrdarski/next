@@ -10,16 +10,17 @@
 //! arises only from a synthesized cross-pair degrades to **unproven, never refuted**
 //! (AP-29).
 //!
-//! This module carries: the outcome algebra (steps 1/5/6/7 — admission, the summary
-//! shape, the three-voiced completion demand, union of callees) and [`analyze_application`],
-//! the per-alternative driver over the correlated operand state. Computing a single
-//! instance's summary from its body (steps 2–4) is still the induction tail; the
-//! input obligation here is supplied by an `accepts` callback so the correlation
-//! discipline can be exercised independently.
+//! This module carries the outcome algebra (steps 1/5/6/7 — admission, the summary
+//! shape, the three-voiced completion demand, union of callees) and the one
+//! per-alternative traversal, [`drive_application`]. [`analyze_application`] is its thin
+//! admission/input-obligation facade. Computing a single instance's summary from its
+//! body (steps 2–4) remains fact machinery supplied to the driver by the expression
+//! adapter; it is not reimplemented here.
 
 use crate::analyzer::domain::{AnalysisContract, InstanceMetadata};
 use crate::ast::ActKind;
-use crate::contract::Verdict;
+use crate::contract::{Contract, Kind, Verdict, disjoint};
+use crate::interner::Interner;
 use crate::value::ValueRef;
 
 /// A **represented application execution** — the structural refutation / fall-through
@@ -169,6 +170,110 @@ pub struct Alternative {
     pub arguments: Vec<AnalysisContract>,
 }
 
+/// Total classification of one erased callee leaf. This is shared by the expression
+/// bridge and its fact callback so a union member can never disappear between operand
+/// construction and transfer.
+#[derive(Clone, Debug)]
+pub(crate) enum CalleeAlternative {
+    Known(ValueRef),
+    UnknownFunction(Contract),
+    NotAFunction { contract: Contract, inhabited: bool },
+}
+
+impl CalleeAlternative {
+    fn contract(&self) -> Contract {
+        match self {
+            CalleeAlternative::Known(value) => Contract::Equals(value.clone()),
+            CalleeAlternative::UnknownFunction(contract)
+            | CalleeAlternative::NotAFunction { contract, .. } => contract.clone(),
+        }
+    }
+}
+
+/// Classify every live leaf of an erased callee contract exactly once. `Bottom` is the
+/// empty list; unions preserve source order; every other leaf is known, unknown-function,
+/// or proven non-function.
+pub(crate) fn classify_callees(
+    contract: &Contract,
+    interner: &mut Interner,
+) -> Vec<CalleeAlternative> {
+    fn go(contract: &Contract, out: &mut Vec<CalleeAlternative>, interner: &mut Interner) {
+        match contract {
+            Contract::Union(a, b) => {
+                go(a, out, interner);
+                go(b, out, interner);
+            }
+            Contract::Bottom => {}
+            Contract::Equals(value)
+                if value.is_function()
+                    || value
+                        .as_native()
+                        .is_some_and(|native| native.get().act_kind == ActKind::Effect) =>
+            {
+                out.push(CalleeAlternative::Known(value.clone()));
+            }
+            _ if disjoint(contract, &Contract::Kind(Kind::Function)) => {
+                out.push(CalleeAlternative::NotAFunction {
+                    contract: contract.clone(),
+                    inhabited: contract.has_proven_inhabitant(interner),
+                });
+            }
+            _ => out.push(CalleeAlternative::UnknownFunction(contract.clone())),
+        }
+    }
+
+    let mut out = Vec::new();
+    go(contract, &mut out, interner);
+    out
+}
+
+/// Bridge the current erased expression contracts into the joint-driver interface.
+/// Callee union leaves become complete tuple alternatives, while each argument remains
+/// one opaque erased leaf. This preserves the live path's behavior without pretending
+/// that source-level annotated correlation has survived the expression environment.
+pub(crate) fn operand_from_erased(
+    callee: &Contract,
+    arguments: &[Contract],
+    interner: &mut Interner,
+) -> (AnalysisContract, Vec<CalleeAlternative>) {
+    let argument_leaves: Vec<AnalysisContract> = arguments
+        .iter()
+        .cloned()
+        .map(AnalysisContract::of_contract)
+        .collect();
+    let callees = classify_callees(callee, interner);
+    let alternatives = callees
+        .iter()
+        .map(|callee| {
+            let mut positions = Vec::with_capacity(argument_leaves.len() + 1);
+            positions.push(AnalysisContract::of_contract(callee.contract()));
+            positions.extend(argument_leaves.iter().cloned());
+            AnalysisContract::tuple(positions)
+        })
+        .collect();
+    (AnalysisContract::alt(alternatives), callees)
+}
+
+/// One alternative's contribution to the canonical application driver. The caller
+/// supplies the evidence-producing work (input facts, body facts, diagnostics); the
+/// driver owns traversal, projection discipline, and joins.
+#[derive(Clone, Debug)]
+pub struct AlternativeContribution<T> {
+    pub verdict: SeatVerdict,
+    pub outcome: ApplicationOutcome,
+    pub detail: T,
+}
+
+/// The aggregate produced by [`drive_application`]. `details` remain in alternative
+/// order so the expression adapter can retain precise diagnostics without re-walking
+/// the operand.
+#[derive(Clone, Debug)]
+pub struct ApplicationTransfer<T> {
+    pub verdict: SeatVerdict,
+    pub outcome: ApplicationOutcome,
+    pub details: Vec<T>,
+}
+
 /// Extract the live correlated alternatives of a joint operand denoting `[callee,
 /// …arguments]`, and whether they are **correlated**:
 /// - an `Alt` of tuples → one alternative per branch, **correlated**;
@@ -232,6 +337,67 @@ fn cross_product(positions: &[Vec<AnalysisContract>]) -> Vec<Vec<AnalysisContrac
     combos
 }
 
+/// The one application-alternative driver. It extracts each live joint alternative,
+/// asks the caller for that alternative's fact-backed contribution, applies AP-29/AP-30
+/// projection weakening once, and joins both the seat verdict and complete outcome.
+///
+/// A canonical `Bottom` operand represents no execution and therefore contributes the
+/// empty/vacuous identity. A non-bottom value with no analyzable tuple structure remains
+/// the honest third voice with a coarse outcome.
+pub fn drive_application<T>(
+    operand: &AnalysisContract,
+    mut contribute: impl FnMut(&Alternative, bool) -> AlternativeContribution<T>,
+) -> ApplicationTransfer<T> {
+    let (alternatives, correlated) = live_alternatives(operand);
+    if alternatives.is_empty() {
+        if operand.is_bottom() {
+            return ApplicationTransfer {
+                verdict: SeatVerdict::Proven,
+                outcome: ApplicationOutcome::empty(),
+                details: Vec::new(),
+            };
+        }
+        return ApplicationTransfer {
+            verdict: SeatVerdict::Unproven,
+            outcome: ApplicationOutcome {
+                produced: AnalysisContract::of_contract(crate::contract::Contract::Top),
+                completion: CompletionWithoutValue::UnprovenPossible,
+                may_not_complete: true,
+            },
+            details: Vec::new(),
+        };
+    }
+
+    let mut verdict = SeatVerdict::Proven;
+    let mut outcome = ApplicationOutcome::empty();
+    let mut details = Vec::with_capacity(alternatives.len());
+    for alternative in &alternatives {
+        let mut contribution = contribute(alternative, correlated);
+        if !correlated {
+            contribution.verdict = degrade(contribution.verdict);
+            contribution.outcome = degrade_outcome(contribution.outcome);
+        }
+        verdict = conj(verdict, contribution.verdict);
+        outcome = join(outcome, contribution.outcome);
+        details.push(contribution.detail);
+    }
+    ApplicationTransfer {
+        verdict,
+        outcome,
+        details,
+    }
+}
+
+/// A projecting read may discover a fall-through only on a synthesized cross-pair.
+/// Presence therefore weakens to possibility; absence, produced values, and the
+/// conservative non-completion flag remain sound under projection.
+fn degrade_outcome(mut outcome: ApplicationOutcome) -> ApplicationOutcome {
+    if matches!(outcome.completion, CompletionWithoutValue::ProvenPresent(_)) {
+        outcome.completion = CompletionWithoutValue::UnprovenPossible;
+    }
+    outcome
+}
+
 /// Analyze the application over the joint operand state (§1, steps 1 + 3, per live
 /// alternative). For each alternative: act-kind admission over the callee metadata,
 /// then the input obligation via `accepts` (the args accepted by the callee). The
@@ -244,24 +410,18 @@ pub fn analyze_application(
     world_admits: impl Fn(ActKind) -> bool + Copy,
     accepts: impl Fn(&AnalysisContract, &[AnalysisContract]) -> SeatVerdict,
 ) -> SeatVerdict {
-    let (alts, correlated) = live_alternatives(operand);
-    if alts.is_empty() {
-        return SeatVerdict::Unproven; // no analyzable structure — sound, unproven
-    }
-    let mut result = SeatVerdict::Proven;
-    for alt in &alts {
+    drive_application(operand, |alt, _| {
         let admit = match admit_callee(&callee_metadata(&alt.callee), world_admits) {
             Verdict::Proven => SeatVerdict::Proven,
             _ => SeatVerdict::Unproven, // admission never refutes at this layer
         };
-        let oblig = accepts(&alt.callee, &alt.arguments);
-        let mut combined = conj(admit, oblig);
-        if !correlated {
-            combined = degrade(combined); // synthesized cross-pair: never refute
+        AlternativeContribution {
+            verdict: conj(admit, accepts(&alt.callee, &alt.arguments)),
+            outcome: ApplicationOutcome::empty(),
+            detail: (),
         }
-        result = conj(result, combined);
-    }
-    result
+    })
+    .verdict
 }
 
 /// The callee's metadata (for admission). A `Leaf` carries it directly; any other

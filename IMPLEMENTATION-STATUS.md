@@ -66,18 +66,31 @@ completion fact uses the existing region-table partition, so exhaustive recursio
 `countDown` keeps its narrowed recursive fact while the recursive partial-producer regression is
 live and rejecting. Effect/Mutator bodies are not run to hunt for witnesses.
 
+The sixth repair completes T2.3's application-path unification. `application.rs` now owns the one
+alternative traversal, AP-29/AP-30 projection weakening, and componentwise outcome join;
+`analyze_apply` analyzes operand expressions and supplies each alternative's settled safety,
+completion, and return contribution. The old inline callee loop and application-specific join are
+deleted, and a machinery gate forbids routing around `drive_application`. The current expression
+environment still carries erased `Contract`s, so the bridge keeps argument contracts opaque and
+does not falsely claim source-level annotated correlation; propagating `AnalysisContract` through
+source bindings/accesses remains owed.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
 1. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
    remaining typed verdicts until policy is applied.
 2. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
-3. The repository-wide formatting gate is red (8,519 diff lines on 2026-08-01).
+3. The live expression environment erases `AnalysisContract` metadata/correlation before an
+   application reaches the canonical driver; full source-level AP-24/AP-29 correlation remains owed.
+4. The repository-wide formatting gate is red (8,439 diff lines on 2026-08-01).
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
-executable program demands, ordinary-application fact wiring, and the structured completion witness
-/ typed seat boundary (T2.2) are complete. T2.3 application-path unification is next. Normative files
-remain manifest-protected and are not edited by these implementation slices.
+executable program demands, ordinary-application fact wiring, the structured completion witness /
+typed seat boundary (T2.2), and application-path unification (T2.3) are complete. Next is making the
+existing `where` return demand consume `check_return_claim`'s realized-refutation voice instead of
+collapsing a false claim into generic Unproven. Normative files remain manifest-protected and are not
+edited by these implementation slices.
 
 ---
 
@@ -202,7 +215,7 @@ Conformance holds 12 `#[ignore]`s (6 Phase A · 4 module/linking · MU-18 · M-0
 
 The five boundaries above were prose only, and prose did not hold them: a forward-reaching
 /widening engine was built on 2026-07-31, passed all four blockers, and was reverted whole.
-Three checks now enforce the part a machine can see. **Each was verified to fail on an
+Four checks now enforce the part a machine can see. **Each was verified to fail on an
 injected violation before landing** — a gate that cannot fire is not a gate.
 
 1. `src/analyzer/summary.rs` (the reverted engine) and sibling names must not exist.
@@ -210,6 +223,8 @@ injected violation before landing** — a gate that cannot fire is not a gate.
    (`check_recursive_body`, `reachable_rows`, `grow`) must be absent from `src/`.
 3. `callee_completion` still consults the settled completion fact — `Produces` at a call site
    may not be asserted by a coarse body pass (a false **accept**, the dangerous direction).
+4. `analyze_apply` must call `drive_application` and may not restore its own callee-alternative
+   enumeration or application outcome join.
 
 **Scope, stated rather than glossed:** the gate catches a literal repeat of the retired engine. It
 does **not** catch a renamed reimplementation. That stays a review obligation, under the standing
@@ -274,11 +289,11 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **419 passed, 0 failed, 1 ignored** (exact-singleton chain) |
+| `cargo test --lib` | **421 passed, 0 failed, 1 ignored** (exact-singleton chain) |
 | `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
-| `cargo test --test machinery_gate` | **3 passed, 0 failed** |
+| `cargo test --test machinery_gate` | **4 passed, 0 failed** |
 | `cargo clippy --all-targets` | **0 warnings** |
-| `cargo fmt --check` | **FAILED** — 8,519 formatting diff lines |
+| `cargo fmt --check` | **FAILED** — 8,439 formatting diff lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /

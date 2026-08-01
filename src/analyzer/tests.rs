@@ -905,9 +905,9 @@ mod domain {
 mod application {
     use super::{ActKind, closure, name, one_param};
     use crate::analyzer::application::{
-        ApplicationOutcome, ApplicationWitness, CompletionWithoutValue as C, SeatVerdict,
-        admit_callee, analyze_application, join, join_all, live_alternatives, pure_world_admits,
-        seat_demand,
+        AlternativeContribution, ApplicationOutcome, ApplicationWitness,
+        CompletionWithoutValue as C, SeatVerdict, admit_callee, analyze_application,
+        drive_application, join, join_all, live_alternatives, pure_world_admits, seat_demand,
     };
     use crate::analyzer::domain::{AnalysisContract, Instance, InstanceMetadata};
     use crate::ast::Lambda;
@@ -1108,6 +1108,77 @@ mod application {
             matches!(analyze_application(&projected, pure_world_admits, &accepts), SeatVerdict::Unproven),
             "a cross-pair failure degrades to unproven, never refuted (AP-29)",
         );
+    }
+
+    #[test]
+    fn canonical_driver_weakens_projected_completion_evidence_once() {
+        let mut i = Interner::new();
+        let witness = dummy_witness(&mut i);
+        let callee_shape = witness.callee.as_fn().unwrap().shape().clone();
+        let zero = witness.arguments[0].clone();
+
+        let correlated = AnalysisContract::tuple(vec![
+            callee_leaf(callee_shape.clone()),
+            val_leaf(zero.clone()),
+        ]);
+        let direct = drive_application(&correlated, |_, represented| {
+            assert!(represented);
+            AlternativeContribution {
+                verdict: SeatVerdict::Refuted(witness.clone()),
+                outcome: out(
+                    Contract::Bottom,
+                    C::ProvenPresent(witness.clone()),
+                    false,
+                ),
+                detail: (),
+            }
+        });
+        assert!(matches!(direct.verdict, SeatVerdict::Refuted(_)));
+        assert!(matches!(direct.outcome.completion, C::ProvenPresent(_)));
+
+        let other_shape = shape(&mut i, ActKind::Pure);
+        let text = i.string("x");
+        let projected = AnalysisContract::tuple(vec![
+            AnalysisContract::alt(vec![
+                callee_leaf(callee_shape),
+                callee_leaf(other_shape),
+            ]),
+            AnalysisContract::alt(vec![val_leaf(zero), val_leaf(text)]),
+        ]);
+        let projected = drive_application(&projected, |_, represented| {
+            assert!(!represented);
+            AlternativeContribution {
+                verdict: SeatVerdict::Refuted(witness.clone()),
+                outcome: out(
+                    Contract::Bottom,
+                    C::ProvenPresent(witness.clone()),
+                    false,
+                ),
+                detail: (),
+            }
+        });
+        assert!(matches!(projected.verdict, SeatVerdict::Unproven));
+        assert!(matches!(projected.outcome.completion, C::UnprovenPossible));
+        assert_eq!(
+            projected.details.len(),
+            4,
+            "the driver visits every projected pair once"
+        );
+    }
+
+    #[test]
+    fn canonical_driver_uses_the_vacuous_empty_identity() {
+        let transfer = drive_application(
+            &AnalysisContract::bottom(),
+            |_, _| -> AlternativeContribution<()> {
+                panic!("Bottom has no application alternatives")
+            },
+        );
+        assert!(matches!(transfer.verdict, SeatVerdict::Proven));
+        assert!(transfer.outcome.produced.is_bottom());
+        assert!(matches!(transfer.outcome.completion, C::ProvenAbsent));
+        assert!(!transfer.outcome.may_not_complete);
+        assert!(transfer.details.is_empty());
     }
 
     // The structural-witness hardening (review §7) — NOT normative AP-30. Real AP-30

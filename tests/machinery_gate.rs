@@ -130,3 +130,31 @@ fn a_call_sites_completion_is_not_asserted_by_the_body_pass() {
          accept at every expecting seat."
     );
 }
+
+/// Application has one alternative driver. The expression-facing function may analyze
+/// operands and supply fact-backed contributions, but it must not independently enumerate
+/// and join callee alternatives beside `application.rs`'s joint driver.
+#[test]
+fn application_uses_the_canonical_joint_driver() {
+    let src = std::fs::read_to_string(root().join("src/analyzer/mod.rs")).expect("readable");
+    let body = src
+        .split_once("fn analyze_apply")
+        .expect("analyze_apply exists")
+        .1
+        .split_once("\nfn ")
+        .map_or_else(|| src.clone(), |(b, _)| b.to_string());
+    let code: String = body
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        has_ident(&code, "drive_application"),
+        "analyze_apply bypasses the canonical application driver. Keep expression analysis as \
+         the adapter and let application.rs own alternative traversal and outcome joining."
+    );
+    assert!(
+        !has_ident(&code, "callee_alternatives") && !has_ident(&code, "join_completions"),
+        "analyze_apply still carries its old parallel alternative/join implementation"
+    );
+}
