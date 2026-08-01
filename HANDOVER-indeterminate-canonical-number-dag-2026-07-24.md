@@ -974,3 +974,66 @@ target — `x + 0` on a `Numeric` input is where identity-elimination interacts 
 
 > **NEXT is moving toward a model where Numbers are exact canonical mathematical DAG values, numerical approximations are renderings of those values, and algebraic canonicalization should be as mathematically comprehensive as the retained domain/semantic envelope safely permits; specific indeterminate expressions such as `1/0` must therefore preserve canonical identity rather than collapsing into a generic `_ / 0` marker.**
 
+---
+
+# Part XII — ARITHMETIC-INDETERMINATE FORMS 2026-08-01 [user]
+
+This part corrects the representation name introduced by Part XI while preserving its specific-identity
+ruling. It is the later record for R-1/R-2 wherever the spelling `ZeroDen` conflicts with the established
+`Indeterminate(form)` value inventory.
+
+## R-3 — `Indeterminate(form)` restored as the umbrella
+
+**Ruling.** `Indeterminate` is the value family for otherwise well-formed arithmetic operations that do
+not resolve to an ordinary `Number`. It is an immutable interned value, not a trap, `Failure`, `Number`, or
+eighth `Kind`. The current forms are:
+
+```text
+Indeterminate(DivZero(a))
+Indeterminate(ModZero(a))
+```
+
+where `a` is the canonical Number operand retained by the unresolved operation. The outer
+`Indeterminate` constructor is semantic; `DivZero` and `ModZero` are form tags beneath it, not new
+top-level value categories and not, by this ruling alone, new surface syntax.
+
+Consequently:
+
+```text
+a / 0  -> Indeterminate(DivZero(a))
+a % 0  -> Indeterminate(ModZero(a))
+```
+
+including `0/0 -> Indeterminate(DivZero(0))` and `0%0 -> Indeterminate(ModZero(0))`. The complete
+interning key is `(form tag, canonical operand)`, so equal keys share one pointer and every other pair is
+distinct: `DivZero(1) != DivZero(2)`, `DivZero(1) != ModZero(1)`, and independently constructed
+`DivZero(1)` values are equal. A generic marker that forgets `a` remains rejected.
+
+`ZeroDen` is **not** a value, form, contract, or compatibility name. It was an implementation-derived
+misnaming of the Part-XI identity ruling and is withdrawn.
+
+## R-4 — `Numeric` follows the arithmetic umbrella
+
+**Ruling.** Because `Indeterminate` is reserved for unresolved arithmetic results, the adopted umbrella
+is now:
+
+```text
+Numeric = Number ∪ Indeterminate
+```
+
+Both division and remainder over `Number` operands are total and produce `Numeric` when zero is possible
+in the divisor. A nonzero divisor narrows the result back to `Number`. The contract constructor remains
+`Indeterminate(F)` for form-sensitive analyzer precision; the prelude name `Indeterminate` denotes the
+union of the currently admitted forms.
+
+This representation ruling does **not** settle the algebra of consuming an Indeterminate. Part XI's
+strict-`Number`-seat rule remains in force until that algebra is separately ruled. Equality remains
+ordinary value equality, and matching against the `Indeterminate` contract remains the discharge
+surface.
+
+Display rendering remains form-only rather than an identity serialization: division forms render as
+`<Indeterminate _/0>` / `<Indeterminate 0/0>`, and the analogous remainder forms render as
+`<Indeterminate _%0>` / `<Indeterminate 0%0>`. The semantic notation above is not source-literal syntax.
+
+This ruling adds no other unresolved-operation form. Any future form requires its own semantic ruling;
+the umbrella's purpose does not silently convert existing operation-safety traps into values.

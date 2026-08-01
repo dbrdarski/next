@@ -3976,3 +3976,21 @@ separate μ-construction identity gap to the live application's continued use of
 **Verification:** 413 lib passed / 10 ignored; 111 conformance passed / 13 ignored; 4 machinery gates
 passed; clippy clean; manifest 19/19 OK. Repository-wide `cargo fmt --check` remains a pre-existing red
 gate (8,602 diff lines) and is explicitly recorded for a separate mechanical recovery slice.
+
+## 2026-08-01 — Author ruling: arithmetic Indeterminate forms
+
+**Ruled [user]:** `Indeterminate` is the umbrella value family for unresolved arithmetic operations.
+The specific-identity ruling remains, but the `ZeroDen` category introduced while implementing it was
+incorrect. The current semantic forms are `Indeterminate(DivZero(a))` and
+`Indeterminate(ModZero(a))`, each keyed by its form tag and canonical Number operand. Thus `1/0` and
+`2/0` remain distinct, and `1/0` is also distinct from `1%0`; no form collapses to a generic marker.
+
+**Contract consequence:** `Numeric = Number ∪ Indeterminate`, with `Indeterminate(F)` retaining
+form-sensitive analyzer precision. `ZeroDen` is not retained as a value, contract, or compatibility
+alias. This representation ruling does not settle the algebra of consuming an Indeterminate; the
+later strict-`Number`-seat rule remains until that algebra is ruled separately.
+
+**Normative record:** Part XII was appended to
+`HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md`, and its manifest hash was advanced as an
+author design action before the implementation refactor. The rendering remains the frozen form-only
+surface, extended analogously for remainder: `_/0`, `0/0`, `_%0`, `0%0`.
