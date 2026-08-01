@@ -41,7 +41,9 @@ fn equal(a: &ValueRef, b: &ValueRef, visited: &mut HashSet<(usize, usize)>) -> b
         (ValueData::Record(xs), ValueData::Record(ys)) => {
             xs.len() == ys.len()
                 && with_pair(visited, a, b, |visited| {
-                    xs.iter().zip(ys).all(|(x, y)| x.key == y.key && equal(&x.value, &y.value, visited))
+                    xs.iter()
+                        .zip(ys)
+                        .all(|(x, y)| x.key == y.key && equal(&x.value, &y.value, visited))
                 })
         }
         // Any other kinds: pure-data leaves are interned, so equal ones already
@@ -131,27 +133,36 @@ mod tests {
                 if f.shape() != g.shape() || f.free_vars().len() != g.free_vars().len() {
                     return false;
                 }
-                f.free_vars().iter().zip(g.free_vars()).all(|(fname, gname)| {
-                    match (f.closure().env.lookup(fname), g.closure().env.lookup(gname)) {
-                        (Some(Binding::Value(fv)), Some(Binding::Value(gv))) => {
-                            equal_unfold(&fv, &gv, depth - 1)
+                f.free_vars()
+                    .iter()
+                    .zip(g.free_vars())
+                    .all(|(fname, gname)| {
+                        match (f.closure().env.lookup(fname), g.closure().env.lookup(gname)) {
+                            (Some(Binding::Value(fv)), Some(Binding::Value(gv))) => {
+                                equal_unfold(&fv, &gv, depth - 1)
+                            }
+                            (Some(Binding::Open(_)), _) | (_, Some(Binding::Open(_))) => false,
+                            (Some(Binding::Slot(fs)), Some(Binding::Slot(gs))) => fs == gs,
+                            (Some(Binding::UnderInit), Some(Binding::UnderInit)) | (None, None) => {
+                                fname == gname
+                            }
+                            _ => false,
                         }
-                        (Some(Binding::Open(_)), _) | (_, Some(Binding::Open(_))) => false,
-                        (Some(Binding::Slot(fs)), Some(Binding::Slot(gs))) => fs == gs,
-                        (Some(Binding::UnderInit), Some(Binding::UnderInit)) | (None, None) => {
-                            fname == gname
-                        }
-                        _ => false,
-                    }
-                })
+                    })
             }
             (ValueData::Tuple(xs), ValueData::Tuple(ys)) => {
                 xs.len() == ys.len()
-                    && xs.iter().zip(ys).all(|(x, y)| equal_unfold(x, y, depth - 1))
+                    && xs
+                        .iter()
+                        .zip(ys)
+                        .all(|(x, y)| equal_unfold(x, y, depth - 1))
             }
             (ValueData::Record(xs), ValueData::Record(ys)) => {
                 xs.len() == ys.len()
-                    && xs.iter().zip(ys).all(|(x, y)| x.key == y.key && equal_unfold(&x.value, &y.value, depth - 1))
+                    && xs
+                        .iter()
+                        .zip(ys)
+                        .all(|(x, y)| x.key == y.key && equal_unfold(&x.value, &y.value, depth - 1))
             }
             _ => false,
         }

@@ -120,9 +120,16 @@ pub enum Verdict {
 /// represented-exact start actually written at the call (GR-22) — may **refute** via
 /// drift-away (GR-23a). No witness ⇒ procedure-relative `Unproven` (GR-04/GR-21). Grounded
 /// is judged first: a proven descent is never also a divergence.
-pub fn ground(callee: &ValueRef, domain: &Contract, cenv: &ContractEnv, interner: &mut Interner) -> Verdict {
-    if matches!(numeric_descent(callee, domain, cenv, interner), Some(Verdict::Grounded))
-        || measure_descent(callee)
+pub fn ground(
+    callee: &ValueRef,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Verdict {
+    if matches!(
+        numeric_descent(callee, domain, cenv, interner),
+        Some(Verdict::Grounded)
+    ) || measure_descent(callee)
         || lex_descent(callee)
         || structural_descent(callee)
         || mutual_descent(callee)
@@ -198,7 +205,10 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
         Some(b) => {
             drifts.len() == 1
                 && drifts[0] == Rational::from(-1)
-                && matches!(subcontract(domain, &Contract::GreaterEq(b), interner), Sub::Proven)
+                && matches!(
+                    subcontract(domain, &Contract::GreaterEq(b), interner),
+                    Sub::Proven
+                )
         }
         // Downward half-line base (`k <= b`): a strictly-decreasing integer chain must
         // eventually enter it, from any start (structural landing).
@@ -258,7 +268,11 @@ fn drift_away(
     if !bases.iter().all(|b| !reaches(start, &d, b)) {
         return None;
     }
-    Some(Refutation { witness: start.clone(), drift: d, missed_bases: bases })
+    Some(Refutation {
+        witness: start.clone(),
+        drift: d,
+        missed_bases: bases,
+    })
 }
 
 /// Collect the self-calls in `e` that lie on the **forced path** — those reached under no
@@ -516,20 +530,33 @@ struct LinComb {
 
 impl LinComb {
     fn constant(constant: Rational, n: usize) -> LinComb {
-        LinComb { coeffs: vec![Rational::from(0); n], constant }
+        LinComb {
+            coeffs: vec![Rational::from(0); n],
+            constant,
+        }
     }
     fn is_constant(&self) -> bool {
         self.coeffs.iter().all(Rational::is_zero)
     }
     fn add(&self, o: &LinComb) -> LinComb {
         LinComb {
-            coeffs: self.coeffs.iter().zip(&o.coeffs).map(|(a, b)| a.clone() + b.clone()).collect(),
+            coeffs: self
+                .coeffs
+                .iter()
+                .zip(&o.coeffs)
+                .map(|(a, b)| a.clone() + b.clone())
+                .collect(),
             constant: self.constant.clone() + o.constant.clone(),
         }
     }
     fn sub(&self, o: &LinComb) -> LinComb {
         LinComb {
-            coeffs: self.coeffs.iter().zip(&o.coeffs).map(|(a, b)| a.clone() - b.clone()).collect(),
+            coeffs: self
+                .coeffs
+                .iter()
+                .zip(&o.coeffs)
+                .map(|(a, b)| a.clone() - b.clone())
+                .collect(),
             constant: self.constant.clone() - o.constant.clone(),
         }
     }
@@ -552,17 +579,32 @@ fn linear_form(e: &Expr, params: &[String]) -> Option<LinComb> {
             lc.coeffs[i] = Rational::from(1);
             Some(lc)
         }
-        Expr::PrimOp { op: PrimOp::Add, args } if args.len() == 2 => {
+        Expr::PrimOp {
+            op: PrimOp::Add,
+            args,
+        } if args.len() == 2 => {
             Some(linear_form(&args[0], params)?.add(&linear_form(&args[1], params)?))
         }
-        Expr::PrimOp { op: PrimOp::Sub, args } if args.len() == 2 => {
+        Expr::PrimOp {
+            op: PrimOp::Sub,
+            args,
+        } if args.len() == 2 => {
             Some(linear_form(&args[0], params)?.sub(&linear_form(&args[1], params)?))
         }
-        Expr::PrimOp { op: PrimOp::Neg, args } if args.len() == 1 => {
-            Some(LinComb::constant(Rational::from(0), params.len()).sub(&linear_form(&args[0], params)?))
-        }
-        Expr::PrimOp { op: PrimOp::Mul, args } if args.len() == 2 => {
-            let (a, b) = (linear_form(&args[0], params)?, linear_form(&args[1], params)?);
+        Expr::PrimOp {
+            op: PrimOp::Neg,
+            args,
+        } if args.len() == 1 => Some(
+            LinComb::constant(Rational::from(0), params.len()).sub(&linear_form(&args[0], params)?),
+        ),
+        Expr::PrimOp {
+            op: PrimOp::Mul,
+            args,
+        } if args.len() == 2 => {
+            let (a, b) = (
+                linear_form(&args[0], params)?,
+                linear_form(&args[1], params)?,
+            );
             if a.is_constant() {
                 Some(b.scale(&a.constant))
             } else if b.is_constant() {
@@ -609,7 +651,11 @@ fn lex_descent(callee: &ValueRef) -> bool {
     injective_seqs(&positions)
         .into_iter()
         .filter(|dict| dict.len() >= 2) // length-1 dictionaries are `measure_descent`'s job
-        .any(|dict| calls.iter().all(|(args, lb)| lex_call_ok(&dict, args, lb, &params)))
+        .any(|dict| {
+            calls
+                .iter()
+                .all(|(args, lb)| lex_call_ok(&dict, args, lb, &params))
+        })
 }
 
 /// One recursive call lex-decreases under `dict`: reading the dictionary in order the first
@@ -937,7 +983,12 @@ fn point_value(c: &Contract) -> Option<Rational> {
 
 /// Every self-call's **positional argument list** in `e` (paths discarded) — the shape
 /// [`numeric_descent`] / [`measure_descent`] read. Thin wrapper over [`walk`].
-pub(crate) fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out: &mut Vec<Vec<Expr>>) {
+pub(crate) fn collect_self_calls(
+    e: &Expr,
+    closure: &Closure,
+    cv: &ValueRef,
+    out: &mut Vec<Vec<Expr>>,
+) {
     let mut full = Vec::new();
     walk(e, closure, std::slice::from_ref(cv), &[], &[], &mut full);
     out.extend(full.into_iter().map(|(args, _)| args));
@@ -952,7 +1003,14 @@ pub(crate) fn collect_self_calls(e: &Expr, closure: &Closure, cv: &ValueRef, out
 /// instances); mirrors `bodywalk` so no call is missed (an unread one could be a false
 /// proof). A spread argument (no reliable positional mapping) records an **empty** list.
 /// With empty `params`/`lb` the lower-bound tracking is inert (the arg-only wrappers).
-fn walk(e: &Expr, closure: &Closure, cv: &[ValueRef], params: &[String], lb: &[bool], out: &mut Vec<(Vec<Expr>, Vec<bool>)>) {
+fn walk(
+    e: &Expr,
+    closure: &Closure,
+    cv: &[ValueRef],
+    params: &[String],
+    lb: &[bool],
+    out: &mut Vec<(Vec<Expr>, Vec<bool>)>,
+) {
     match e {
         Expr::Const(_) | Expr::Ref(_) => {}
         Expr::Lambda(_) => {} // a distinct instance — not this body's recursion
@@ -989,7 +1047,9 @@ fn walk(e: &Expr, closure: &Closure, cv: &[ValueRef], params: &[String], lb: &[b
             let mut acc = lb.to_vec();
             for item in &m.items {
                 match item {
-                    MatchItem::Bind(Bind { value, .. }) => walk(value, closure, cv, params, &acc, out),
+                    MatchItem::Bind(Bind { value, .. }) => {
+                        walk(value, closure, cv, params, &acc, out)
+                    }
                     MatchItem::Stmt(x) => walk(x, closure, cv, params, &acc, out),
                     MatchItem::Arm(arm) => {
                         let mut branch = acc.clone();
@@ -1019,7 +1079,9 @@ fn walk(e: &Expr, closure: &Closure, cv: &[ValueRef], params: &[String], lb: &[b
         Expr::RecordCons(fs) => {
             for f in fs {
                 match f {
-                    Field::Field { value, .. } | Field::Spread(value) => walk(value, closure, cv, params, lb, out),
+                    Field::Field { value, .. } | Field::Spread(value) => {
+                        walk(value, closure, cv, params, lb, out)
+                    }
                     Field::Computed { key, value } => {
                         walk(key, closure, cv, params, lb, out);
                         walk(value, closure, cv, params, lb, out);
@@ -1157,7 +1219,10 @@ mod tests {
         // Without the integer lattice the dense-measure landing is deferred → Unproven.
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
-        assert_eq!(ground(&cd, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&cd, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     // ── G-2: drift-away refutation (GR-23a) ──────────────────────────────────
@@ -1169,7 +1234,10 @@ mod tests {
         let mut i = Interner::new();
         let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
         let one = Contract::Equals(i.integer(1));
-        assert!(matches!(ground(&step2, &one, &ContractEnv::new(), &mut i), Verdict::Refuted(_)));
+        assert!(matches!(
+            ground(&step2, &one, &ContractEnv::new(), &mut i),
+            Verdict::Refuted(_)
+        ));
     }
 
     #[test]
@@ -1180,7 +1248,10 @@ mod tests {
         let mut i = Interner::new();
         let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
         let two = Contract::Equals(i.integer(2));
-        assert_eq!(ground(&step2, &two, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&step2, &two, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     #[test]
@@ -1190,7 +1261,10 @@ mod tests {
         let mut i = Interner::new();
         let s = f("f = (n) => n == 0 ? 0 : f(n)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        assert!(matches!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted(_)));
+        assert!(matches!(
+            ground(&s, &five, &ContractEnv::new(), &mut i),
+            Verdict::Refuted(_)
+        ));
     }
 
     #[test]
@@ -1200,7 +1274,10 @@ mod tests {
         let mut i = Interner::new();
         let s = f("f = (n) => n == 0 ? 0 : f(n + 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        assert!(matches!(ground(&s, &five, &ContractEnv::new(), &mut i), Verdict::Refuted(_)));
+        assert!(matches!(
+            ground(&s, &five, &ContractEnv::new(), &mut i),
+            Verdict::Refuted(_)
+        ));
     }
 
     #[test]
@@ -1210,7 +1287,10 @@ mod tests {
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        assert_eq!(ground(&cd, &five, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        assert_eq!(
+            ground(&cd, &five, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     // ── G-3/G-4: program-expressed linear-measure descent (§6 GR-15a/16) ─────
@@ -1220,8 +1300,14 @@ mod tests {
         // `2a + b` drifts −1 under `f(a-1, b+1)` — but neither `a` nor `b` alone is a
         // monotone counter (b ascends). Substitute-and-normalize reads the linear measure.
         let mut i = Interner::new();
-        let s = f("f = (a, b) => 2 * a + b <= 0 ? a : f(a - 1, b + 1)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        let s = f(
+            "f = (a, b) => 2 * a + b <= 0 ? a : f(a - 1, b + 1)\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1230,7 +1316,10 @@ mod tests {
         // route concludes nothing (GR-15a/18), even though it happens to terminate.
         let mut i = Interner::new();
         let s = f("f = (a, b) => a <= b ? a : f(a - 1, b)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     #[test]
@@ -1242,9 +1331,15 @@ mod tests {
         // which is a *different* mechanism than grounding. (Records the wiring finding.)
         let mut i = Interner::new();
         let g1 = f("f = (x, y) => f(x + y, y)\nf", &mut i);
-        assert_eq!(ground(&g1, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&g1, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
         let g2 = f("f = (x, b) => f(b ? x : 0, b)\nf", &mut i);
-        assert_eq!(ground(&g2, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&g2, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     // ── G-8: mutual recursion (§5 GR-07) ─────────────────────────────────────
@@ -1258,7 +1353,10 @@ mod tests {
                    isOdd = (n) => n <= 0 ? false : isEven(n - 1)\n\
                    isEven";
         let ev = f(src, &mut i);
-        assert_eq!(ground(&ev, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        assert_eq!(
+            ground(&ev, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1269,7 +1367,10 @@ mod tests {
                    pong = (n) => n <= 0 ? 0 : ping(n)\n\
                    ping";
         let p = f(src, &mut i);
-        assert_eq!(ground(&p, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&p, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     // ── G-6: structural descent (§2b, tuple peel) ────────────────────────────
@@ -1279,16 +1380,28 @@ mod tests {
         // Classic list recursion: `rest` is one element shorter than `l`, so the length
         // strictly descends to the empty base. No domain, no numeric measure.
         let mut i = Interner::new();
-        let s = f("f = (l) => l :: {\n [] => 0\n [h, ...rest] => 1 + f(rest)\n }\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        let s = f(
+            "f = (l) => l :: {\n [] => 0\n [h, ...rest] => 1 + f(rest)\n }\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
     fn peel_recursion_with_accumulator_grounds() {
         // Multi-parameter: the peeled tuple position descends; the accumulator is carried.
         let mut i = Interner::new();
-        let s = f("f = (l, acc) => l :: {\n [] => acc\n [h, ...rest] => f(rest, acc + h)\n }\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        let s = f(
+            "f = (l, acc) => l :: {\n [] => acc\n [h, ...rest] => f(rest, acc + h)\n }\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1296,8 +1409,14 @@ mod tests {
         // The recursive call rebuilds and passes the *whole* tuple (`[h, ...rest]`), not the
         // shorter remainder — no length descent → Unproven (it diverges).
         let mut i = Interner::new();
-        let s = f("f = (l) => l :: {\n [] => 0\n [h, ...rest] => f([h, ...rest])\n }\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        let s = f(
+            "f = (l) => l :: {\n [] => 0\n [h, ...rest] => f([h, ...rest])\n }\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     // ── G-5: lexicographic descent (§5 GR-13/14) ─────────────────────────────
@@ -1308,8 +1427,14 @@ mod tests {
         // holds a and drops b (gated by b>0). Neither argument descends monotonically — the
         // lex order does. Both floors come from the path guards, not the domain.
         let mut i = Interner::new();
-        let s = f("f = (a, b) => a <= 0 ? b : b <= 0 ? f(a - 1, 10) : f(a, b - 1)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        let s = f(
+            "f = (a, b) => a <= 0 ? b : b <= 0 ? f(a - 1, 10) : f(a, b - 1)\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1319,7 +1444,10 @@ mod tests {
         // terminate, but this route cannot prove a floor).
         let mut i = Interner::new();
         let s = f("f = (a, b) => a == b ? a : f(a - 1, b)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     #[test]
@@ -1327,16 +1455,28 @@ mod tests {
         // `n` is the counter (drift −1 toward the `n <= 0` stop); `acc` is carried freely.
         // Structural landing — the (broad) domain is irrelevant.
         let mut i = Interner::new();
-        let s = f("f = (n, acc) => n <= 0 ? acc : f(n - 1, acc + n)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        let s = f(
+            "f = (n, acc) => n <= 0 ? acc : f(n - 1, acc + n)\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
     fn accumulator_counter_grounds_ascending() {
         // Ascending counter toward an upper stop `n >= 100` (drift +1) — the mirror case.
         let mut i = Interner::new();
-        let s = f("f = (n, acc) => n >= 100 ? acc : f(n + 1, acc + n)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Grounded);
+        let s = f(
+            "f = (n, acc) => n >= 100 ? acc : f(n + 1, acc + n)\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
     }
 
     #[test]
@@ -1345,7 +1485,10 @@ mod tests {
         // never crossing it. No matching stop → Unproven (it genuinely diverges for n > 0).
         let mut i = Interner::new();
         let s = f("f = (n, acc) => n <= 0 ? acc : f(n + 1, acc)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 
     #[test]
@@ -1354,7 +1497,10 @@ mod tests {
         // carried `acc`. No floored counter → Unproven (sound — it can diverge).
         let mut i = Interner::new();
         let s = f("f = (n, acc) => acc <= 0 ? n : f(n, acc)\nf", &mut i);
-        assert_eq!(ground(&s, &Contract::Top, &ContractEnv::new(), &mut i), Verdict::Unproven);
+        assert_eq!(
+            ground(&s, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
     }
 }
 
@@ -1400,7 +1546,10 @@ mod review_gates {
             Verdict::Refuted(r) => {
                 assert_eq!(r.witness, Rational::from(1), "the admitted written start");
                 assert_eq!(r.drift, Rational::from(-2), "the forced constant drift");
-                assert!(!r.missed_bases.is_empty(), "the bases the orbit provably misses");
+                assert!(
+                    !r.missed_bases.is_empty(),
+                    "the bases the orbit provably misses"
+                );
             }
             other => panic!("expected a witness-bearing refutation, got {other:?}"),
         }
@@ -1417,7 +1566,10 @@ mod review_gates {
         let fv = f(src, &mut i);
         let one = Contract::Equals(i.integer(1));
         assert!(
-            !matches!(ground(&fv, &one, &ContractEnv::new(), &mut i), Verdict::Refuted(_)),
+            !matches!(
+                ground(&fv, &one, &ContractEnv::new(), &mut i),
+                Verdict::Refuted(_)
+            ),
             "FALSE REFUTATION: f(1) terminates because the guard `flag` is false"
         );
     }

@@ -28,7 +28,10 @@ impl Rational {
     /// `Indeterminate(DivZero(x))` value produced by the arithmetic layer, never a rational — so a zero
     /// denominator reaching this constructor is a bug, not a language event.
     pub fn new(numer: BigInt, denom: BigInt) -> Self {
-        assert!(!denom.is_zero(), "Rational::new called with zero denominator");
+        assert!(
+            !denom.is_zero(),
+            "Rational::new called with zero denominator"
+        );
         Rational(BigRational::new(numer, denom))
     }
 
@@ -135,7 +138,11 @@ fn power_of_ten_factors(denom: &BigInt) -> Option<(u32, u32)> {
         d /= &five;
         fives += 1;
     }
-    if d.is_one() { Some((twos, fives)) } else { None }
+    if d.is_one() {
+        Some((twos, fives))
+    } else {
+        None
+    }
 }
 
 impl fmt::Display for Rational {
@@ -199,7 +206,10 @@ impl Mul for Rational {
 impl Div for Rational {
     type Output = Rational;
     fn div(self, rhs: Rational) -> Rational {
-        assert!(!rhs.is_zero(), "Rational::div by zero — total division is a PrimOp rule");
+        assert!(
+            !rhs.is_zero(),
+            "Rational::div by zero — total division is a PrimOp rule"
+        );
         Rational(self.0 / rhs.0)
     }
 }

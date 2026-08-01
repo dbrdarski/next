@@ -18,7 +18,9 @@
 //! `unproven`, never a false proof.
 
 use crate::analyzer::inventory::build_inventory_by;
-use crate::ast::{AccessForm, Arg, Bind, Element, Expr, Field, Lambda, Match, MatchItem, Ref, TemplatePart};
+use crate::ast::{
+    AccessForm, Arg, Bind, Element, Expr, Field, Lambda, Match, MatchItem, Ref, TemplatePart,
+};
 use crate::env::Binding;
 use crate::value::ValueRef;
 
@@ -34,10 +36,16 @@ pub fn callee_targets(v: &ValueRef) -> Vec<ValueRef> {
     collect_callees(&f.shape().body, &mut callees);
     let mut targets: Vec<ValueRef> = Vec::new();
     for callee in &callees {
-        let Some(idx) = capture_index(callee) else { continue };
-        let Some(orig) = f.free_vars().get(idx) else { continue };
+        let Some(idx) = capture_index(callee) else {
+            continue;
+        };
+        let Some(orig) = f.free_vars().get(idx) else {
+            continue;
+        };
         match f.closure().env.lookup(orig) {
-            Some(Binding::Value(cv)) if cv.is_function() && !targets.contains(&cv) => targets.push(cv),
+            Some(Binding::Value(cv)) if cv.is_function() && !targets.contains(&cv) => {
+                targets.push(cv)
+            }
             _ => {}
         }
     }
@@ -54,12 +62,16 @@ pub fn reachable_closures(root: ValueRef) -> Vec<ValueRef> {
 /// The shape (canonical `Lambda`) of a closure value; an empty lambda for a
 /// non-function (never reached — roots and targets are functions).
 fn closure_shape(v: &ValueRef) -> Lambda {
-    v.as_fn().map(|f| f.shape().clone()).expect("a closure value")
+    v.as_fn()
+        .map(|f| f.shape().clone())
+        .expect("a closure value")
 }
 
 /// If `callee` is a capture-slot reference `@capᵢ`, its index `i`.
 fn capture_index(callee: &Expr) -> Option<usize> {
-    let Expr::Ref(Ref::Immutable(crate::ast::BindingRef::Name(n))) = callee else { return None };
+    let Expr::Ref(Ref::Immutable(crate::ast::BindingRef::Name(n))) = callee else {
+        return None;
+    };
     n.strip_prefix(CAP).and_then(|d| d.parse::<usize>().ok())
 }
 
@@ -94,7 +106,9 @@ fn collect_callees(e: &Expr, out: &mut Vec<Expr>) {
         Expr::RecordCons(fs) => {
             for f in fs {
                 match f {
-                    Field::Field { value, .. } | Field::Spread(value) => collect_callees(value, out),
+                    Field::Field { value, .. } | Field::Spread(value) => {
+                        collect_callees(value, out)
+                    }
                     Field::Computed { key, value } => {
                         collect_callees(key, out);
                         collect_callees(value, out);

@@ -42,19 +42,44 @@ pub enum SExpr {
     /// hask body over its holes.
     Hask(Box<SExpr>),
     /// `scrutinee :: { arms }`.
-    Match { scrutinee: Box<SExpr>, arms: Vec<SArm> },
+    Match {
+        scrutinee: Box<SExpr>,
+        arms: Vec<SArm>,
+    },
     /// `l |> r` / `l <| r`.
-    Pipe { dir: PipeDir, left: Box<SExpr>, right: Box<SExpr> },
+    Pipe {
+        dir: PipeDir,
+        left: Box<SExpr>,
+        right: Box<SExpr>,
+    },
     /// `c ? t : e`.
-    Ternary { cond: Box<SExpr>, then: Box<SExpr>, els: Box<SExpr> },
+    Ternary {
+        cond: Box<SExpr>,
+        then: Box<SExpr>,
+        els: Box<SExpr>,
+    },
     /// An infix operator application.
-    Binary { op: BinOp, left: Box<SExpr>, right: Box<SExpr> },
+    Binary {
+        op: BinOp,
+        left: Box<SExpr>,
+        right: Box<SExpr>,
+    },
     /// A prefix operator (`-`, `!`, `~`).
-    Unary { op: UnOp, operand: Box<SExpr> },
+    Unary {
+        op: UnOp,
+        operand: Box<SExpr>,
+    },
     /// `target.field`, `target?.field`, `target[i]`, `target?.[i]`, slices.
-    Access { target: Box<SExpr>, form: SAccessForm, total: bool },
+    Access {
+        target: Box<SExpr>,
+        form: SAccessForm,
+        total: bool,
+    },
     /// `callee( args )`.
-    Call { callee: Box<SExpr>, args: Vec<SArg> },
+    Call {
+        callee: Box<SExpr>,
+        args: Vec<SArg>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -102,7 +127,10 @@ pub enum UnOp {
 pub enum SAccessForm {
     Field(String),
     Index(Box<SExpr>),
-    Slice { lo: Option<Box<SExpr>>, hi: Option<Box<SExpr>> },
+    Slice {
+        lo: Option<Box<SExpr>>,
+        hi: Option<Box<SExpr>>,
+    },
 }
 
 /// A call argument; `...e` is a spread.
@@ -218,15 +246,31 @@ pub enum SPatField {
 pub enum SStmt {
     Binding(SBinding),
     Expr(SExpr),
-    Import { names: Option<Vec<String>>, module: Vec<String> },
+    Import {
+        names: Option<Vec<String>>,
+        module: Vec<String>,
+    },
     At(SAt),
-    Mutation { path: SPath, op: MutOp, value: SExpr },
+    Mutation {
+        path: SPath,
+        op: MutOp,
+        value: SExpr,
+    },
     /// Block-body arm `when guard => result`.
-    WhenArm { guard: SExpr, result: SExpr },
+    WhenArm {
+        guard: SExpr,
+        result: SExpr,
+    },
     /// Block-body arm `=> result`.
-    ElseArm { result: SExpr },
+    ElseArm {
+        result: SExpr,
+    },
     /// Name-level `where` signature assertion (§5).
-    Where { name: String, inputs: Vec<SExpr>, ret: SExpr },
+    Where {
+        name: String,
+        inputs: Vec<SExpr>,
+        ret: SExpr,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -264,7 +308,10 @@ pub struct SPath {
 pub enum SPathSeg {
     Field(String),
     Index(SExpr),
-    Slice { lo: Option<SExpr>, hi: Option<SExpr> },
+    Slice {
+        lo: Option<SExpr>,
+        hi: Option<SExpr>,
+    },
 }
 
 /// A mutation operator (§2.4). `Assign` is `:=`; the rest are compound.

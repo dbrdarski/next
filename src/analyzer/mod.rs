@@ -37,8 +37,7 @@ use std::collections::HashMap;
 use num_traits::ToPrimitive;
 
 use crate::ast::{
-    AccessForm, ActKind, Arg, BindingRef, Element, Expr, Field, PrimOp, Ref, SlotRef,
-    TemplatePart,
+    AccessForm, ActKind, Arg, BindingRef, Element, Expr, Field, PrimOp, Ref, SlotRef, TemplatePart,
 };
 use crate::contract::{
     Contract, ContractEnv, Kind, OpSafety, Verdict, analyze_operation, disjoint, eval_contract,
@@ -54,17 +53,17 @@ use self::application::{
 };
 use self::domain::AnalysisContract;
 
-pub mod demand;
-pub(crate) mod factcache;
-pub mod program;
 pub mod application;
 pub mod bodywalk;
+pub mod demand;
 pub mod domain;
+pub(crate) mod factcache;
 pub mod grounding;
 pub mod induction;
 pub mod inventory;
 pub mod obligation;
 pub mod outcome;
+pub mod program;
 pub mod refute;
 pub mod region;
 pub mod safety;
@@ -247,7 +246,11 @@ fn demand(a: &Analysis, findings: &mut Vec<Finding>) {
             "a value is demanded here, but this expression cannot be proven to produce one",
         ),
     };
-    findings.push(Finding { class: TrapClass::ExpectingSeat, severity, message: message.into() });
+    findings.push(Finding {
+        class: TrapClass::ExpectingSeat,
+        severity,
+        message: message.into(),
+    });
 }
 
 /// The annotated expression environment. Ordinary contracts inserted by older
@@ -275,7 +278,12 @@ impl TypeEnv {
 }
 
 /// Analyze a kernel expression against a contract environment.
-pub fn analyze(expr: &Expr, env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+pub fn analyze(
+    expr: &Expr,
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Analysis {
     analyze_in_world(expr, env, cenv, World::Pure, interner)
 }
 
@@ -291,11 +299,9 @@ pub(crate) fn analyze_in_world(
 ) -> Analysis {
     match expr {
         // A literal denotes exactly itself.
-        Expr::Const(v) => Analysis::produced_annotated(
-            AnalysisContract::of_value(v.clone()),
-            vec![],
-            interner,
-        ),
+        Expr::Const(v) => {
+            Analysis::produced_annotated(AnalysisContract::of_value(v.clone()), vec![], interner)
+        }
 
         // An immutable reference takes its bound contract; an unbound name is the
         // unbound-evaluation trap's compile-time mirror.
@@ -318,13 +324,13 @@ pub(crate) fn analyze_in_world(
         Expr::TupleCons(elems) => analyze_tuple(elems, env, cenv, world, interner),
         Expr::RecordCons(fields) => analyze_record(fields, env, cenv, world, interner),
         Expr::Template(parts) => analyze_template(parts, env, cenv, world, interner),
-        Expr::Access { target, form, total } => {
-            analyze_access(target, form, *total, env, cenv, world, interner)
-        }
+        Expr::Access {
+            target,
+            form,
+            total,
+        } => analyze_access(target, form, *total, env, cenv, world, interner),
         Expr::Match(m) => analyze_match(m, env, cenv, world, interner),
-        Expr::Apply { callee, args } => {
-            analyze_apply(callee, args, env, cenv, world, interner)
-        }
+        Expr::Apply { callee, args } => analyze_apply(callee, args, env, cenv, world, interner),
         Expr::Write { slot, value } => analyze_write(slot, value, env, cenv, world, interner),
 
         // A bare lambda expression has no first-class function contract here;
@@ -672,7 +678,11 @@ fn analyze_access(
                 Analysis::produced_with_safety(Contract::Top, findings, safety_demands)
             }
             Err(trap) => {
-                findings.push(Finding { class: trap.class, severity: Severity::Error, message: trap.message });
+                findings.push(Finding {
+                    class: trap.class,
+                    severity: Severity::Error,
+                    message: trap.message,
+                });
                 Analysis::produced_with_safety(Contract::Bottom, findings, safety_demands)
             }
         };
@@ -851,7 +861,10 @@ fn analyze_index(
 fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Interner) -> Contract {
     // Slices trap on a non-sliceable receiver (operation-safety); null is not
     // totalized. Provably-null ⇒ always traps.
-    if matches!(subcontract(tc, &Contract::Kind(Kind::Null), interner), Verdict::Proven) {
+    if matches!(
+        subcontract(tc, &Contract::Kind(Kind::Null), interner),
+        Verdict::Proven
+    ) {
         findings.push(Finding {
             class: TrapClass::OperationSafety,
             severity: Severity::Error,
@@ -950,7 +963,13 @@ fn analyze_apply(
                 has_spread = true;
                 let aa = analyze_in_world(e, env, cenv, world, interner);
                 demand(&aa, &mut findings);
-                check_spread_kind(&aa.contract, Kind::Tuple, "argument spread of a non-Tuple", &mut findings, interner);
+                check_spread_kind(
+                    &aa.contract,
+                    Kind::Tuple,
+                    "argument spread of a non-Tuple",
+                    &mut findings,
+                    interner,
+                );
                 findings.extend(aa.findings);
                 safety_demands.extend(aa.safety_demands);
             }
@@ -964,14 +983,7 @@ fn analyze_apply(
         application::operand_from_annotated(&callee_annotated, &argument_annotated)
     });
     let transfer = application::drive_application(&operand, |alternative, correlated| {
-        analyze_application_alternative(
-            alternative,
-            correlated,
-            has_spread,
-            world,
-            cenv,
-            interner,
-        )
+        analyze_application_alternative(alternative, correlated, has_spread, world, cenv, interner)
     });
     for mut detail in transfer.details {
         findings.append(&mut detail.findings);
@@ -1185,12 +1197,7 @@ fn analyze_known_application_alternative(
             .expect("a known closure has a body outcome");
         let completes = matches!(&observed.completion, Completion::Produces);
         let completion = callee_completion(callee, arg_contracts, completes, interner);
-        return application_contribution(
-            findings,
-            safety_demands,
-            observed.annotated,
-            completion,
-        );
+        return application_contribution(findings, safety_demands, observed.annotated, completion);
     }
 
     // Candidate-graph verification may consume only the active/settled graph. Starting
@@ -1281,12 +1288,9 @@ fn application_contribution(
         .iter()
         .any(|finding| finding.severity == Severity::Error)
         || safety_demands.iter().any(|demand| match demand {
-            SafetyDemand::Operation(operation) => {
-                !matches!(operation.verdict, OpSafety::Proven)
-            }
+            SafetyDemand::Operation(operation) => !matches!(operation.verdict, OpSafety::Proven),
             SafetyDemand::Body(body) => !matches!(body.verdict, safety::BodySafety::Proven),
-        })
-    {
+        }) {
         SeatVerdict::Unproven
     } else {
         SeatVerdict::Proven
@@ -1430,7 +1434,13 @@ fn callee_completion(
 /// argument contracts**, so `factorial(k)` with `k : Number` returns `Number` rather
 /// rather than the untyped-domain coarse result (let alone `Top`). Falls back to
 /// `Top` when nothing informative is inferred (sound).
-fn call_return(cv: &ValueRef, arg_contracts: &[Contract], has_spread: bool, cenv: &ContractEnv, interner: &mut Interner) -> Contract {
+fn call_return(
+    cv: &ValueRef,
+    arg_contracts: &[Contract],
+    has_spread: bool,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Contract {
     // An active hypothesis applies only to the **same instance over a containing input
     // domain** (§6 / C§13.2 domain-indexed facts) — never by shape alone.
     if let Some(c) = induction::hypothesis_for(cv, arg_contracts, interner) {
@@ -1585,10 +1595,7 @@ fn analyze_match(
             safety_demands.append(&mut a.safety_demands);
             pair
         }
-        None => (
-            Contract::Top,
-            AnalysisContract::of_contract(Contract::Top),
-        ),
+        None => (Contract::Top, AnalysisContract::of_contract(Contract::Top)),
     };
 
     // `body_env` accumulates Bind / Stmt bindings; each item runs against it.
@@ -1671,7 +1678,8 @@ fn analyze_match(
                     if matches!(subcontract(&ga.contract, &f, interner), Verdict::Proven) {
                         continue; // guard can never hold — dead arm
                     }
-                    opaque_guard = !matches!(subcontract(&ga.contract, &t, interner), Verdict::Proven);
+                    opaque_guard =
+                        !matches!(subcontract(&ga.contract, &t, interner), Verdict::Proven);
                     any_guarded |= opaque_guard;
                 }
 
@@ -1836,20 +1844,12 @@ fn contract_ref(r: &Ref, cenv: &ContractEnv, i: &mut Interner) -> Option<Contrac
 /// Bind a pattern's names to their narrowed contracts in `env` (best-effort; a
 /// name whose position is not tracked binds to `Top`).
 pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut TypeEnv) {
-    bind_pattern_annotated(
-        pat,
-        &AnalysisContract::of_contract(narrowed.clone()),
-        env,
-    );
+    bind_pattern_annotated(pat, &AnalysisContract::of_contract(narrowed.clone()), env);
 }
 
 /// Annotated pattern binding. Structural tuple/record positions and correlated
 /// alternatives survive into the bound names; an untracked position widens to Top.
-fn bind_pattern_annotated(
-    pat: &crate::ast::Pat,
-    narrowed: &AnalysisContract,
-    env: &mut TypeEnv,
-) {
+fn bind_pattern_annotated(pat: &crate::ast::Pat, narrowed: &AnalysisContract, env: &mut TypeEnv) {
     use crate::ast::{Pat, PatElem, PatField};
     match pat {
         Pat::Bind(name) => {
@@ -1913,11 +1913,7 @@ fn analyze_bind(
                     message: "cannot prove this destructuring binding irrefutable".into(),
                 });
             }
-            let narrowed = domain::intersect_a(
-                value,
-                &AnalysisContract::of_contract(pc),
-                interner,
-            );
+            let narrowed = domain::intersect_a(value, &AnalysisContract::of_contract(pc), interner);
             bind_pattern_annotated(p, &narrowed, env);
         }
     }

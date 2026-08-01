@@ -13,9 +13,7 @@ use crate::contract::Contract;
 use crate::env::{Binding, SlotId};
 use crate::intern::{EnumInterner, Interned};
 use crate::rational::Rational;
-use crate::value::{
-    FnValue, IndeterminateForm, NativeRef, RecordEntry, ValueData, ValueRef,
-};
+use crate::value::{FnValue, IndeterminateForm, NativeRef, RecordEntry, ValueData, ValueRef};
 
 /// Owns every interned value for a program. Not `Send`/`Sync` (uses `Rc`); the
 /// oracle is sequential (semantics §3).
@@ -153,7 +151,10 @@ impl Interner {
 
     /// Intern a tuple from already-interned elements (order preserved).
     pub fn tuple(&mut self, items: Vec<ValueRef>) -> ValueRef {
-        let items = items.into_iter().map(|item| self.canonical_ref(item)).collect();
+        let items = items
+            .into_iter()
+            .map(|item| self.canonical_ref(item))
+            .collect();
         self.intern(ValueData::Tuple(items))
     }
 
@@ -226,7 +227,10 @@ impl Interner {
             ValueData::Function(_) => self.close_function(value.clone()),
             ValueData::Tuple(items) => {
                 let items = items.clone();
-                let closed = items.into_iter().map(|item| self.close_value_graph(item)).collect();
+                let closed = items
+                    .into_iter()
+                    .map(|item| self.close_value_graph(item))
+                    .collect();
                 self.tuple(closed)
             }
             ValueData::Record(fields) => {
@@ -261,7 +265,11 @@ impl Interner {
         }
 
         let fingerprint = key.shape;
-        let candidates = self.function_buckets.get(&fingerprint).cloned().unwrap_or_default();
+        let candidates = self
+            .function_buckets
+            .get(&fingerprint)
+            .cloned()
+            .unwrap_or_default();
         if let Some(existing) = candidates
             .into_iter()
             .find(|existing| crate::oracle::equal::canonical_graphs_equal(&value, existing))
@@ -274,7 +282,10 @@ impl Interner {
         }
 
         self.function_keys.insert(key, value.clone());
-        self.function_buckets.entry(fingerprint).or_default().push(value.clone());
+        self.function_buckets
+            .entry(fingerprint)
+            .or_default()
+            .push(value.clone());
         value
     }
 

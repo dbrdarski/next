@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use crate::ast::*;
 use crate::parse::surface::{Hole, SExpr};
 
-use super::{Desugarer, DesugarError, err};
+use super::{DesugarError, Desugarer, err};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum RestKind {
@@ -41,7 +41,11 @@ impl<'a> Desugarer<'a> {
         let body_expr = self.expr(body)?;
         let scope = self.hask_stack.pop().expect("hask scope was pushed");
         let params = self.build_hask_params(scope)?;
-        Ok(Expr::Lambda(Lambda { params, body: Box::new(body_expr), act_kind: ActKind::Pure }))
+        Ok(Expr::Lambda(Lambda {
+            params,
+            body: Box::new(body_expr),
+            act_kind: ActKind::Pure,
+        }))
     }
 
     /// Register a non-rest hole, returning its parameter name.
@@ -60,7 +64,11 @@ impl<'a> Desugarer<'a> {
                     return Ok(existing.clone());
                 }
                 let name = self.fresh("h");
-                self.hask_stack.last_mut().unwrap().indexed.insert(*n, name.clone());
+                self.hask_stack
+                    .last_mut()
+                    .unwrap()
+                    .indexed
+                    .insert(*n, name.clone());
                 Ok(name)
             }
         }
@@ -87,7 +95,11 @@ impl<'a> Desugarer<'a> {
     }
 
     fn build_hask_params(&mut self, scope: HaskScope) -> Result<Pat, DesugarError> {
-        let HaskScope { anon, indexed, rest } = scope;
+        let HaskScope {
+            anon,
+            indexed,
+            rest,
+        } = scope;
         if !anon.is_empty() && !indexed.is_empty() {
             return err("mixing plain `_` and indexed `_n` holes is not supported (v0.1)");
         }

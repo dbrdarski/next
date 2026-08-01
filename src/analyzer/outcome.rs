@@ -55,12 +55,8 @@ pub(crate) fn analyze_instance_body(
     let closure = callee.as_closure()?;
     let function = callee.as_fn()?;
     let shape = function.shape_rc();
-    let repeated = ACTIVE_SHAPES.with(|active| {
-        active
-            .borrow()
-            .iter()
-            .any(|held| held.ptr_eq(&shape))
-    });
+    let repeated =
+        ACTIVE_SHAPES.with(|active| active.borrow().iter().any(|held| held.ptr_eq(&shape)));
     if repeated {
         return Some(Analysis {
             contract: Contract::Top,

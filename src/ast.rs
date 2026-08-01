@@ -80,7 +80,11 @@ pub enum Expr {
     /// The one access node. `total = false` is the demand form; `total = true`
     /// is the `?.` family (one-step null conversion). Slices ignore `total`
     /// (always clamped-total). `?.` is a kernel mode, never sugar.
-    Access { target: Box<Expr>, form: AccessForm, total: bool },
+    Access {
+        target: Box<Expr>,
+        form: AccessForm,
+        total: bool,
+    },
     /// Interpolated template; a kernel node (printing is runtime semantics).
     Template(Vec<TemplatePart>),
     /// The mutation primitive; legal only inside `mutator`-kind bodies. All
@@ -156,7 +160,10 @@ pub enum AccessForm {
     Field(String),
     Index(Box<Expr>),
     /// Half-open window; negative bounds address from the end; always clamped.
-    Slice { lo: Option<Box<Expr>>, hi: Option<Box<Expr>> },
+    Slice {
+        lo: Option<Box<Expr>>,
+        hi: Option<Box<Expr>>,
+    },
 }
 
 /// A template part: a literal segment or an interpolation.

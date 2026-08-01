@@ -40,9 +40,18 @@ struct Norm<'a> {
 impl Norm<'_> {
     fn normalize(&mut self, e: &Expr) -> Expr {
         match e {
-            Expr::PrimOp { op: PrimOp::Add | PrimOp::Sub, args } if args.len() == 2 => self.norm_add(e),
-            Expr::PrimOp { op: PrimOp::Neg, args } if args.len() == 1 => self.norm_add(e),
-            Expr::PrimOp { op: PrimOp::Mul, args } if args.len() == 2 => self.norm_mul(e),
+            Expr::PrimOp {
+                op: PrimOp::Add | PrimOp::Sub,
+                args,
+            } if args.len() == 2 => self.norm_add(e),
+            Expr::PrimOp {
+                op: PrimOp::Neg,
+                args,
+            } if args.len() == 1 => self.norm_add(e),
+            Expr::PrimOp {
+                op: PrimOp::Mul,
+                args,
+            } if args.len() == 2 => self.norm_mul(e),
             _ => self.norm_children(e),
         }
     }
@@ -89,21 +98,32 @@ impl Norm<'_> {
         if had_constant {
             out.push(Expr::Const(self.interner.number(constant)));
         }
-        out.into_iter().reduce(|a, b| prim(PrimOp::Add, a, b)).expect("non-empty chain")
+        out.into_iter()
+            .reduce(|a, b| prim(PrimOp::Add, a, b))
+            .expect("non-empty chain")
     }
 
     /// Flatten a `+`/`-`/unary-`-` chain into signed, normalized leaf terms.
     fn flatten_add(&mut self, e: &Expr, positive: bool, out: &mut Vec<(bool, Expr)>) {
         match e {
-            Expr::PrimOp { op: PrimOp::Add, args } if args.len() == 2 => {
+            Expr::PrimOp {
+                op: PrimOp::Add,
+                args,
+            } if args.len() == 2 => {
                 self.flatten_add(&args[0], positive, out);
                 self.flatten_add(&args[1], positive, out);
             }
-            Expr::PrimOp { op: PrimOp::Sub, args } if args.len() == 2 => {
+            Expr::PrimOp {
+                op: PrimOp::Sub,
+                args,
+            } if args.len() == 2 => {
                 self.flatten_add(&args[0], positive, out);
                 self.flatten_add(&args[1], !positive, out);
             }
-            Expr::PrimOp { op: PrimOp::Neg, args } if args.len() == 1 => {
+            Expr::PrimOp {
+                op: PrimOp::Neg,
+                args,
+            } if args.len() == 1 => {
                 self.flatten_add(&args[0], !positive, out);
             }
             _ => out.push((positive, self.normalize(e))),
@@ -133,12 +153,19 @@ impl Norm<'_> {
         if rest.is_empty() {
             return Expr::Const(self.interner.number(coeff));
         }
-        let product = rest.into_iter().reduce(|a, b| prim(PrimOp::Mul, a, b)).unwrap();
+        let product = rest
+            .into_iter()
+            .reduce(|a, b| prim(PrimOp::Mul, a, b))
+            .unwrap();
         // Keep the coefficient as a factor even when 0 or 1 — dropping it would
         // annihilate (`0·x`) or drop a demand (`x·1`), both excluded. Omit it only
         // when there was no literal factor at all.
         if had_literal {
-            prim(PrimOp::Mul, Expr::Const(self.interner.number(coeff)), product)
+            prim(
+                PrimOp::Mul,
+                Expr::Const(self.interner.number(coeff)),
+                product,
+            )
         } else {
             product
         }
@@ -176,7 +203,10 @@ impl Norm<'_> {
         }
         for n in neg {
             result = Some(match result {
-                None => Expr::PrimOp { op: PrimOp::Neg, args: vec![n] },
+                None => Expr::PrimOp {
+                    op: PrimOp::Neg,
+                    args: vec![n],
+                },
                 Some(acc) => prim(PrimOp::Sub, acc, n),
             });
         }
@@ -192,7 +222,10 @@ impl Norm<'_> {
 
     fn flatten_mul(&mut self, e: &Expr, out: &mut Vec<Expr>) {
         match e {
-            Expr::PrimOp { op: PrimOp::Mul, args } if args.len() == 2 => {
+            Expr::PrimOp {
+                op: PrimOp::Mul,
+                args,
+            } if args.len() == 2 => {
                 self.flatten_mul(&args[0], out);
                 self.flatten_mul(&args[1], out);
             }
@@ -228,9 +261,17 @@ impl Norm<'_> {
                 args: args.iter().map(|a| self.normalize(a)).collect(),
             },
             Expr::Match(m) => Expr::Match(self.mtch(m)),
-            Expr::TupleCons(elems) => Expr::TupleCons(elems.iter().map(|el| self.elem(el)).collect()),
-            Expr::RecordCons(fields) => Expr::RecordCons(fields.iter().map(|f| self.field(f)).collect()),
-            Expr::Access { target, form, total } => Expr::Access {
+            Expr::TupleCons(elems) => {
+                Expr::TupleCons(elems.iter().map(|el| self.elem(el)).collect())
+            }
+            Expr::RecordCons(fields) => {
+                Expr::RecordCons(fields.iter().map(|f| self.field(f)).collect())
+            }
+            Expr::Access {
+                target,
+                form,
+                total,
+            } => Expr::Access {
                 target: Box::new(self.normalize(target)),
                 form: self.form(form),
                 total: *total,
@@ -265,10 +306,14 @@ impl Norm<'_> {
     }
     fn field(&mut self, f: &Field) -> Field {
         match f {
-            Field::Field { key, value } => Field::Field { key: key.clone(), value: self.normalize(value) },
-            Field::Computed { key, value } => {
-                Field::Computed { key: self.normalize(key), value: self.normalize(value) }
-            }
+            Field::Field { key, value } => Field::Field {
+                key: key.clone(),
+                value: self.normalize(value),
+            },
+            Field::Computed { key, value } => Field::Computed {
+                key: self.normalize(key),
+                value: self.normalize(value),
+            },
             Field::Spread(e) => Field::Spread(self.normalize(e)),
         }
     }
@@ -307,7 +352,10 @@ impl Norm<'_> {
 }
 
 fn prim(op: PrimOp, a: Expr, b: Expr) -> Expr {
-    Expr::PrimOp { op, args: vec![a, b] }
+    Expr::PrimOp {
+        op,
+        args: vec![a, b],
+    }
 }
 
 fn is_one(r: &Rational) -> bool {
@@ -319,7 +367,10 @@ fn is_one(r: &Rational) -> bool {
 fn decompose(e: &Expr) -> (Rational, Option<Expr>) {
     match e {
         Expr::Const(v) if v.as_number().is_some() => (v.as_number().unwrap().clone(), None),
-        Expr::PrimOp { op: PrimOp::Mul, args } if args.len() == 2 => match &args[0] {
+        Expr::PrimOp {
+            op: PrimOp::Mul,
+            args,
+        } if args.len() == 2 => match &args[0] {
             Expr::Const(v) if v.as_number().is_some() => {
                 (v.as_number().unwrap().clone(), Some(args[1].clone()))
             }
@@ -359,7 +410,11 @@ fn ser(e: &Expr, out: &mut String) {
             }
             out.push(')');
         }
-        Expr::Access { target, form, total } => {
+        Expr::Access {
+            target,
+            form,
+            total,
+        } => {
             out.push_str(&format!("X{total}("));
             ser(target, out);
             match form {

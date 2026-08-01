@@ -133,7 +133,10 @@ mod tests {
         let mut i = EnumInterner::new();
         let a = i.intern(Toy::Leaf(1));
         let b = i.intern(Toy::Leaf(1));
-        assert!(a.ptr_eq(&b), "structural equality must coincide with pointer equality");
+        assert!(
+            a.ptr_eq(&b),
+            "structural equality must coincide with pointer equality"
+        );
         assert_eq!(i.count::<Toy>(), 1, "and only one allocation exists");
     }
 
@@ -157,7 +160,11 @@ mod tests {
         let (one2, two2) = (i.intern(Toy::Leaf(1)), i.intern(Toy::Leaf(2)));
         let q = i.intern(Toy::Pair(one2, two2));
         assert!(p.ptr_eq(&q), "same children ⇒ same compound");
-        assert_eq!(i.count::<Toy>(), 3, "Leaf(1), Leaf(2), Pair — nothing duplicated");
+        assert_eq!(
+            i.count::<Toy>(),
+            3,
+            "Leaf(1), Leaf(2), Pair — nothing duplicated"
+        );
     }
 
     /// Distinct types keep distinct tables.

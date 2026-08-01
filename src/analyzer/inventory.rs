@@ -39,7 +39,10 @@ use crate::ast::Lambda;
 /// transition orders). The returned `Vec` is discovery-ordered and is **not** a
 /// canonical sequence; a consumer that needs stable candidate identity must sort it
 /// by its own key, never rely on this order.
-pub fn build_inventory(roots: Vec<Instance>, transitions: impl Fn(&Instance) -> Vec<Instance>) -> Vec<Instance> {
+pub fn build_inventory(
+    roots: Vec<Instance>,
+    transitions: impl Fn(&Instance) -> Vec<Instance>,
+) -> Vec<Instance> {
     build_inventory_by(roots, |i: &Instance| i.shape.clone(), transitions)
 }
 

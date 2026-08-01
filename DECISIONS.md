@@ -4405,3 +4405,17 @@ construction/identity. **`// [ask-author]`: none.**
 **Verification:** 437 lib passed / 1 ignored; 113 conformance passed / 11 ignored; 10 machinery gates
 passed; clippy `-D warnings` clean; normative manifest 19/19 OK. Repository-wide formatting remains
 the final measured P0 gate.
+
+## 2026-08-01 — Recovery slice 12: repository formatting gate
+
+The final measured P0 was repository-wide formatting debt rather than a semantic defect. After the
+eleven semantic recovery slices were green, `cargo fmt --all` was applied once across the tracked Rust
+workspace. This is a mechanical rewrite with no intended language, analyzer, or runtime behavior
+change; normative documents remain untouched and manifest-protected. `cargo fmt --all -- --check` is
+now green, so the recovery rebaseline has no remaining measured P0 drift. Ignored and explicitly
+staged work remains recorded separately and is not reclassified as complete. **`// [ask-author]`:
+none.**
+
+**Verification after formatting:** 437 lib passed / 1 ignored; 113 conformance passed / 11 ignored;
+10 machinery gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative
+manifest 19/19 OK (with the manifest's pre-existing malformed-line warning).

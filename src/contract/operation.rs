@@ -154,9 +154,7 @@ fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bo
         // Ordering comparisons demand `Number` **strictly** — an Indeterminate
         // operand traps (`UndischargedIndeterminate`), so it is *not* admitted here.
         PrimOp::Lt | PrimOp::Le | PrimOp::Gt | PrimOp::Ge => match inputs {
-            [a, b] => {
-                is_number(a, interner) && is_number(b, interner)
-            }
+            [a, b] => is_number(a, interner) && is_number(b, interner),
             _ => false,
         },
 
@@ -166,7 +164,8 @@ fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bo
             [a, b] => {
                 is_number(a, interner)
                     && sub(b, &integers(), interner)
-                    && (nonzero(a, interner) || sub(b, &Contract::GreaterEq(Rational::from(0)), interner))
+                    && (nonzero(a, interner)
+                        || sub(b, &Contract::GreaterEq(Rational::from(0)), interner))
             }
             _ => false,
         },
@@ -218,7 +217,9 @@ fn find_trap(
     interner: &mut Interner,
 ) -> Option<Vec<ValueRef>> {
     match pools {
-        [] => eval_prim(op, tuple, interner).is_err().then(|| tuple.clone()),
+        [] => eval_prim(op, tuple, interner)
+            .is_err()
+            .then(|| tuple.clone()),
         [head, rest @ ..] => {
             for v in head {
                 tuple.push(v.clone());
@@ -398,11 +399,16 @@ fn decide_equality(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Intern
         _ => None,
     };
     match equal {
-        Some(v) => Contract::Equals(interner.boolean(if matches!(op, PrimOp::Eq) { v } else { !v })),
+        Some(v) => {
+            Contract::Equals(interner.boolean(if matches!(op, PrimOp::Eq) { v } else { !v }))
+        }
         None => Contract::Kind(Kind::Boolean),
     }
 }
 
 fn is_str(c: &Contract, interner: &mut Interner) -> bool {
-    matches!(subcontract(c, &Contract::Kind(Kind::String), interner), Verdict::Proven)
+    matches!(
+        subcontract(c, &Contract::Kind(Kind::String), interner),
+        Verdict::Proven
+    )
 }

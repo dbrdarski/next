@@ -27,7 +27,11 @@ fn eval(src: &str) -> ValueRef {
 }
 
 fn vtrue(src: &str) {
-    assert_eq!(eval(src).as_boolean(), Some(true), "expected VALUE true: {src}");
+    assert_eq!(
+        eval(src).as_boolean(),
+        Some(true),
+        "expected VALUE true: {src}"
+    );
 }
 
 fn trap(src: &str) -> TrapClass {
@@ -48,7 +52,9 @@ fn parse_error(src: &str) -> bool {
 /// Rejected at any front-end or evaluation stage (spec rows that allow either).
 fn rejected_any_stage(src: &str) -> bool {
     let Ok(toks) = lex(src) else { return true };
-    let Ok(sp) = parse_program(toks) else { return true };
+    let Ok(sp) = parse_program(toks) else {
+        return true;
+    };
     let mut i = Interner::new();
     if Desugarer::new(&mut i).program(&sp).is_err() {
         return true;
@@ -63,7 +69,9 @@ fn eval_in(interner: &mut Interner, src: &str) -> ValueRef {
     let module = Desugarer::new(interner).program(&sp).expect("desugar ok");
     let env = prelude_env(interner);
     let mut oracle = Oracle::new(interner);
-    oracle.run_module_in(&module, &env).expect("evaluated without trapping")
+    oracle
+        .run_module_in(&module, &env)
+        .expect("evaluated without trapping")
 }
 
 fn num_eq(v: &ValueRef, n: i64) {
@@ -153,7 +161,10 @@ mod phase0 {
         // Equal nested structures share subtrees.
         let outer = eval_in(&mut i, "[[1, 2], 3]");
         let inner = eval_in(&mut i, "[1, 2]");
-        assert!(outer.as_tuple().unwrap()[0].ptr_eq(&inner), "shared subtree");
+        assert!(
+            outer.as_tuple().unwrap()[0].ptr_eq(&inner),
+            "shared subtree"
+        );
     }
 
     #[test]
@@ -212,7 +223,10 @@ mod phase0 {
     fn mu19_same_group_construction_reference_is_legal() {
         // A reference to another group member *within construction* is an internal
         // μ edge, never a read — the mutual group constructs without trapping.
-        num_eq(&eval("a = [() => b]\nb = [() => a]\na[0]()[0]()[0]()\n1"), 1);
+        num_eq(
+            &eval("a = [() => b]\nb = [() => a]\na[0]()[0]()[0]()\n1"),
+            1,
+        );
     }
 
     #[test]
@@ -252,7 +266,10 @@ mod phase1 {
 
     #[test]
     fn p03_pipe_mixing_ban() {
-        assert!(parse_error("a |> f <| b"), "unparenthesized |>/<| mixing is a parse error");
+        assert!(
+            parse_error("a |> f <| b"),
+            "unparenthesized |>/<| mixing is a parse error"
+        );
     }
 
     #[test]
@@ -270,8 +287,14 @@ mod phase1 {
 
     #[test]
     fn p06_hask_binds_whole_ternary() {
-        assert_eq!(str_of(&eval("h = # _ > 0 ? \"pos\" : \"neg\"\nh(1)")), "pos");
-        assert_eq!(str_of(&eval("h = # _ > 0 ? \"pos\" : \"neg\"\nh(-1)")), "neg");
+        assert_eq!(
+            str_of(&eval("h = # _ > 0 ? \"pos\" : \"neg\"\nh(1)")),
+            "pos"
+        );
+        assert_eq!(
+            str_of(&eval("h = # _ > 0 ? \"pos\" : \"neg\"\nh(-1)")),
+            "neg"
+        );
     }
 
     #[test]
@@ -347,14 +370,21 @@ mod phase1 {
     #[test]
     fn p18_arrow_returning_empty_record() {
         let v = eval("f = x => {}\nf(1)");
-        assert_eq!(v.as_record().map(|r| r.len()), Some(0), "x => {{}} yields an empty Record");
+        assert_eq!(
+            v.as_record().map(|r| r.len()),
+            Some(0),
+            "x => {{}} yields an empty Record"
+        );
     }
 
     #[test]
     fn p19_empty_act_block() {
         // @effect f = () => { } — the 1.0.3 brace exception: an empty act Block.
         let (v, _io) = run_with_io("@effect f = () => { }\nf()").expect("runs");
-        assert!(v.is_null(), "program ends in an effect statement; value null");
+        assert!(
+            v.is_null(),
+            "program ends in an effect statement; value null"
+        );
     }
 
     #[test]
@@ -364,7 +394,10 @@ mod phase1 {
 
     #[test]
     fn p21_two_arms_one_line() {
-        assert!(parse_error("x = 1 :: { 1 => 1 2 => 2 }"), "L2: one arm per line");
+        assert!(
+            parse_error("x = 1 :: { 1 => 1 2 => 2 }"),
+            "L2: one arm per line"
+        );
     }
 
     #[test]
@@ -396,12 +429,18 @@ mod phase1 {
     #[test]
     fn p26_no_elision_no_duplicate_keys() {
         assert!(parse_error("x = [1, , 3]"), "elision is banned");
-        assert!(parse_error("x = { a: 1, a: 2 }"), "duplicate literal keys are banned");
+        assert!(
+            parse_error("x = { a: 1, a: 2 }"),
+            "duplicate literal keys are banned"
+        );
     }
 
     #[test]
     fn p27_import_forms_parse() {
-        assert!(!parse_error("import { area } from Geometry"), "named import parses");
+        assert!(
+            !parse_error("import { area } from Geometry"),
+            "named import parses"
+        );
         assert!(!parse_error("import Oddo.Utils"), "module import parses");
     }
 
@@ -413,7 +452,10 @@ mod phase1 {
 
     #[test]
     fn p28_value_side_act_annotation_banned() {
-        assert!(parse_error("name = @effect (x) => {}"), "value-side @ does not exist");
+        assert!(
+            parse_error("name = @effect (x) => {}"),
+            "value-side @ does not exist"
+        );
     }
 
     #[test]
@@ -511,14 +553,26 @@ mod phase2 {
 
     #[test]
     fn d10_alternation_expands_to_arms() {
-        assert_eq!(str_of(&eval("3 :: { 1 | 3 => \"hit\"\n_ => \"miss\" }")), "hit");
-        assert_eq!(str_of(&eval("2 :: { 1 | 3 => \"hit\"\n_ => \"miss\" }")), "miss");
+        assert_eq!(
+            str_of(&eval("3 :: { 1 | 3 => \"hit\"\n_ => \"miss\" }")),
+            "hit"
+        );
+        assert_eq!(
+            str_of(&eval("2 :: { 1 | 3 => \"hit\"\n_ => \"miss\" }")),
+            "miss"
+        );
     }
 
     #[test]
     fn d11_pin_is_equality_guard() {
-        assert_eq!(str_of(&eval("target = 5\n5 :: { ^target => \"eq\"\n_ => \"ne\" }")), "eq");
-        assert_eq!(str_of(&eval("target = 5\n4 :: { ^target => \"eq\"\n_ => \"ne\" }")), "ne");
+        assert_eq!(
+            str_of(&eval("target = 5\n5 :: { ^target => \"eq\"\n_ => \"ne\" }")),
+            "eq"
+        );
+        assert_eq!(
+            str_of(&eval("target = 5\n4 :: { ^target => \"eq\"\n_ => \"ne\" }")),
+            "ne"
+        );
     }
 
     #[test]
@@ -752,7 +806,10 @@ mod phase3 {
         let mut i = Interner::new();
         let t = eval_in(&mut i, "t = [1, 2, 3]\nt");
         let clamped = eval_in(&mut i, "t = [1, 2, 3]\nt[...10]");
-        assert!(clamped.ptr_eq(&t), "clamp to the whole tuple = same pointer");
+        assert!(
+            clamped.ptr_eq(&t),
+            "clamp to the whole tuple = same pointer"
+        );
         vtrue("t = [1, 2, 3]\nt[5...] == []");
         vtrue("t = [1, 2, 3]\nt[2...2] == []");
         vtrue("t = [1, 2, 3]\nt[-2...] == [2, 3]");
@@ -940,7 +997,10 @@ mod phase3 {
              export result = println(\"no\")\n",
         )
         .expect("the module parses and checks");
-        assert!(!verdict.accepted(), "an act call at module top level must reject");
+        assert!(
+            !verdict.accepted(),
+            "an act call at module top level must reject"
+        );
         assert!(
             verdict
                 .findings
@@ -1016,7 +1076,10 @@ mod phase4 {
             let a = next::oracle::eval_expr(&e, &mut i);
             let b = next::oracle::eval_expr(&n, &mut i);
             match (a, b) {
-                (Ok(next::oracle::Outcome::Produced(x)), Ok(next::oracle::Outcome::Produced(y))) => {
+                (
+                    Ok(next::oracle::Outcome::Produced(x)),
+                    Ok(next::oracle::Outcome::Produced(y)),
+                ) => {
                     assert!(
                         next::oracle::values_equal(&x, &y),
                         "eval changed under normalize for {src}",

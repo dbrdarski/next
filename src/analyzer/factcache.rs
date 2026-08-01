@@ -130,7 +130,10 @@ pub(crate) fn key(
             _ => Contract::Top,
         })
         .collect();
-    let captures = capture_terms.into_iter().map(|c| interner.contract(c)).collect();
+    let captures = capture_terms
+        .into_iter()
+        .map(|c| interner.contract(c))
+        .collect();
     let mut named_contracts: Vec<(&String, &Contract)> = cenv.iter().collect();
     named_contracts.sort_by_key(|(name, _)| *name);
     let named_contracts = NamedContractEnvironment(
@@ -227,7 +230,10 @@ mod tests {
         let a = f("g = (n) => n + 1\ng", &mut i);
         let b = f("h = (n) => n + 1\nh", &mut i);
         assert!(
-            a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
+            a.as_fn()
+                .unwrap()
+                .shape_rc()
+                .ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "same code must be one interned allocation"
         );
     }
@@ -241,7 +247,10 @@ mod tests {
         let a = f("g = (n) => n + 1\ng", &mut i);
         let b = f("h = (x) => x + 1\nh", &mut i);
         assert!(
-            a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
+            a.as_fn()
+                .unwrap()
+                .shape_rc()
+                .ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "alpha-variants are the same shape"
         );
     }
@@ -253,7 +262,10 @@ mod tests {
         let a = f("g = (n) => n + 1\ng", &mut i);
         let b = f("h = (n) => n + 2\nh", &mut i);
         assert!(
-            !a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
+            !a.as_fn()
+                .unwrap()
+                .shape_rc()
+                .ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "different code is different shapes"
         );
     }
@@ -267,7 +279,10 @@ mod tests {
         let a = f("k = 1\ng = (n) => n + k\ng", &mut i);
         let b = f("k = 2\nh = (n) => n + k\nh", &mut i);
         assert!(
-            a.as_fn().unwrap().shape_rc().ptr_eq(&b.as_fn().unwrap().shape_rc()),
+            a.as_fn()
+                .unwrap()
+                .shape_rc()
+                .ptr_eq(&b.as_fn().unwrap().shape_rc()),
             "same code, so one shape"
         );
         let args = [Contract::Top];
@@ -318,7 +333,11 @@ mod interning_tests {
         // scheme this read `1`, because the children were `Box`ed inside the root and
         // had no identity of their own — which is what `shared_subterms_are_one_allocation`
         // now exercises directly.
-        assert_eq!(i.interned_count::<Contract>(), 3, "the union and both children");
+        assert_eq!(
+            i.interned_count::<Contract>(),
+            3,
+            "the union and both children"
+        );
     }
 
     /// **The property children-first interning exists for**: a subterm shared between two
@@ -334,8 +353,11 @@ mod interning_tests {
         let mut i = Interner::new();
         // A domain of some depth, so a copy would be visible rather than incidental.
         let domain = {
-            let inner =
-                Contract::intersection(Contract::Kind(Kind::Number), Contract::Greater(0.into()), &mut i);
+            let inner = Contract::intersection(
+                Contract::Kind(Kind::Number),
+                Contract::Greater(0.into()),
+                &mut i,
+            );
             Contract::union(inner, Contract::Kind(Kind::Null), &mut i)
         };
         let before = i.interned_count::<Contract>();
@@ -367,11 +389,17 @@ mod interning_tests {
 
         // Re-deriving the same domain hands back that same allocation rather than a new one.
         let again = {
-            let inner =
-                Contract::intersection(Contract::Kind(Kind::Number), Contract::Greater(0.into()), &mut i);
+            let inner = Contract::intersection(
+                Contract::Kind(Kind::Number),
+                Contract::Greater(0.into()),
+                &mut i,
+            );
             Contract::union(inner, Contract::Kind(Kind::Null), &mut i)
         };
-        assert!(i.contract(again).ptr_eq(&elems[0]), "an equal domain re-interns to the same term");
+        assert!(
+            i.contract(again).ptr_eq(&elems[0]),
+            "an equal domain re-interns to the same term"
+        );
     }
 
     /// The key's whole point: two calls at the same fact node produce the *same* key, so the
@@ -419,7 +447,10 @@ mod interning_tests {
         let same_string_key = key(&f, &args, &Claim::Safety, &strings, &mut i).expect("keyed");
         let number_key = key(&f, &args, &Claim::Safety, &numbers, &mut i).expect("keyed");
 
-        assert_eq!(string_key, same_string_key, "same contract dependency, same fact");
+        assert_eq!(
+            string_key, same_string_key,
+            "same contract dependency, same fact"
+        );
         assert_ne!(
             string_key, number_key,
             "changing helper pattern N from String to Number changes the root fact"
@@ -442,6 +473,9 @@ mod interning_tests {
 
         let first_key = key(&g, &args, &Claim::Safety, &first, &mut i).expect("keyed");
         let reversed_key = key(&g, &args, &Claim::Safety, &reversed, &mut i).expect("keyed");
-        assert_eq!(first_key, reversed_key, "map insertion order is not fact identity");
+        assert_eq!(
+            first_key, reversed_key,
+            "map insertion order is not fact identity"
+        );
     }
 }

@@ -48,12 +48,18 @@ pub type Env = Rc<Scope>;
 impl Scope {
     /// A fresh root environment.
     pub fn root() -> Env {
-        Rc::new(Scope { parent: None, vars: RefCell::new(HashMap::new()) })
+        Rc::new(Scope {
+            parent: None,
+            vars: RefCell::new(HashMap::new()),
+        })
     }
 
     /// A fresh child environment extending `parent`.
     pub fn child(parent: &Env) -> Env {
-        Rc::new(Scope { parent: Some(parent.clone()), vars: RefCell::new(HashMap::new()) })
+        Rc::new(Scope {
+            parent: Some(parent.clone()),
+            vars: RefCell::new(HashMap::new()),
+        })
     }
 
     /// Bind (or rebind — shadowing) a name in *this* frame.

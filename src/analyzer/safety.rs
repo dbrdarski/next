@@ -34,7 +34,6 @@
 //! *legitimate* wider domain — a `where`, or grounding's derived input domain / §4
 //! exact-singleton chain — none of which this module invents.
 
-
 use std::cell::Cell;
 
 use crate::analyzer::factcache;
@@ -82,9 +81,7 @@ impl BodySafety {
     pub fn findings(&self) -> &[Finding] {
         match self {
             BodySafety::Proven => &[],
-            BodySafety::Refuted(evidence) | BodySafety::Unproven(evidence) => {
-                &evidence.findings
-            }
+            BodySafety::Refuted(evidence) | BodySafety::Unproven(evidence) => &evidence.findings,
         }
     }
 }
@@ -161,13 +158,21 @@ pub(crate) fn prove_claim(
 /// The verdict for a **recursive reference** — a query for a node already being settled.
 /// C§13.2: recursive references never unfold; they resolve through the assumed fact. No
 /// hypothesis covering this call's domain means the third voice, never a pass.
-fn assumed(callee: &ValueRef, args: &[Contract], claim: &Claim, interner: &mut Interner) -> BodySafety {
+fn assumed(
+    callee: &ValueRef,
+    args: &[Contract],
+    claim: &Claim,
+    interner: &mut Interner,
+) -> BodySafety {
     let held = match claim {
         Claim::Safety => induction::safety_assumed(callee, args, interner),
         Claim::Completes => induction::completes_assumed(callee, args, interner),
         Claim::Return(want) => {
             induction::hypothesis_for(callee, args, interner).is_some_and(|got| {
-                matches!(crate::contract::subcontract(&got, want, interner), crate::contract::Verdict::Proven)
+                matches!(
+                    crate::contract::subcontract(&got, want, interner),
+                    crate::contract::Verdict::Proven
+                )
             })
         }
     };
@@ -195,8 +200,7 @@ thread_local! {
 /// Whether a body-safety verification is active. The hypothesis table covers normal
 /// vector passes; `VERIFYING_SAFETY` also covers post-settlement diagnostic recovery.
 pub(crate) fn safety_context_active() -> bool {
-    VERIFYING_SAFETY.with(Cell::get)
-        || induction::safety_hypotheses_active()
+    VERIFYING_SAFETY.with(Cell::get) || induction::safety_hypotheses_active()
 }
 
 /// Whether **every path** through `callee`'s body over `args` produces a value — settled
@@ -216,7 +220,10 @@ pub fn completes(
         return induction::completes_assumed(callee, args, interner);
     }
     SETTLING.with(|f| f.set(true));
-    let out = matches!(prove_claim(callee, args, Claim::Completes, cenv, interner), BodySafety::Proven);
+    let out = matches!(
+        prove_claim(callee, args, Claim::Completes, cenv, interner),
+        BodySafety::Proven
+    );
     SETTLING.with(|f| f.set(false));
     out
 }
@@ -258,7 +265,10 @@ fn verify_by_partition(
 /// A may-region row cannot refute (RT-14): an `Error` becomes advisory.
 fn downgrade(f: Finding) -> Finding {
     match f.severity {
-        Severity::Error => Finding { severity: Severity::Warning, ..f },
+        Severity::Error => Finding {
+            severity: Severity::Warning,
+            ..f
+        },
         Severity::Warning => f,
     }
 }
@@ -312,9 +322,7 @@ fn weaken_may_region_demand(demand: SafetyDemand) -> SafetyDemand {
     }
 }
 
-pub(crate) fn weaken_refutation_evidence(
-    evidence: BodySafetyEvidence,
-) -> BodySafetyEvidence {
+pub(crate) fn weaken_refutation_evidence(evidence: BodySafetyEvidence) -> BodySafetyEvidence {
     BodySafetyEvidence {
         findings: evidence.findings.into_iter().map(downgrade).collect(),
         demands: evidence
@@ -451,8 +459,16 @@ mod tests {
         // proof were unfolding rather than closing on the fact, this would not return.
         let mut i = Interner::new();
         let loopy = f("f = (n) => f(n)\nf", &mut i);
-        let v = prove(&loopy, &[Contract::Kind(crate::contract::Kind::Number)], &ContractEnv::new(), &mut i);
-        assert!(v.is_proven(), "safety != termination; the fact discharges the self-call: {v:?}");
+        let v = prove(
+            &loopy,
+            &[Contract::Kind(crate::contract::Kind::Number)],
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert!(
+            v.is_proven(),
+            "safety != termination; the fact discharges the self-call: {v:?}"
+        );
     }
 
     #[test]
@@ -465,11 +481,18 @@ mod tests {
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
         let four = Contract::Equals(i.integer(4));
-        let fact = Hypothesis { callee: cd.clone(), input: vec![five], claim: Claim::Safety };
+        let fact = Hypothesis {
+            callee: cd.clone(),
+            input: vec![five],
+            claim: Claim::Safety,
+        };
         let covered = induction::with_hypotheses(vec![fact], || {
             induction::safety_assumed(&cd, std::slice::from_ref(&four), &mut i)
         });
-        assert!(!covered, "a narrower-but-different domain must not be discharged");
+        assert!(
+            !covered,
+            "a narrower-but-different domain must not be discharged"
+        );
     }
 
     #[test]
@@ -529,7 +552,11 @@ fn discover(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> (Vec<Node>, Vec<Vec<usize>>) {
-    let mut nodes = vec![Node { callee: callee.clone(), input: args.to_vec(), cutoff: false }];
+    let mut nodes = vec![Node {
+        callee: callee.clone(),
+        input: args.to_vec(),
+        cutoff: false,
+    }];
     let mut edges: Vec<Vec<usize>> = vec![Vec::new()];
     let mut work = vec![(0usize, vec![shape_of(callee)])];
 
@@ -544,7 +571,11 @@ fn discover(
             }
             let shape = shape_of(&target);
             let cutoff = path.contains(&shape);
-            nodes.push(Node { callee: target, input: targs, cutoff });
+            nodes.push(Node {
+                callee: target,
+                input: targs,
+                cutoff,
+            });
             edges.push(Vec::new());
             let j = nodes.len() - 1;
             edges[i].push(j);
@@ -576,7 +607,12 @@ fn settle(
     let seed = nodes[0].clone();
     let candidates: Vec<Candidate> = nodes
         .into_iter()
-        .map(|n| Candidate { callee: n.callee, args: n.input, claim: claim.clone(), cutoff: n.cutoff })
+        .map(|n| Candidate {
+            callee: n.callee,
+            args: n.input,
+            claim: claim.clone(),
+            cutoff: n.cutoff,
+        })
         .collect();
     let result = induction::settle_components(candidates, edges, cenv, interner);
     let settled = result
@@ -599,9 +635,7 @@ fn settle(
             BodySafety::Unproven(evidence) => BodySafety::Unproven(evidence),
             BodySafety::Proven => BodySafety::Unproven(BodySafetyEvidence::default()),
         },
-        Claim::Completes | Claim::Return(_) => {
-            BodySafety::Unproven(BodySafetyEvidence::default())
-        }
+        Claim::Completes | Claim::Return(_) => BodySafety::Unproven(BodySafetyEvidence::default()),
     };
     Settlement {
         verdict,
@@ -899,8 +933,8 @@ fn collect_calls(
                 Arg::Spread(_) => false,
             });
             if clean {
-                let operand = super::correlated_access_operand(callee, args, env)
-                    .unwrap_or_else(|| {
+                let operand =
+                    super::correlated_access_operand(callee, args, env).unwrap_or_else(|| {
                         super::application::operand_from_annotated(
                             &callee_analysis.annotated,
                             &arguments,
@@ -914,10 +948,7 @@ fn collect_calls(
                         .iter()
                         .map(|argument| argument.erase(interner))
                         .collect();
-                    for target in super::application::classify_callees(
-                        &callee_contract,
-                        interner,
-                    ) {
+                    for target in super::application::classify_callees(&callee_contract, interner) {
                         if let super::application::CalleeAlternative::Known(target) = target {
                             out.push((target, domains.clone()));
                         }
@@ -943,14 +974,7 @@ fn collect_calls(
             for item in &m.items {
                 match item {
                     MatchItem::Bind(binding) => {
-                        collect_calls(
-                            &binding.value,
-                            closure,
-                            &body_env,
-                            cenv,
-                            interner,
-                            out,
-                        );
+                        collect_calls(&binding.value, closure, &body_env, cenv, interner, out);
                         let analysis = analyze_in_world(
                             &binding.value,
                             &body_env,
@@ -968,21 +992,12 @@ fn collect_calls(
                             interner,
                         );
                     }
-                    MatchItem::Stmt(x) => {
-                        collect_calls(x, closure, &body_env, cenv, interner, out)
-                    }
+                    MatchItem::Stmt(x) => collect_calls(x, closure, &body_env, cenv, interner, out),
                     MatchItem::Arm(arm) => {
                         if let Some(g) = &arm.guard {
                             collect_calls(g, closure, &body_env, cenv, interner, out);
                         }
-                        collect_calls(
-                            &arm.result,
-                            closure,
-                            &body_env,
-                            cenv,
-                            interner,
-                            out,
-                        );
+                        collect_calls(&arm.result, closure, &body_env, cenv, interner, out);
                     }
                 }
             }
@@ -1046,10 +1061,16 @@ mod graph_tests {
         // witness, the graph must stop at the honest third voice. The program seat still
         // rejects safety-unproven; this test locks the graph's witness discipline.
         let mut i = Interner::new();
-        let m = f("f = (x) => x == 0 ? g(\"x\") : x + 1\ng = (y) => f(y)\nf", &mut i);
+        let m = f(
+            "f = (x) => x == 0 ? g(\"x\") : x + 1\ng = (y) => f(y)\nf",
+            &mut i,
+        );
         let zero = Contract::Equals(i.integer(0));
         let v = prove(&m, std::slice::from_ref(&zero), &ContractEnv::new(), &mut i);
-        assert!(matches!(v, BodySafety::Unproven(_)), "shape-cutoff evidence cannot refute: {v:?}");
+        assert!(
+            matches!(v, BodySafety::Unproven(_)),
+            "shape-cutoff evidence cannot refute: {v:?}"
+        );
     }
 
     #[test]
@@ -1067,16 +1088,13 @@ mod graph_tests {
         let args = vec![Contract::Kind(crate::contract::Kind::Number)];
         assert!(prove(&root, &args, &ContractEnv::new(), &mut i).is_proven());
 
-        let key = factcache::key(
-            &g,
-            &args,
-            &Claim::Safety,
-            &ContractEnv::new(),
-            &mut i,
-        )
-        .expect("captured closure has a fact key");
+        let key = factcache::key(&g, &args, &Claim::Safety, &ContractEnv::new(), &mut i)
+            .expect("captured closure has a fact key");
         assert!(
-            matches!(factcache::lookup(&key), Some(factcache::Cached::Settled(BodySafety::Proven))),
+            matches!(
+                factcache::lookup(&key),
+                Some(factcache::Cached::Settled(BodySafety::Proven))
+            ),
             "the dependency component must remain memoized"
         );
     }
@@ -1117,8 +1135,16 @@ mod graph_tests {
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
-        let v = prove(&cd, std::slice::from_ref(&five), &ContractEnv::new(), &mut i);
-        assert!(!v.is_proven(), "an uncovered chain must not be proven by expansion: {v:?}");
+        let v = prove(
+            &cd,
+            std::slice::from_ref(&five),
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert!(
+            !v.is_proven(),
+            "an uncovered chain must not be proven by expansion: {v:?}"
+        );
     }
 }
 

@@ -85,7 +85,11 @@ pub(crate) struct Hypothesis {
 /// domain **contained in** the fact's input domain (`args ⊑ hyp.input`). Consulted by
 /// the analyzer's application rule for recursive/mutual calls — the aliasing guard the
 /// v0.8.1 domain-indexed-fact rule requires.
-pub(crate) fn hypothesis_for(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> Option<Contract> {
+pub(crate) fn hypothesis_for(
+    callee: &ValueRef,
+    args: &[Contract],
+    interner: &mut Interner,
+) -> Option<Contract> {
     // Collect the same-instance hypotheses first (dropping the borrow before the
     // subcontract check, which may itself want the interner but never HYPOTHESES).
     let same_instance: Vec<Hypothesis> = HYPOTHESES.with(|h| {
@@ -95,19 +99,24 @@ pub(crate) fn hypothesis_for(callee: &ValueRef, args: &[Contract], interner: &mu
             .cloned()
             .collect()
     });
-    same_instance.into_iter().find(|hyp| args_within(args, &hyp.input, interner)).and_then(|hyp| {
-        match hyp.claim {
+    same_instance
+        .into_iter()
+        .find(|hyp| args_within(args, &hyp.input, interner))
+        .and_then(|hyp| match hyp.claim {
             Claim::Return(c) => Some(c),
             Claim::Safety | Claim::Completes => None,
-        }
-    })
+        })
 }
 
 /// Whether an assumed **completion** fact covers a call — the same instance and
 /// `args ⊑ I`. A cycle assumption may only claim production when a fact *for that
 /// call's own domain* says so; this replaces `BodySummary::cycle()`'s unconditional
 /// `Produces`, which asserted rather than settled it.
-pub(crate) fn completes_assumed(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> bool {
+pub(crate) fn completes_assumed(
+    callee: &ValueRef,
+    args: &[Contract],
+    interner: &mut Interner,
+) -> bool {
     let domains: Vec<Vec<Contract>> = HYPOTHESES.with(|h| {
         h.borrow()
             .iter()
@@ -115,14 +124,20 @@ pub(crate) fn completes_assumed(callee: &ValueRef, args: &[Contract], interner: 
             .map(|hyp| hyp.input.clone())
             .collect()
     });
-    domains.into_iter().any(|input| args_within(args, &input, interner))
+    domains
+        .into_iter()
+        .any(|input| args_within(args, &input, interner))
 }
 
 /// Whether an assumed **safety** fact discharges a call to `callee` over `args` — the
 /// same instance and `args ⊑ I`. This is what lets a recursive reference resolve through
 /// a fact instead of re-entering the body (C§13.2), and it reads the **same** hypothesis
 /// table the return facts use.
-pub(crate) fn safety_assumed(callee: &ValueRef, args: &[Contract], interner: &mut Interner) -> bool {
+pub(crate) fn safety_assumed(
+    callee: &ValueRef,
+    args: &[Contract],
+    interner: &mut Interner,
+) -> bool {
     let domains: Vec<Vec<Contract>> = HYPOTHESES.with(|h| {
         h.borrow()
             .iter()
@@ -158,7 +173,11 @@ pub(crate) fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R
 /// dependency (for example a shape-cutoff node); recursively launching another
 /// settlement would bypass the current graph's `Unproven` verdict.
 pub(crate) fn safety_hypotheses_active() -> bool {
-    HYPOTHESES.with(|h| h.borrow().iter().any(|hyp| matches!(hyp.claim, Claim::Safety)))
+    HYPOTHESES.with(|h| {
+        h.borrow()
+            .iter()
+            .any(|hyp| matches!(hyp.claim, Claim::Safety))
+    })
 }
 
 /// A return candidate: the closure `callee`, applied over arguments described by
@@ -195,7 +214,11 @@ pub enum Claim {
 /// claim as a hypothesis, then verifies each member's body produces a subcontract of
 /// its claimed contract. Returns `true` iff **all** members verify — a vector failure
 /// leaves the whole component unproven.
-pub fn joint_vector_pass(members: &[Candidate], cenv: &ContractEnv, interner: &mut Interner) -> bool {
+pub fn joint_vector_pass(
+    members: &[Candidate],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
     run_pass(&[], members, cenv, interner)
 }
 
@@ -203,7 +226,12 @@ pub fn joint_vector_pass(members: &[Candidate], cenv: &ContractEnv, interner: &m
 /// facts of dependency components the driver has already settled (§6). Installs `base`
 /// plus every member's own claim, then verifies each member's body produces a
 /// subcontract of its claimed contract. `true` iff **all** members verify.
-fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, interner: &mut Interner) -> bool {
+fn run_pass(
+    base: &[Hypothesis],
+    members: &[Candidate],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
     let mut hyps = base.to_vec();
     hyps.extend(member_hypotheses(members));
 
@@ -235,15 +263,13 @@ fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, inte
             }
             // A safety claim holds when the body raises no finding over `I` — verified by
             // the partition rule (each region-table row under `I ∩ row.region`).
-            Claim::Safety => {
-                with_hypotheses(hyps, || crate::analyzer::safety::verify(&c.callee, &c.args, cenv, interner))
-                    .is_proven()
-            }
-            Claim::Completes => {
-                with_hypotheses(hyps, || {
-                    crate::analyzer::safety::verify_completes(&c.callee, &c.args, cenv, interner)
-                })
-            }
+            Claim::Safety => with_hypotheses(hyps, || {
+                crate::analyzer::safety::verify(&c.callee, &c.args, cenv, interner)
+            })
+            .is_proven(),
+            Claim::Completes => with_hypotheses(hyps, || {
+                crate::analyzer::safety::verify_completes(&c.callee, &c.args, cenv, interner)
+            }),
         }
     })
 }
@@ -254,7 +280,11 @@ fn run_pass(base: &[Hypothesis], members: &[Candidate], cenv: &ContractEnv, inte
 fn member_hypotheses(members: &[Candidate]) -> Vec<Hypothesis> {
     members
         .iter()
-        .map(|c| Hypothesis { callee: c.callee.clone(), input: c.args.clone(), claim: c.claim.clone() })
+        .map(|c| Hypothesis {
+            callee: c.callee.clone(),
+            input: c.args.clone(),
+            claim: c.claim.clone(),
+        })
         .collect()
 }
 
@@ -285,7 +315,11 @@ pub struct FactResult {
 /// call coarsens to `Top` — sound (the dependent lands unproven), never a false proof.
 /// The result is order-independent: SCC membership and the condensation order depend
 /// on the call graph alone, not the candidate-list order.
-pub fn prove_facts(candidates: Vec<Candidate>, cenv: &ContractEnv, interner: &mut Interner) -> FactResult {
+pub fn prove_facts(
+    candidates: Vec<Candidate>,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> FactResult {
     let adj = call_edges(&candidates);
     settle_components(candidates, &adj, cenv, interner)
 }

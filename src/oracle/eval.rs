@@ -16,7 +16,9 @@ pub fn run_program_value(src: &str) -> Result<ValueRef, Trap> {
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar ok");
+    let module = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .expect("desugar ok");
 
     let env = super::harness::prelude_env(&mut interner);
     let mut oracle = Oracle::new(&mut interner);
@@ -81,7 +83,9 @@ pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar ok");
+    let module = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .expect("desugar ok");
 
     let env = super::harness::prelude_env(&mut interner);
     let mut oracle = Oracle::new(&mut interner);
@@ -123,7 +127,12 @@ impl<'a> Oracle<'a> {
         Ok(last.unwrap_or_else(|| self.interner.null()))
     }
 
-    fn eval_item(&mut self, item: &Item, env: &Env, world: World) -> Result<Option<ValueRef>, Trap> {
+    fn eval_item(
+        &mut self,
+        item: &Item,
+        env: &Env,
+        world: World,
+    ) -> Result<Option<ValueRef>, Trap> {
         match item {
             Item::Bind(b) => {
                 self.eval_bind(b, env, world)?;
@@ -153,9 +162,19 @@ impl<'a> Oracle<'a> {
     /// Evaluate one member of a recursive construction group without exposing
     /// the provisional graph as a value. Observation remains illegal because
     /// ordinary references to `Binding::Open` trap until [`close_group`].
-    fn eval_open_item(&mut self, item: &Item, env: &Env, world: World) -> Result<Option<ValueRef>, Trap> {
+    fn eval_open_item(
+        &mut self,
+        item: &Item,
+        env: &Env,
+        world: World,
+    ) -> Result<Option<ValueRef>, Trap> {
         match item {
-            Item::Bind(binding @ Bind { target: BindTarget::Name(_), .. }) => {
+            Item::Bind(
+                binding @ Bind {
+                    target: BindTarget::Name(_),
+                    ..
+                },
+            ) => {
                 self.eval_open_bind(binding, env, world)?;
                 Ok(None)
             }
@@ -168,7 +187,12 @@ impl<'a> Oracle<'a> {
         }
     }
 
-    pub(super) fn eval_open_bind(&mut self, binding: &Bind, env: &Env, world: World) -> Result<(), Trap> {
+    pub(super) fn eval_open_bind(
+        &mut self,
+        binding: &Bind,
+        env: &Env,
+        world: World,
+    ) -> Result<(), Trap> {
         let BindTarget::Name(name) = &binding.target else {
             return self.eval_bind(binding, env, world);
         };
@@ -209,7 +233,10 @@ impl<'a> Oracle<'a> {
         // machine limit, surfaced via `out_of_fuel` and checked at the bounded entry —
         // never a language trap (Part A).
         if self.burn_fuel() {
-            return Err(Trap { class: TrapClass::OperationSafety, message: "evaluation fuel exhausted".into() });
+            return Err(Trap {
+                class: TrapClass::OperationSafety,
+                message: "evaluation fuel exhausted".into(),
+            });
         }
         match e {
             Expr::Const(v) => Ok(Outcome::Produced(v.clone())),
@@ -218,7 +245,11 @@ impl<'a> Oracle<'a> {
             Expr::PrimOp { op, args } => self.eval_primop(*op, args, env, world),
             Expr::TupleCons(elems) => self.eval_tuple(elems, env, world),
             Expr::RecordCons(fields) => self.eval_record(fields, env, world),
-            Expr::Access { target, form, total } => self.eval_access(target, form, *total, env, world),
+            Expr::Access {
+                target,
+                form,
+                total,
+            } => self.eval_access(target, form, *total, env, world),
             Expr::Template(parts) => self.eval_template(parts, env, world),
             Expr::Match(m) => self.eval_match(m, env, world),
             Expr::Apply { callee, args } => self.eval_apply(callee, args, env, world),
@@ -230,18 +261,34 @@ impl<'a> Oracle<'a> {
     /// it into the pending set. Commitment happens at publication.
     fn eval_write(&mut self, slot: &SlotRef, value: &Expr, env: &Env, world: World) -> EvalResult {
         if world != World::Mutator {
-            return Self::trap(TrapClass::WorldAdmission, "`:=` is legal only inside a mutator");
+            return Self::trap(
+                TrapClass::WorldAdmission,
+                "`:=` is legal only inside a mutator",
+            );
         }
         let name = match slot {
             SlotRef::Name(n) => n,
             SlotRef::Location(_) => {
-                return Self::trap(TrapClass::UnboundEvaluation, "positional slot refs require §5");
+                return Self::trap(
+                    TrapClass::UnboundEvaluation,
+                    "positional slot refs require §5",
+                );
             }
         };
         let slot_id = match env.lookup(name) {
             Some(Binding::Slot(id)) => id,
-            Some(_) => return Self::trap(TrapClass::OperationSafety, format!("`{name}` is not a mutable slot")),
-            None => return Self::trap(TrapClass::UnboundEvaluation, format!("`{name}` is not bound")),
+            Some(_) => {
+                return Self::trap(
+                    TrapClass::OperationSafety,
+                    format!("`{name}` is not a mutable slot"),
+                );
+            }
+            None => {
+                return Self::trap(
+                    TrapClass::UnboundEvaluation,
+                    format!("`{name}` is not bound"),
+                );
+            }
         };
         let v = self.eval_value(value, env, world)?;
         match &mut self.pending {
@@ -249,7 +296,10 @@ impl<'a> Oracle<'a> {
                 pending.insert(slot_id, v);
                 Ok(Outcome::CompletedWithoutValue)
             }
-            None => Self::trap(TrapClass::WorldAdmission, "a write occurred outside a transaction"),
+            None => Self::trap(
+                TrapClass::WorldAdmission,
+                "a write occurred outside a transaction",
+            ),
         }
     }
 
@@ -349,7 +399,9 @@ impl<'a> Oracle<'a> {
             .position(|pending| self.interner.value_is_closed(&pending.value))
         {
             let pending = self.pending_values.remove(index);
-            pending.env.define(&pending.name, Binding::Value(pending.value.clone()));
+            pending
+                .env
+                .define(&pending.name, Binding::Value(pending.value.clone()));
             let canonical = self.interner.close_value_graph(pending.value);
             pending.env.define(&pending.name, Binding::Value(canonical));
         }
@@ -408,7 +460,9 @@ impl<'a> Oracle<'a> {
             PrimOp::Rem => return self.eval_rem(&vals[0], &vals[1]).map(Outcome::Produced),
             PrimOp::Pow => return self.eval_pow(&vals[0], &vals[1]).map(Outcome::Produced),
             PrimOp::Lt | PrimOp::Le | PrimOp::Gt | PrimOp::Ge => {
-                return self.eval_compare(op, &vals[0], &vals[1]).map(Outcome::Produced);
+                return self
+                    .eval_compare(op, &vals[0], &vals[1])
+                    .map(Outcome::Produced);
             }
             PrimOp::Eq => {
                 let b = super::equal::values_equal(&vals[0], &vals[1]);
@@ -495,7 +549,10 @@ impl<'a> Oracle<'a> {
         let result = pow_int(base.as_ratio(), &e);
         match result {
             Some(r) => Ok(self.interner.number(Rational::from_ratio(r))),
-            None => Self::trap(TrapClass::OperationSafety, "0 raised to a negative power is undefined"),
+            None => Self::trap(
+                TrapClass::OperationSafety,
+                "0 raised to a negative power is undefined",
+            ),
         }
     }
 
@@ -525,7 +582,10 @@ impl<'a> Oracle<'a> {
                     match v.as_tuple() {
                         Some(t) => items.extend_from_slice(t),
                         None => {
-                            return Self::trap(TrapClass::SpreadKind, "tuple spread of a non-Tuple");
+                            return Self::trap(
+                                TrapClass::SpreadKind,
+                                "tuple spread of a non-Tuple",
+                            );
                         }
                     }
                 }
@@ -547,7 +607,10 @@ impl<'a> Oracle<'a> {
                     let units = match k.as_str_units() {
                         Some(u) => u.to_vec(),
                         None => {
-                            return Self::trap(TrapClass::ComputedKey, "computed record key is not a String");
+                            return Self::trap(
+                                TrapClass::ComputedKey,
+                                "computed record key is not a String",
+                            );
                         }
                     };
                     let v = self.eval_value(value, env, world)?;
@@ -562,7 +625,10 @@ impl<'a> Oracle<'a> {
                             }
                         }
                         None => {
-                            return Self::trap(TrapClass::SpreadKind, "record spread of a non-Record");
+                            return Self::trap(
+                                TrapClass::SpreadKind,
+                                "record spread of a non-Record",
+                            );
                         }
                     }
                 }
@@ -596,7 +662,12 @@ impl<'a> Oracle<'a> {
         }
     }
 
-    fn eval_opt(&mut self, e: &Option<Box<Expr>>, env: &Env, world: World) -> Result<Option<ValueRef>, Trap> {
+    fn eval_opt(
+        &mut self,
+        e: &Option<Box<Expr>>,
+        env: &Env,
+        world: World,
+    ) -> Result<Option<ValueRef>, Trap> {
         match e {
             Some(inner) => Ok(Some(self.eval_value(inner, env, world)?)),
             None => Ok(None),
@@ -608,11 +679,17 @@ impl<'a> Oracle<'a> {
             return if total {
                 Ok(Outcome::Produced(self.interner.null()))
             } else {
-                Self::trap(TrapClass::NullReceiver, format!("null receiver for field `{name}`"))
+                Self::trap(
+                    TrapClass::NullReceiver,
+                    format!("null receiver for field `{name}`"),
+                )
             };
         }
         let key: Vec<u16> = name.encode_utf16().collect();
-        if let Some(entry) = recv.as_record().and_then(|entries| entries.iter().find(|e| e.key == key)) {
+        if let Some(entry) = recv
+            .as_record()
+            .and_then(|entries| entries.iter().find(|e| e.key == key))
+        {
             return Ok(Outcome::Produced(entry.value.clone()));
         }
         if total {
@@ -676,7 +753,12 @@ impl<'a> Oracle<'a> {
         }
     }
 
-    fn access_slice(&mut self, recv: &ValueRef, lo: Option<ValueRef>, hi: Option<ValueRef>) -> EvalResult {
+    fn access_slice(
+        &mut self,
+        recv: &ValueRef,
+        lo: Option<ValueRef>,
+        hi: Option<ValueRef>,
+    ) -> EvalResult {
         // Slices are always total and clamped (E7).
         let lo_i = self.opt_index(&lo)?;
         let hi_i = self.opt_index(&hi)?;
@@ -754,7 +836,12 @@ impl<'a> Oracle<'a> {
                     let v = self.eval_value(e, env, world)?;
                     match v.as_tuple() {
                         Some(t) => arg_vals.extend_from_slice(t),
-                        None => return Self::trap(TrapClass::SpreadKind, "argument spread of a non-Tuple"),
+                        None => {
+                            return Self::trap(
+                                TrapClass::SpreadKind,
+                                "argument spread of a non-Tuple",
+                            );
+                        }
                     }
                 }
             }
@@ -814,7 +901,10 @@ impl<'a> Oracle<'a> {
             && self.call_depth >= max
         {
             self.out_of_fuel = true;
-            return Err(Trap { class: TrapClass::OperationSafety, message: "call-depth bound exceeded".into() });
+            return Err(Trap {
+                class: TrapClass::OperationSafety,
+                message: "call-depth bound exceeded".into(),
+            });
         }
         self.call_depth += 1;
         let result = match callee_kind {
@@ -891,7 +981,11 @@ fn pow_int(base: &num_rational::BigRational, exp: &BigInt) -> Option<num_rationa
 fn normalize_index(i: i64, len: usize) -> Option<usize> {
     let len = len as i64;
     let k = if i < 0 { len + i } else { i };
-    if k >= 0 && k < len { Some(k as usize) } else { None }
+    if k >= 0 && k < len {
+        Some(k as usize)
+    } else {
+        None
+    }
 }
 
 /// Normalize and clamp a half-open slice window `[lo, hi)` to `[0, len]`.
@@ -911,7 +1005,9 @@ fn clamp_window(lo: Option<i64>, hi: Option<i64>, len: usize) -> (usize, usize) 
 /// unit vector. The pinned `unicode-segmentation` fixes the table version.
 fn grapheme_slices(units: &[u16]) -> Vec<Vec<u16>> {
     let s = String::from_utf16_lossy(units);
-    s.graphemes(true).map(|g| g.encode_utf16().collect()).collect()
+    s.graphemes(true)
+        .map(|g| g.encode_utf16().collect())
+        .collect()
 }
 
 // ── Value rendering (structure interpolation is total — [user, 2026-07-18]) ───
@@ -924,7 +1020,11 @@ fn render_value(v: &ValueRef, nested: bool) -> String {
         ValueData::Str(u) => {
             // Nested: quoted and losslessly escaped, so it round-trips (PR-03/08).
             // Top level: raw — explicitly outside the round-trip law (PR-06).
-            if nested { quote_units(u) } else { String::from_utf16_lossy(u) }
+            if nested {
+                quote_units(u)
+            } else {
+                String::from_utf16_lossy(u)
+            }
         }
         ValueData::Number(n) => n.to_string(), // B2 printing
         ValueData::Boolean(b) => b.to_string(),
@@ -966,7 +1066,9 @@ fn render_value(v: &ValueRef, nested: bool) -> String {
 /// alphanumerics, alphabetic first — mirrors `lex::is_ident_start/continue`).
 /// Anything else needs computed-key syntax (PR-07).
 fn is_render_ident(key: &[u16]) -> bool {
-    let Ok(s) = String::from_utf16(key) else { return false }; // lone surrogate ⇒ not an ident
+    let Ok(s) = String::from_utf16(key) else {
+        return false;
+    }; // lone surrogate ⇒ not an ident
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c != '_' && c != '$' && c.is_alphabetic() => {}
@@ -1024,9 +1126,11 @@ fn module_group_windows(module: &Module) -> Vec<mu::GroupWindow> {
         .iter()
         .enumerate()
         .filter_map(|(index, item)| match item {
-            Item::Bind(Bind { target: BindTarget::Name(name), value, .. }) => {
-                Some((index, name.clone(), value.clone()))
-            }
+            Item::Bind(Bind {
+                target: BindTarget::Name(name),
+                value,
+                ..
+            }) => Some((index, name.clone(), value.clone())),
             Item::ActBind(binding) => Some((
                 index,
                 binding.name.clone(),
@@ -1052,7 +1156,10 @@ fn module_group_windows(module: &Module) -> Vec<mu::GroupWindow> {
 /// environment is captured by reference under late binding.
 pub(crate) fn make_closure_in(lambda: &Lambda, env: &Env, interner: &mut Interner) -> ValueRef {
     let shape = canon::canonicalize(lambda, interner);
-    let closure = Closure { lambda: lambda.clone(), env: env.clone() };
+    let closure = Closure {
+        lambda: lambda.clone(),
+        env: env.clone(),
+    };
     let code = interner.intern_code(shape.code);
     interner.function(FnValue::new(code, shape.free_vars, closure))
 }

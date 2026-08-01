@@ -48,13 +48,20 @@ fn const_repr(v: &ValueRef) -> String {
             format!("IM({})", const_repr(operand))
         }
         ValueData::Tuple(items) => {
-            format!("T[{}]", items.iter().map(const_repr).collect::<Vec<_>>().join(","))
+            format!(
+                "T[{}]",
+                items.iter().map(const_repr).collect::<Vec<_>>().join(",")
+            )
         }
         ValueData::Record(fields) => format!(
             "D[{}]",
             fields
                 .iter()
-                .map(|e| format!("{}:{}", String::from_utf16_lossy(&e.key), const_repr(&e.value)))
+                .map(|e| format!(
+                    "{}:{}",
+                    String::from_utf16_lossy(&e.key),
+                    const_repr(&e.value)
+                ))
                 .collect::<Vec<_>>()
                 .join(",")
         ),
@@ -124,8 +131,11 @@ fn canonicalize_scc(
         .into_iter()
         .map(|perm| {
             // slot_of[member] = its slot index under this permutation.
-            let slot_of: HashMap<usize, usize> =
-                perm.iter().enumerate().map(|(slot, &m)| (m, slot)).collect();
+            let slot_of: HashMap<usize, usize> = perm
+                .iter()
+                .enumerate()
+                .map(|(slot, &m)| (m, slot))
+                .collect();
             let group = perm
                 .iter()
                 .map(|&m| serialize_member(bodies[m], &slot_of, names, keys))
@@ -151,8 +161,18 @@ fn serialize_member(
     names: &[String],
     keys: &HashMap<usize, String>,
 ) -> String {
-    let name_index: HashMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
-    let mut s = Ser { slots, keys, name_index, scopes: Vec::new(), counter: 0 };
+    let name_index: HashMap<&str, usize> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    let mut s = Ser {
+        slots,
+        keys,
+        name_index,
+        scopes: Vec::new(),
+        counter: 0,
+    };
     let mut out = String::new();
     s.expr(body, &mut out);
     out
@@ -170,7 +190,10 @@ impl Ser<'_> {
     fn bind(&mut self, name: &str) {
         let n = self.counter;
         self.counter += 1;
-        self.scopes.last_mut().expect("scope open").insert(name.to_string(), n);
+        self.scopes
+            .last_mut()
+            .expect("scope open")
+            .insert(name.to_string(), n);
     }
     fn bound(&self, name: &str) -> Option<u32> {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
@@ -282,7 +305,11 @@ impl Ser<'_> {
                 }
                 out.push(')');
             }
-            Expr::Access { target, form, total } => {
+            Expr::Access {
+                target,
+                form,
+                total,
+            } => {
                 out.push_str(&format!("X{total}("));
                 self.expr(target, out);
                 match form {
@@ -482,13 +509,22 @@ pub(super) fn group_windows(bindings: &[(usize, String, Expr)]) -> Vec<GroupWind
             .map(|member| bindings[*member].0)
             .max()
             .unwrap();
-        windows.push(GroupWindow { start, end, members });
+        windows.push(GroupWindow {
+            start,
+            end,
+            members,
+        });
     }
     windows.sort_by_key(|window| (window.start, window.end));
     windows
 }
 
-fn collect_refs(e: &Expr, group: &HashSet<String>, bound: &mut Vec<String>, found: &mut HashSet<String>) {
+fn collect_refs(
+    e: &Expr,
+    group: &HashSet<String>,
+    bound: &mut Vec<String>,
+    found: &mut HashSet<String>,
+) {
     match e {
         Expr::Const(_) => {}
         Expr::Ref(Ref::Immutable(BindingRef::Name(n))) => {

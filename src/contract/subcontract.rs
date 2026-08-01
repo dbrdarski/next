@@ -93,7 +93,10 @@ fn atom_provable(a: &Contract, b: &Contract) -> bool {
     match (a, b) {
         (Kind(k1), Kind(k2)) => k1 == k2,
         // Every numeric atom is a Number.
-        (Range(..) | Greater(_) | GreaterEq(_) | Less(_) | LessEq(_) | Mod { .. } | Geo { .. }, Kind(VKind::Number)) => true,
+        (
+            Range(..) | Greater(_) | GreaterEq(_) | Less(_) | LessEq(_) | Mod { .. } | Geo { .. },
+            Kind(VKind::Number),
+        ) => true,
         // A structured contract inhabits its kind.
         (Tuple(_), Kind(VKind::Tuple)) => true,
         (Record(_) | HasField(_), Kind(VKind::Record)) => true,
@@ -102,7 +105,9 @@ fn atom_provable(a: &Contract, b: &Contract) -> bool {
         // An exact record having field `k` is a subcontract of `HasField(k)`.
         (Record(fields), HasField(k)) => fields.iter().any(|(key, _)| key == k),
         (Record(fa), Record(fb)) => record_subset(fa, fb),
-        (Tuple(ea), Tuple(eb)) => ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| provable(x, y)),
+        (Tuple(ea), Tuple(eb)) => {
+            ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| provable(x, y))
+        }
         _ => match (interval_exact(a), interval_exact(b)) {
             (Some(ia), Some(ib)) => interval_subset(&ia, &ib),
             _ => false,
@@ -146,11 +151,7 @@ pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
             if is_numeric(other)
                 || matches!(
                     other,
-                    Record(_)
-                        | HasField(_)
-                        | Tuple(_)
-                        | Concat(_)
-                        | LengthRestricted(_, _)
+                    Record(_) | HasField(_) | Tuple(_) | Concat(_) | LengthRestricted(_, _)
                 ) =>
         {
             true
@@ -158,14 +159,24 @@ pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
         // A numeric interval is disjoint from a non-numeric kind.
         (Kind(k), other) | (other, Kind(k)) if *k != VKind::Number && is_numeric(other) => true,
         // A record contract is disjoint from any non-Record kind.
-        (Kind(k), Record(_) | HasField(_)) | (Record(_) | HasField(_), Kind(k)) if *k != VKind::Record => true,
+        (Kind(k), Record(_) | HasField(_)) | (Record(_) | HasField(_), Kind(k))
+            if *k != VKind::Record =>
+        {
+            true
+        }
         // A tuple contract is disjoint from any non-Tuple kind.
         (Kind(k), Tuple(_)) | (Tuple(_), Kind(k)) if *k != VKind::Tuple => true,
         // An exact record lacking field `k` can never have it.
-        (Record(fields), HasField(k)) | (HasField(k), Record(fields)) => !fields.iter().any(|(key, _)| key == k),
+        (Record(fields), HasField(k)) | (HasField(k), Record(fields)) => {
+            !fields.iter().any(|(key, _)| key == k)
+        }
         // Tuples of different arity, or with a disjoint position, never coincide.
-        (Tuple(pa), Tuple(pb)) => pa.len() != pb.len() || pa.iter().zip(pb).any(|(x, y)| disjoint(x, y)),
-        (Union(a1, a2), other) | (other, Union(a1, a2)) => disjoint(a1, other) && disjoint(a2, other),
+        (Tuple(pa), Tuple(pb)) => {
+            pa.len() != pb.len() || pa.iter().zip(pb).any(|(x, y)| disjoint(x, y))
+        }
+        (Union(a1, a2), other) | (other, Union(a1, a2)) => {
+            disjoint(a1, other) && disjoint(a2, other)
+        }
         (Intersection(a1, a2), other) | (other, Intersection(a1, a2)) => {
             disjoint(a1, other) || disjoint(a2, other)
         }
@@ -209,7 +220,9 @@ fn is_empty(c: &Contract) -> bool {
 
 fn refute(a: &Contract, b: &Contract, interner: &mut Interner) -> Option<ValueRef> {
     // A sample must genuinely inhabit A (a valid witness) and be outside B.
-    sample(a, interner).into_iter().find(|s| a.contains(s) && !b.contains(s))
+    sample(a, interner)
+        .into_iter()
+        .find(|s| a.contains(s) && !b.contains(s))
 }
 
 /// Candidate members of `⟦c⟧` (best-effort; the caller re-checks membership).
@@ -233,7 +246,11 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
         Equals(v) => vec![v.clone()],
         Range(lo, hi) => {
             let mid = (lo.clone() + hi.clone()) / Rational::from(2);
-            vec![interner.number(lo.clone()), interner.number(hi.clone()), interner.number(mid)]
+            vec![
+                interner.number(lo.clone()),
+                interner.number(hi.clone()),
+                interner.number(mid),
+            ]
         }
         // Include a fractional near-bound point — the rationals are dense, so a
         // half-step witnesses gaps that integer steps miss.
@@ -241,12 +258,18 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
             interner.number(m.clone() + Rational::from(1)),
             interner.number(m.clone() + half()),
         ],
-        GreaterEq(m) => vec![interner.number(m.clone()), interner.number(m.clone() + half())],
+        GreaterEq(m) => vec![
+            interner.number(m.clone()),
+            interner.number(m.clone() + half()),
+        ],
         Less(m) => vec![
             interner.number(m.clone() - Rational::from(1)),
             interner.number(m.clone() - half()),
         ],
-        LessEq(m) => vec![interner.number(m.clone()), interner.number(m.clone() - half())],
+        LessEq(m) => vec![
+            interner.number(m.clone()),
+            interner.number(m.clone() - half()),
+        ],
         Mod { n, r } => {
             let base = Rational::from_integer(r.clone());
             let step = Rational::from_integer(n.clone());
@@ -257,7 +280,10 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
             ]
         }
         Geo { b, r } => {
-            vec![interner.number(b.clone()), interner.number(b.clone() * r.clone())]
+            vec![
+                interner.number(b.clone()),
+                interner.number(b.clone() * r.clone()),
+            ]
         }
         Indeterminate(form) => [0, 1, -1]
             .into_iter()
@@ -270,7 +296,9 @@ pub(crate) fn sample(c: &Contract, interner: &mut Interner) -> Vec<ValueRef> {
         Concat(segs) => {
             let mut items: Vec<ValueRef> = Vec::new();
             for s in segs {
-                let Some(w) = sample(s, interner).into_iter().find(|v| v.as_tuple().is_some())
+                let Some(w) = sample(s, interner)
+                    .into_iter()
+                    .find(|v| v.as_tuple().is_some())
                 else {
                     return vec![];
                 };

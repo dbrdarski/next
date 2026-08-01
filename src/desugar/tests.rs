@@ -47,7 +47,10 @@ fn pipes_are_application() {
 fn pipe_chain_matches_nested_calls() {
     // a |> f |> g  ≡  g(f(a))
     let mut i = Interner::new();
-    assert_eq!(lower_with(&mut i, "a |> f |> g"), lower_with(&mut i, "g(f(a))"));
+    assert_eq!(
+        lower_with(&mut i, "a |> f |> g"),
+        lower_with(&mut i, "g(f(a))")
+    );
 }
 
 #[test]
@@ -65,7 +68,9 @@ fn conjunction_desugars_to_match() {
     assert!(arm1.pattern.is_none() && arm1.guard.is_none());
     assert!(matches!(arm1.result, Expr::Const(_))); // Const(false)
     // And the whole form is scrutinee-less.
-    let Expr::Match(m) = &e else { panic!("expected match") };
+    let Expr::Match(m) = &e else {
+        panic!("expected match")
+    };
     assert!(m.scrutinee.is_none());
 }
 
@@ -82,9 +87,16 @@ fn ternary_desugars_to_bool_match() {
     let e = lower(r#"c ? "t" : "e""#);
     let items = match_items(&e);
     assert_eq!(items.len(), 2);
-    let MatchItem::Arm(arm0) = &items[0] else { panic!("expected arm") };
-    assert!(arm0.pattern.is_none() && arm0.guard.is_some(), "condition sits in the guard");
-    let Expr::Match(m) = &e else { panic!("expected match") };
+    let MatchItem::Arm(arm0) = &items[0] else {
+        panic!("expected arm")
+    };
+    assert!(
+        arm0.pattern.is_none() && arm0.guard.is_some(),
+        "condition sits in the guard"
+    );
+    let Expr::Match(m) = &e else {
+        panic!("expected match")
+    };
     assert!(m.scrutinee.is_none());
 }
 
@@ -100,7 +112,13 @@ fn double_negation_loosen_is_falsy_test() {
     let e = lower("!~x");
     let items = match_items(&e);
     assert_eq!(items.len(), 3);
-    assert!(matches!(items[2], MatchItem::Arm(Arm { pattern: Some(Pat::Wild), .. })));
+    assert!(matches!(
+        items[2],
+        MatchItem::Arm(Arm {
+            pattern: Some(Pat::Wild),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -136,7 +154,10 @@ fn arrow_is_a_pure_lambda_over_the_argument_tuple() {
     match lower("x => x") {
         Expr::Lambda(l) => {
             assert_eq!(l.act_kind, ActKind::Pure);
-            assert_eq!(l.params, Pat::Tuple(vec![PatElem::Pat(Pat::Bind("x".into()))]));
+            assert_eq!(
+                l.params,
+                Pat::Tuple(vec![PatElem::Pat(Pat::Bind("x".into()))])
+            );
             assert!(matches!(*l.body, Expr::Ref(_)));
         }
         other => panic!("expected lambda, got {other:?}"),
@@ -163,7 +184,13 @@ fn hask_anon_hole() {
     match lower("# _ + 1") {
         Expr::Lambda(l) => {
             assert!(matches!(l.params, Pat::Tuple(ref v) if v.len() == 1));
-            assert!(matches!(*l.body, Expr::PrimOp { op: PrimOp::Add, .. }));
+            assert!(matches!(
+                *l.body,
+                Expr::PrimOp {
+                    op: PrimOp::Add,
+                    ..
+                }
+            ));
         }
         other => panic!("expected lambda, got {other:?}"),
     }
@@ -192,7 +219,10 @@ fn hask_rest_hole_as_one_tuple() {
     // #([..._1])  ⇒  Lambda(Tuple([Rest]), TupleCons([Spread(Ref)]))
     match lower("#([..._1])") {
         Expr::Lambda(l) => {
-            assert_eq!(l.params, Pat::Tuple(vec![PatElem::Rest(Some("%hrest0".into()))]));
+            assert_eq!(
+                l.params,
+                Pat::Tuple(vec![PatElem::Rest(Some("%hrest0".into()))])
+            );
             match *l.body {
                 Expr::TupleCons(ref elems) => {
                     assert!(matches!(elems[0], Element::Spread(Expr::Ref(_))));
@@ -222,7 +252,14 @@ fn block_body_is_scrutinee_less_match() {
         Expr::Lambda(l) => match *l.body {
             Expr::Match(ref m) => {
                 assert!(m.scrutinee.is_none());
-                assert!(matches!(m.items[0], MatchItem::Arm(Arm { pattern: None, guard: None, .. })));
+                assert!(matches!(
+                    m.items[0],
+                    MatchItem::Arm(Arm {
+                        pattern: None,
+                        guard: None,
+                        ..
+                    })
+                ));
             }
             ref other => panic!("expected match body, got {other:?}"),
         },
@@ -247,7 +284,10 @@ fn pin_becomes_equality_guard() {
     let e = lower("v :: {\n ^target => \"hit\"\n _ => \"o\"\n }");
     if let MatchItem::Arm(arm) = &match_items(&e)[0] {
         assert!(matches!(arm.pattern, Some(Pat::Bind(_))));
-        assert!(matches!(arm.guard, Some(Expr::PrimOp { op: PrimOp::Eq, .. })));
+        assert!(matches!(
+            arm.guard,
+            Some(Expr::PrimOp { op: PrimOp::Eq, .. })
+        ));
     } else {
         panic!("expected arm");
     }
@@ -271,9 +311,18 @@ fn compound_assign_reads_then_writes() {
     // count +:= 1  ⇒  Write(Name count, PrimOp(Add, [Ref count, Const 1]))
     let m = lower_program("@mutate inc = () => { count +:= 1 }");
     match mutate_body(&m) {
-        MatchItem::Stmt(Expr::Write { slot: SlotRef::Name(n), value }) => {
+        MatchItem::Stmt(Expr::Write {
+            slot: SlotRef::Name(n),
+            value,
+        }) => {
             assert_eq!(n, "count");
-            assert!(matches!(**value, Expr::PrimOp { op: PrimOp::Add, .. }));
+            assert!(matches!(
+                **value,
+                Expr::PrimOp {
+                    op: PrimOp::Add,
+                    ..
+                }
+            ));
         }
         other => panic!("expected write, got {other:?}"),
     }
@@ -284,7 +333,10 @@ fn field_path_assign_is_functional_update() {
     // a.b := v  ⇒  Write(Name a, { ...a, b: v })
     let m = lower_program("@mutate f = () => { a.b := v }");
     match mutate_body(&m) {
-        MatchItem::Stmt(Expr::Write { slot: SlotRef::Name(n), value }) => {
+        MatchItem::Stmt(Expr::Write {
+            slot: SlotRef::Name(n),
+            value,
+        }) => {
             assert_eq!(n, "a");
             match &**value {
                 Expr::RecordCons(fields) => {
@@ -345,7 +397,9 @@ fn constants_intern_across_desugar() {
     let mut i = Interner::new();
     let a = lower_with(&mut i, "0.5");
     let b = lower_with(&mut i, "1 / 2 == 0.5"); // contains 0.5
-    let (Expr::Const(va), _) = (&a, &b) else { panic!() };
+    let (Expr::Const(va), _) = (&a, &b) else {
+        panic!()
+    };
     // Find the 0.5 const inside b's PrimOp tree and check pointer identity.
     fn find_half(e: &Expr) -> Option<&crate::value::ValueRef> {
         match e {
@@ -365,5 +419,8 @@ fn constants_intern_across_desugar() {
 fn equal_programs_lower_equal() {
     // Structural equality of kernel forms (same interner ⇒ shared consts).
     let mut i = Interner::new();
-    assert_eq!(lower_with(&mut i, "f(g(a))"), lower_with(&mut i, "a |> g |> f"));
+    assert_eq!(
+        lower_with(&mut i, "f(g(a))"),
+        lower_with(&mut i, "a |> g |> f")
+    );
 }

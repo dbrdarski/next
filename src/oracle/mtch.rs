@@ -89,7 +89,12 @@ impl<'a> Oracle<'a> {
     /// Match `value` against `pat`, defining any bindings into `scope`. Returns
     /// whether it matched. A no-match leaves partial bindings in `scope`, which is
     /// harmless because callers use a fresh throwaway scope per attempt.
-    pub(super) fn match_pattern(&mut self, pat: &Pat, value: &ValueRef, scope: &Env) -> Result<bool, Trap> {
+    pub(super) fn match_pattern(
+        &mut self,
+        pat: &Pat,
+        value: &ValueRef,
+        scope: &Env,
+    ) -> Result<bool, Trap> {
         match pat {
             Pat::Const(v) => Ok(value.ptr_eq(v)),
             Pat::Wild => Ok(true),
@@ -103,8 +108,15 @@ impl<'a> Oracle<'a> {
         }
     }
 
-    fn match_tuple(&mut self, elems: &[PatElem], value: &ValueRef, scope: &Env) -> Result<bool, Trap> {
-        let Some(items) = value.as_tuple() else { return Ok(false) };
+    fn match_tuple(
+        &mut self,
+        elems: &[PatElem],
+        value: &ValueRef,
+        scope: &Env,
+    ) -> Result<bool, Trap> {
+        let Some(items) = value.as_tuple() else {
+            return Ok(false);
+        };
         let items = items.to_vec(); // detach from `value` so we can borrow self
 
         let rest_pos = elems.iter().position(|e| matches!(e, PatElem::Rest(_)));
@@ -128,14 +140,18 @@ impl<'a> Oracle<'a> {
                     return Ok(false);
                 }
                 for (pe, item) in before.iter().zip(&items[..before.len()]) {
-                    let PatElem::Pat(p) = pe else { return Ok(false) };
+                    let PatElem::Pat(p) = pe else {
+                        return Ok(false);
+                    };
                     if !self.match_pattern(p, item, scope)? {
                         return Ok(false);
                     }
                 }
                 let back_start = items.len() - after.len();
                 for (pe, item) in after.iter().zip(&items[back_start..]) {
-                    let PatElem::Pat(p) = pe else { return Ok(false) };
+                    let PatElem::Pat(p) = pe else {
+                        return Ok(false);
+                    };
                     if !self.match_pattern(p, item, scope)? {
                         return Ok(false);
                     }
@@ -157,7 +173,9 @@ impl<'a> Oracle<'a> {
         value: &ValueRef,
         scope: &Env,
     ) -> Result<bool, Trap> {
-        let Some(entries) = value.as_record() else { return Ok(false) };
+        let Some(entries) = value.as_record() else {
+            return Ok(false);
+        };
         let entries: Vec<RecordEntry> = entries.to_vec();
 
         let mut matched_keys: Vec<Vec<u16>> = Vec::new();
@@ -179,13 +197,18 @@ impl<'a> Oracle<'a> {
             }
         }
 
-        let extras: Vec<&RecordEntry> = entries.iter().filter(|e| !matched_keys.contains(&e.key)).collect();
+        let extras: Vec<&RecordEntry> = entries
+            .iter()
+            .filter(|e| !matched_keys.contains(&e.key))
+            .collect();
         if rest.is_none() && exact && !extras.is_empty() {
             return Ok(false); // exact pattern with unaccounted keys
         }
         if let Some(Some(name)) = rest {
-            let pairs: Vec<(Vec<u16>, ValueRef)> =
-                extras.iter().map(|e| (e.key.clone(), e.value.clone())).collect();
+            let pairs: Vec<(Vec<u16>, ValueRef)> = extras
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect();
             let captured = self.interner.record(pairs);
             scope.define(name, Binding::Value(captured));
         }
@@ -197,7 +220,10 @@ impl<'a> Oracle<'a> {
     /// phase) and are not yet evaluable here.
     fn match_contract(&mut self, r: &Ref, value: &ValueRef) -> Result<bool, Trap> {
         let Ref::Immutable(BindingRef::Name(name)) = r else {
-            return Self::trap(TrapClass::OperationSafety, "unsupported contract reference in a pattern");
+            return Self::trap(
+                TrapClass::OperationSafety,
+                "unsupported contract reference in a pattern",
+            );
         };
         let matched = match name.as_str() {
             "Number" => value.as_number().is_some(),
@@ -221,7 +247,9 @@ impl<'a> Oracle<'a> {
             other => {
                 return Self::trap(
                     TrapClass::OperationSafety,
-                    format!("user-defined contract pattern `{other}` needs the contract engine (v0.1)"),
+                    format!(
+                        "user-defined contract pattern `{other}` needs the contract engine (v0.1)"
+                    ),
                 );
             }
         };
@@ -235,9 +263,11 @@ fn match_group_windows(m: &Match) -> Vec<super::mu::GroupWindow> {
         .iter()
         .enumerate()
         .filter_map(|(index, item)| match item {
-            MatchItem::Bind(Bind { target: BindTarget::Name(name), value, .. }) => {
-                Some((index, name.clone(), value.clone()))
-            }
+            MatchItem::Bind(Bind {
+                target: BindTarget::Name(name),
+                value,
+                ..
+            }) => Some((index, name.clone(), value.clone())),
             _ => None,
         })
         .collect();

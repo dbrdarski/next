@@ -134,8 +134,10 @@ fn install_string_prelude(interner: &mut Interner, env: &Env) {
         act_kind: ActKind::Pure,
         imp: Rc::new(move |interner: &mut Interner, args: &[ValueRef]| {
             let s = demand_str(args)?;
-            let items: Vec<ValueRef> =
-                s.encode_utf16().map(|u| interner.integer(u as i64)).collect();
+            let items: Vec<ValueRef> = s
+                .encode_utf16()
+                .map(|u| interner.integer(u as i64))
+                .collect();
             Ok(interner.tuple(items))
         }),
     };
@@ -144,8 +146,7 @@ fn install_string_prelude(interner: &mut Interner, env: &Env) {
         act_kind: ActKind::Pure,
         imp: Rc::new(move |interner: &mut Interner, args: &[ValueRef]| {
             let s = demand_str(args)?;
-            let items: Vec<ValueRef> =
-                s.chars().map(|c| interner.integer(c as i64)).collect();
+            let items: Vec<ValueRef> = s.chars().map(|c| interner.integer(c as i64)).collect();
             Ok(interner.tuple(items))
         }),
     };
@@ -169,7 +170,9 @@ pub fn run_with_io(src: &str) -> Result<(ValueRef, HostIo), Trap> {
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar ok");
+    let module = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .expect("desugar ok");
 
     let io = Rc::new(RefCell::new(HostIo::default()));
     let env = prelude_env(&mut interner);
@@ -224,7 +227,9 @@ pub fn check_source(src: &str) -> Result<(ProgramVerdict, Interner), RunError> {
 pub fn check_source_in(src: &str, interner: &mut Interner) -> Result<ProgramVerdict, RunError> {
     let toks = lex(src).map_err(RunError::Lex)?;
     let sprogram = parse_program(toks).map_err(RunError::Parse)?;
-    let module = Desugarer::new(interner).program(&sprogram).map_err(RunError::Desugar)?;
+    let module = Desugarer::new(interner)
+        .program(&sprogram)
+        .map_err(RunError::Desugar)?;
     let io = Rc::new(RefCell::new(HostIo::default()));
     let env = prelude_env(interner);
     install_host_effects(interner, &env, &io);
@@ -238,13 +243,17 @@ pub fn check_source_in(src: &str, interner: &mut Interner) -> Result<ProgramVerd
 pub fn run_source_in(src: &str, interner: &mut Interner) -> Result<(ValueRef, HostIo), RunError> {
     let toks = lex(src).map_err(RunError::Lex)?;
     let sprogram = parse_program(toks).map_err(RunError::Parse)?;
-    let module = Desugarer::new(interner).program(&sprogram).map_err(RunError::Desugar)?;
+    let module = Desugarer::new(interner)
+        .program(&sprogram)
+        .map_err(RunError::Desugar)?;
 
     let io = Rc::new(RefCell::new(HostIo::default()));
     let env = prelude_env(interner);
     install_host_effects(interner, &env, &io);
 
-    let value = Oracle::new(interner).run_module_in(&module, &env).map_err(RunError::Trap)?;
+    let value = Oracle::new(interner)
+        .run_module_in(&module, &env)
+        .map_err(RunError::Trap)?;
     let captured = std::mem::take(&mut *io.borrow_mut());
     Ok((value, captured))
 }

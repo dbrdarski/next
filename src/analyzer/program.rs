@@ -23,8 +23,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    Analysis, Completion, Finding, SafetyDemand, Severity, TypeEnv, analyze_bind,
-    analyze_in_world, demand, safety,
+    Analysis, Completion, Finding, SafetyDemand, Severity, TypeEnv, analyze_bind, analyze_in_world,
+    demand, safety,
 };
 use crate::analyzer::TrapClass;
 use crate::analyzer::domain::AnalysisContract;
@@ -114,7 +114,9 @@ impl ProgramVerdict {
 
     /// The rejecting findings only.
     pub fn errors(&self) -> impl Iterator<Item = &Finding> {
-        self.findings.iter().filter(|f| f.severity == Severity::Error)
+        self.findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
     }
 }
 
@@ -163,7 +165,10 @@ pub(crate) fn analyze_program_in(
 
                 // Contract definitions are static analyzer bindings (E11), not calls to
                 // runtime values named `Range`, `Union`, etc.
-                if name.as_ref().is_some_and(|name| contract_names.contains(name)) {
+                if name
+                    .as_ref()
+                    .is_some_and(|name| contract_names.contains(name))
+                {
                     continue;
                 }
 
@@ -205,20 +210,12 @@ pub(crate) fn analyze_program_in(
                     &cenv,
                     interner,
                 );
-                if let (Some(name), Contract::Equals(value)) =
-                    (name, annotated.erase(interner))
-                {
+                if let (Some(name), Contract::Equals(value)) = (name, annotated.erase(interner)) {
                     scope.define(&name, Binding::Value(value));
                 }
             }
             Item::SlotDecl(slot) => {
-                let analysis = analyze_in_world(
-                    &slot.init,
-                    &tenv,
-                    &cenv,
-                    World::Pure,
-                    interner,
-                );
+                let analysis = analyze_in_world(&slot.init, &tenv, &cenv, World::Pure, interner);
                 let annotated = record_executable(
                     ExecutableOrigin::SlotInitializer {
                         item: item_index,
@@ -234,10 +231,7 @@ pub(crate) fn analyze_program_in(
             }
             Item::ActBind(ab) => {
                 if let Some(value) = values.get(&ab.name) {
-                    tenv.insert(
-                        ab.name.clone(),
-                        AnalysisContract::of_value(value.clone()),
-                    );
+                    tenv.insert(ab.name.clone(), AnalysisContract::of_value(value.clone()));
                 }
             }
             Item::Stmt(expr) => {
@@ -397,14 +391,11 @@ fn safety_policy_findings(demands: &[SafetyDemand]) -> Vec<Finding> {
                     ),
                 })
             }
-            SafetyDemand::Body(body)
-                if matches!(body.verdict, safety::BodySafety::Unproven(_)) =>
-            {
+            SafetyDemand::Body(body) if matches!(body.verdict, safety::BodySafety::Unproven(_)) => {
                 Some(Finding {
                     class: TrapClass::OperationSafety,
                     severity: Severity::Error,
-                    message: "callee body safety cannot be proven at this executable seat"
-                        .into(),
+                    message: "callee body safety cannot be proven at this executable seat".into(),
                 })
             }
             SafetyDemand::Operation(_) | SafetyDemand::Body(_) => None,
@@ -528,7 +519,10 @@ fn verdict_findings(name: &str, v: &safety::BodySafety) -> Vec<Finding> {
         }
     };
     if unproven || !fs.iter().any(|finding| finding.severity == Severity::Error) {
-        fs.push(malformed(name, &format!("{voice} its declared input domain")));
+        fs.push(malformed(
+            name,
+            &format!("{voice} its declared input domain"),
+        ));
     }
     fs
 }
@@ -566,8 +560,14 @@ mod tests {
     /// Before this entry existed, nothing asked the question.
     #[test]
     fn a_where_whose_body_traps_over_its_declared_domain_is_rejected() {
-        let (v, _) = check("f where (Number) => Number\nf = (n) => n + 1\ng where (String) => Number\ng = (s) => s + 1\n");
-        assert!(!v.accepted(), "a String input to `+` must reject: {:?}", v.findings);
+        let (v, _) = check(
+            "f where (Number) => Number\nf = (n) => n + 1\ng where (String) => Number\ng = (s) => s + 1\n",
+        );
+        assert!(
+            !v.accepted(),
+            "a String input to `+` must reject: {:?}",
+            v.findings
+        );
     }
 
     /// The complement — and the harder half. A declared domain that *does* discharge must
@@ -575,7 +575,11 @@ mod tests {
     #[test]
     fn a_where_whose_body_is_safe_over_its_declared_domain_is_accepted() {
         let (v, _) = check("f where (Number) => Number\nf = (n) => n + 1\n");
-        assert!(v.accepted(), "a Number input to `+` discharges: {:?}", v.findings);
+        assert!(
+            v.accepted(),
+            "a Number input to `+` discharges: {:?}",
+            v.findings
+        );
     }
 
     /// E-8's whole reason for existing: the declared domain is what makes recursion
@@ -591,7 +595,11 @@ mod tests {
             "countDown where (Intersection(GreaterEq(0), Mod(1, 0))) => Number\n\
              countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n",
         );
-        assert!(v.accepted(), "declared-domain recursion proves by induction: {:?}", v.findings);
+        assert!(
+            v.accepted(),
+            "declared-domain recursion proves by induction: {:?}",
+            v.findings
+        );
     }
 
     /// The same program over a domain **without** integrality must NOT prove — and this is
@@ -608,7 +616,10 @@ mod tests {
             "countDown where (GreaterEq(0)) => Number\n\
              countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n",
         );
-        assert!(!v.accepted(), "0.5 leaves the declared domain — unproven, not accepted");
+        assert!(
+            !v.accepted(),
+            "0.5 leaves the declared domain — unproven, not accepted"
+        );
     }
 
     /// Program policy may reject both failed voices, but it must retain which one the
@@ -622,11 +633,8 @@ mod tests {
             safety::BodySafety::Proven
         ));
 
-        let (refuted, mut interner) =
-            check("g where (String) => Number\ng = (s) => s + 1\n");
-        let safety::BodySafety::Refuted(evidence) =
-            &refuted.body_safety_demands[0].verdict
-        else {
+        let (refuted, mut interner) = check("g where (String) => Number\ng = (s) => s + 1\n");
+        let safety::BodySafety::Refuted(evidence) = &refuted.body_safety_demands[0].verdict else {
             panic!("the String-domain body must be refuted");
         };
         let operation = evidence
@@ -666,10 +674,13 @@ mod tests {
             "useFn where (Function) => Top\n\
              useFn = (candidate) => candidate + 1\n",
         );
-        assert!(matches!(
-            operation_unproven.body_safety_demands[0].verdict,
-            safety::BodySafety::Unproven(_)
-        ), "an unsampleable operation domain must not become a false body refutation");
+        assert!(
+            matches!(
+                operation_unproven.body_safety_demands[0].verdict,
+                safety::BodySafety::Unproven(_)
+            ),
+            "an unsampleable operation domain must not become a false body refutation"
+        );
 
         let (mixed, _) = check(
             "mixed where (Function) => Top\n\
@@ -678,10 +689,13 @@ mod tests {
               => candidate + 1\n\
              }\n",
         );
-        assert!(matches!(
-            mixed.body_safety_demands[0].verdict,
-            safety::BodySafety::Refuted(_)
-        ), "a separate definite trap must dominate an unrelated Unproven operation");
+        assert!(
+            matches!(
+                mixed.body_safety_demands[0].verdict,
+                safety::BodySafety::Refuted(_)
+            ),
+            "a separate definite trap must dominate an unrelated Unproven operation"
+        );
     }
 
     /// A `where` naming nothing, and one whose arity disagrees with the function, are
@@ -689,7 +703,11 @@ mod tests {
     #[test]
     fn a_where_that_cannot_be_acted_on_rejects_rather_than_passing_silently() {
         let (v, _) = check("ghost where (Number) => Number\nf = (n) => n\n");
-        assert!(!v.accepted(), "a `where` naming no binding rejects: {:?}", v.findings);
+        assert!(
+            !v.accepted(),
+            "a `where` naming no binding rejects: {:?}",
+            v.findings
+        );
 
         // Detectable only in this direction — see `spread_input`: a *declared* tuple on a
         // one-parameter function is legal (that parameter may be a tuple), so the mismatch
@@ -702,8 +720,13 @@ mod tests {
     /// may name one — and the declared domain is then the *named* contract, not `Number`.
     #[test]
     fn a_where_may_declare_a_named_contract() {
-        let (v, _) = check("Percent = Range(0, 100)\nf where (Percent) => Number\nf = (p) => p + 1\n");
-        assert!(v.accepted(), "a named contract resolves as the declared domain: {:?}", v.findings);
+        let (v, _) =
+            check("Percent = Range(0, 100)\nf where (Percent) => Number\nf = (p) => p + 1\n");
+        assert!(
+            v.accepted(),
+            "a named contract resolves as the declared domain: {:?}",
+            v.findings
+        );
     }
 
     /// A fact depends on every named contract its function body reads. Reusing one pure
@@ -729,7 +752,10 @@ mod tests {
         let mut interner = Interner::new();
         let safe = crate::oracle::harness::check_source_in(SAFE, &mut interner)
             .expect("safe variant parses and checks");
-        assert!(safe.accepted(), "String does not select the trapping arm: {safe:?}");
+        assert!(
+            safe.accepted(),
+            "String does not select the trapping arm: {safe:?}"
+        );
         let unsafe_variant = crate::oracle::harness::check_source_in(UNSAFE, &mut interner)
             .expect("unsafe variant parses and checks");
         assert!(
@@ -743,7 +769,10 @@ mod tests {
         let mut interner = Interner::new();
         let unsafe_variant = crate::oracle::harness::check_source_in(UNSAFE, &mut interner)
             .expect("unsafe variant parses and checks");
-        assert!(!unsafe_variant.accepted(), "the unsafe variant rejects from a cold memo");
+        assert!(
+            !unsafe_variant.accepted(),
+            "the unsafe variant rejects from a cold memo"
+        );
         let safe = crate::oracle::harness::check_source_in(SAFE, &mut interner)
             .expect("safe variant parses and checks");
         assert!(
@@ -759,7 +788,11 @@ mod tests {
     #[test]
     fn a_declared_return_contract_that_the_body_does_not_meet_rejects() {
         let (v, _) = check("f where (Number) => String\nf = (n) => n + 1\n");
-        assert!(!v.accepted(), "`f` returns a Number where String is declared: {:?}", v.findings);
+        assert!(
+            !v.accepted(),
+            "`f` returns a Number where String is declared: {:?}",
+            v.findings
+        );
         assert!(
             v.findings
                 .iter()
@@ -785,7 +818,10 @@ mod tests {
              factorial = (n) => n == 0 ? 1 : n * factorial(n - 1)\n",
         );
         assert!(!v.accepted(), "an unproven declaration remains rejecting");
-        assert!(matches!(v.return_demands[0].verdict, ClaimVerdict::Unproven));
+        assert!(matches!(
+            v.return_demands[0].verdict,
+            ClaimVerdict::Unproven
+        ));
         assert!(
             v.findings
                 .iter()
@@ -805,7 +841,11 @@ mod tests {
     fn a_declared_return_contract_the_body_meets_is_proven() {
         let (v, _) = check("f where (Number) => Number\nf = (n) => n + 1\n");
         assert!(v.accepted(), "{:?}", v.findings);
-        assert_eq!(v.return_demands.len(), 1, "the discharge is recorded: {v:?}");
+        assert_eq!(
+            v.return_demands.len(),
+            1,
+            "the discharge is recorded: {v:?}"
+        );
         assert!(matches!(v.return_demands[0].verdict, ClaimVerdict::Proven));
     }
 
@@ -837,8 +877,16 @@ mod tests {
     #[test]
     fn an_unsafe_binding_rhs_is_checked_without_being_evaluated() {
         let (v, mut interner) = check("boom = 1 + \"x\"\n");
-        assert!(!v.accepted(), "the binding operation-safety demand must reject: {:?}", v.findings);
-        assert!(v.findings.iter().any(|f| f.class == TrapClass::OperationSafety));
+        assert!(
+            !v.accepted(),
+            "the binding operation-safety demand must reject: {:?}",
+            v.findings
+        );
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.class == TrapClass::OperationSafety)
+        );
         let operation = v.executable_demands[0]
             .safety_demands
             .iter()
@@ -864,11 +912,16 @@ mod tests {
     #[test]
     fn an_unsafe_executable_statement_is_checked() {
         let (v, _) = check("(1 / 0) + 5\n");
-        assert!(!v.accepted(), "the statement must discharge its own operation demand: {:?}", v.findings);
-        assert!(v
-            .findings
-            .iter()
-            .any(|f| f.class == TrapClass::UndischargedIndeterminate));
+        assert!(
+            !v.accepted(),
+            "the statement must discharge its own operation demand: {:?}",
+            v.findings
+        );
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.class == TrapClass::UndischargedIndeterminate)
+        );
     }
 
     /// A statement seat discards completion, while a binding RHS is an expecting seat.
@@ -884,8 +937,17 @@ mod tests {
         );
 
         let (binding, _) = check("x = 1 :: { 2 => 3 }\n");
-        assert!(!binding.accepted(), "a binding demands a produced value: {:?}", binding.findings);
-        assert!(binding.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat));
+        assert!(
+            !binding.accepted(),
+            "a binding demands a produced value: {:?}",
+            binding.findings
+        );
+        assert!(
+            binding
+                .findings
+                .iter()
+                .any(|f| f.class == TrapClass::ExpectingSeat)
+        );
     }
 
     /// A selected arm returns its result's whole outcome. The Match itself does not
@@ -934,7 +996,11 @@ mod tests {
     #[test]
     fn executable_demands_follow_item_order() {
         let (ordered, _) = check("x = 1\nx + 2\n");
-        assert!(ordered.accepted(), "the earlier binding is available: {:?}", ordered.findings);
+        assert!(
+            ordered.accepted(),
+            "the earlier binding is available: {:?}",
+            ordered.findings
+        );
         assert_eq!(ordered.executable_demands.len(), 2);
         assert!(matches!(
             ordered.executable_demands[0],
@@ -956,8 +1022,17 @@ mod tests {
         ));
 
         let (forward, _) = check("x + 2\nx = 1\n");
-        assert!(!forward.accepted(), "an eager forward reference must reject: {:?}", forward.findings);
-        assert!(forward.findings.iter().any(|f| f.class == TrapClass::UnboundEvaluation));
+        assert!(
+            !forward.accepted(),
+            "an eager forward reference must reject: {:?}",
+            forward.findings
+        );
+        assert!(
+            forward
+                .findings
+                .iter()
+                .any(|f| f.class == TrapClass::UnboundEvaluation)
+        );
     }
 
     /// Constructing a lambda does not inspect or run its body; applying it creates the
@@ -965,11 +1040,24 @@ mod tests {
     #[test]
     fn a_function_body_is_checked_when_the_executable_program_calls_it() {
         let (constructed, _) = check("f = () => 1 + \"x\"\n");
-        assert!(constructed.accepted(), "construction alone is inert: {:?}", constructed.findings);
+        assert!(
+            constructed.accepted(),
+            "construction alone is inert: {:?}",
+            constructed.findings
+        );
 
         let (called, _) = check("f = () => 1 + \"x\"\nf()\n");
-        assert!(!called.accepted(), "the call must check its body: {:?}", called.findings);
-        assert!(called.findings.iter().any(|f| f.class == TrapClass::OperationSafety));
+        assert!(
+            !called.accepted(),
+            "the call must check its body: {:?}",
+            called.findings
+        );
+        assert!(
+            called
+                .findings
+                .iter()
+                .any(|f| f.class == TrapClass::OperationSafety)
+        );
     }
 
     /// The program path must consume the global fact graph. The helper edge changes
@@ -1034,7 +1122,11 @@ mod tests {
     #[test]
     fn executable_demands_carry_their_top_level_world() {
         let (entry, _) = check("@effect ping = () => { }\nping()\n");
-        assert!(entry.accepted(), "entry top level admits Effects: {:?}", entry.findings);
+        assert!(
+            entry.accepted(),
+            "entry top level admits Effects: {:?}",
+            entry.findings
+        );
 
         let (nested_effect, _) = check(
             "@effect inner = () => { }\n\
@@ -1063,15 +1155,28 @@ mod tests {
              @effect ping = () => { }\n\
              export result = ping()\n",
         );
-        assert!(!module.accepted(), "module top level is pure: {:?}", module.findings);
-        assert!(module.findings.iter().any(|f| f.class == TrapClass::WorldAdmission));
+        assert!(
+            !module.accepted(),
+            "module top level is pure: {:?}",
+            module.findings
+        );
+        assert!(
+            module
+                .findings
+                .iter()
+                .any(|f| f.class == TrapClass::WorldAdmission)
+        );
     }
 
     /// Slot allocation is declarative, but its initializer is still a pure expecting seat.
     #[test]
     fn a_slot_initializer_originates_an_executable_demand() {
         let (v, _) = check("@state x = 1 + \"x\"\n");
-        assert!(!v.accepted(), "the initializer must be checked: {:?}", v.findings);
+        assert!(
+            !v.accepted(),
+            "the initializer must be checked: {:?}",
+            v.findings
+        );
     }
 
     /// A write is legal only in mutator world. Entry top level is effect world, which does
@@ -1080,7 +1185,11 @@ mod tests {
     fn a_top_level_write_is_rejected() {
         let (v, _) = check("@state x = 0\nx := 1\n");
         assert!(!v.accepted(), "only a Mutator may write: {:?}", v.findings);
-        assert!(v.findings.iter().any(|f| f.class == TrapClass::WorldAdmission));
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.class == TrapClass::WorldAdmission)
+        );
     }
 
     /// Check mode starts from the same harness values as run mode. Installing a
@@ -1088,7 +1197,11 @@ mod tests {
     #[test]
     fn executable_demands_can_resolve_the_host_prelude() {
         let (v, _) = check("println(\"hello\")\n");
-        assert!(v.accepted(), "the entry harness provides println to the checker: {:?}", v.findings);
+        assert!(
+            v.accepted(),
+            "the entry harness provides println to the checker: {:?}",
+            v.findings
+        );
         assert_eq!(v.executable_demands.len(), 1);
         assert_eq!(v.executable_demands[0].world, World::Effect);
     }

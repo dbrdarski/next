@@ -53,14 +53,23 @@ pub struct Len {
 
 impl Len {
     fn exact(contract: Contract) -> Len {
-        Len { contract, stamp: Stamp::Exact }
+        Len {
+            contract,
+            stamp: Stamp::Exact,
+        }
     }
     fn approx(contract: Contract) -> Len {
-        Len { contract, stamp: Stamp::Approx }
+        Len {
+            contract,
+            stamp: Stamp::Approx,
+        }
     }
     /// Weaken to `Approx` (used when any operand or applied rule is approximate).
     fn weakened(self) -> Len {
-        Len { contract: self.contract, stamp: Stamp::Approx }
+        Len {
+            contract: self.contract,
+            stamp: Stamp::Approx,
+        }
     }
     pub fn is_exact(&self) -> bool {
         self.stamp == Stamp::Exact
@@ -94,7 +103,10 @@ fn union_all(mut parts: Vec<Contract>, i: &mut Interner) -> Contract {
 /// Derive the stamped length of `c` under `group`.
 pub fn len(group: &RecGroup, c: &Contract, interner: &mut Interner) -> Len {
     // An uninhabited shape has no realizable lengths at all.
-    if matches!(recursive::contract_emptiness(group, c, interner), Emptiness::Empty) {
+    if matches!(
+        recursive::contract_emptiness(group, c, interner),
+        Emptiness::Empty
+    ) {
         return Len::exact(Contract::Bottom);
     }
     match c {

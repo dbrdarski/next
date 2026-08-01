@@ -48,7 +48,10 @@ fn exact_rational_arithmetic() {
     assert_eq!(num(&eval("1 / 3 + 1 / 3 + 1 / 3")), &Rational::from(1));
     assert_eq!(num(&eval("2 ** 10")), &Rational::from(1024));
     assert_eq!(num(&eval("7 % 3")), &Rational::from(1));
-    assert_eq!(num(&eval("2 ** -2")), &Rational::from_decimal("0.25").unwrap());
+    assert_eq!(
+        num(&eval("2 ** -2")),
+        &Rational::from_decimal("0.25").unwrap()
+    );
 }
 
 #[test]
@@ -77,8 +80,14 @@ fn specific_indeterminate_values_preserve_form_and_operand_identity() {
 /// ordinary undischarged-value trap, never generic marker propagation.
 #[test]
 fn indeterminate_arithmetic_requires_discharge_until_its_algebra_is_ruled() {
-    assert_eq!(trap_class("(1 / 0) + 5"), TrapClass::UndischargedIndeterminate);
-    assert_eq!(trap_class("(1 % 0) + 5"), TrapClass::UndischargedIndeterminate);
+    assert_eq!(
+        trap_class("(1 / 0) + 5"),
+        TrapClass::UndischargedIndeterminate
+    );
+    assert_eq!(
+        trap_class("(1 % 0) + 5"),
+        TrapClass::UndischargedIndeterminate
+    );
     assert_eq!(trap_class("-(1 / 0)"), TrapClass::UndischargedIndeterminate);
 }
 
@@ -89,7 +98,10 @@ fn indeterminate_is_a_value_not_a_trap_for_equality() {
     assert!(is_true(&eval("(1 / 0) != (2 / 0)")));
     assert!(is_true(&eval("(1 % 0) == (1 % 0)")));
     // but an ordering comparison on it traps (undischarged).
-    assert_eq!(trap_class("(1 / 0) < 2"), TrapClass::UndischargedIndeterminate);
+    assert_eq!(
+        trap_class("(1 / 0) < 2"),
+        TrapClass::UndischargedIndeterminate
+    );
 }
 
 // ── Truthiness desugarings, end-to-end ───────────────────────────────────────
@@ -163,7 +175,10 @@ fn eager_self_reference_traps_unbound() {
 #[test]
 fn argument_arity_mismatch_traps() {
     // The parameter pattern is the argument tuple; wrong arity ⇒ obligation trap.
-    assert_eq!(trap_class("f = (a, b) => a\nf(1)"), TrapClass::ArgumentObligation);
+    assert_eq!(
+        trap_class("f = (a, b) => a\nf(1)"),
+        TrapClass::ArgumentObligation
+    );
 }
 
 #[test]
@@ -174,7 +189,10 @@ fn hask_is_callable() {
 
 #[test]
 fn pipe_is_application() {
-    assert_eq!(num(&eval("double = (x) => x * 2\n5 |> double")), &Rational::from(10));
+    assert_eq!(
+        num(&eval("double = (x) => x * 2\n5 |> double")),
+        &Rational::from(10)
+    );
 }
 
 // ── Match, patterns, completion ──────────────────────────────────────────────
@@ -251,7 +269,11 @@ fn numeric_and_indeterminate_contract_patterns() {
     ";
     let result = eval(indeterminate);
     let items = result.as_tuple().expect("two classification results");
-    assert!(items.iter().all(|v| v.as_string_lossy().as_deref() == Some("indeterminate")));
+    assert!(
+        items
+            .iter()
+            .all(|v| v.as_string_lossy().as_deref() == Some("indeterminate"))
+    );
 }
 
 #[test]
@@ -339,9 +361,15 @@ fn computed_key_trap() {
 fn grapheme_indexing_and_length_semantics() {
     // A family emoji is one grapheme; indexing yields a length-1 String.
     let s = "\"a\u{1F600}b\"";
-    assert_eq!(eval(&format!("{s}[1]")).as_string_lossy().unwrap(), "\u{1F600}");
+    assert_eq!(
+        eval(&format!("{s}[1]")).as_string_lossy().unwrap(),
+        "\u{1F600}"
+    );
     // slice by graphemes
-    assert_eq!(eval(&format!("{s}[0...2]")).as_string_lossy().unwrap(), "a\u{1F600}");
+    assert_eq!(
+        eval(&format!("{s}[0...2]")).as_string_lossy().unwrap(),
+        "a\u{1F600}"
+    );
 }
 
 #[test]
@@ -370,9 +398,13 @@ fn eval_in(interner: &mut Interner, src: &str) -> ValueRef {
 
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(interner).program(&sprogram).expect("desugar ok");
+    let module = Desugarer::new(interner)
+        .program(&sprogram)
+        .expect("desugar ok");
     let mut oracle = Oracle::new(interner);
-    oracle.run_module(&module).expect("evaluated without trapping")
+    oracle
+        .run_module(&module)
+        .expect("evaluated without trapping")
 }
 
 #[test]
@@ -453,7 +485,10 @@ fn pr07_non_ident_record_keys_use_computed_syntax() {
     let rendered = eval_in(&mut i, "`${{a: 1, [\"a-b\"]: 2, [\"two words\"]: 3}}`");
     let printed = String::from_utf16_lossy(rendered.as_str_units().unwrap());
     let reparsed = eval_in(&mut i, &printed);
-    assert!(original.ptr_eq(&reparsed), "PR-07 must round-trip: {printed}");
+    assert!(
+        original.ptr_eq(&reparsed),
+        "PR-07 must round-trip: {printed}"
+    );
 }
 
 #[test]
@@ -466,7 +501,10 @@ fn pr08_lone_surrogate_is_escaped_losslessly() {
     let rendered = eval_in(&mut i, r#"`${["\uD800"]}`"#);
     let printed = String::from_utf16_lossy(rendered.as_str_units().unwrap());
     let reparsed = eval_in(&mut i, &printed);
-    assert!(original.ptr_eq(&reparsed), "PR-08 must round-trip losslessly: {printed}");
+    assert!(
+        original.ptr_eq(&reparsed),
+        "PR-08 must round-trip losslessly: {printed}"
+    );
 }
 
 #[test]
@@ -513,7 +551,10 @@ fn recursive_function_values_share_pointers_after_their_windows_close() {
     );
     let left_fn = values[0].as_tuple().unwrap()[0].clone();
     let right_fn = values[1].as_tuple().unwrap()[0].clone();
-    assert!(left_fn.ptr_eq(&right_fn), "congruence must hold for group children");
+    assert!(
+        left_fn.ptr_eq(&right_fn),
+        "congruence must hold for group children"
+    );
 }
 
 #[test]
@@ -602,7 +643,9 @@ fn mu14_mu15_mu16_capture_routing_and_value_level_collapse() {
     let mut i = Interner::new();
     let routed = eval_in(
         &mut i,
-        &format!("{make_pair}pair = makePair(1, 2)\n[pair[0](0), pair[0](1), pair[1](0), pair[1](1), pair[0] == pair[1]]"),
+        &format!(
+            "{make_pair}pair = makePair(1, 2)\n[pair[0](0), pair[0](1), pair[1](0), pair[1](1), pair[0] == pair[1]]"
+        ),
     );
     let routed = routed.as_tuple().unwrap();
     assert_eq!(routed[0].as_number(), Some(&Rational::from(1)));
@@ -614,11 +657,19 @@ fn mu14_mu15_mu16_capture_routing_and_value_level_collapse() {
     let mut i = Interner::new();
     let collapsed = eval_in(
         &mut i,
-        &format!("{make_pair}pair = makePair(5, 5)\nv = 5\nself = n => n == 0 ? v : self(n - 1)\n[pair[0], pair[1], self]"),
+        &format!(
+            "{make_pair}pair = makePair(5, 5)\nv = 5\nself = n => n == 0 ? v : self(n - 1)\n[pair[0], pair[1], self]"
+        ),
     );
     let collapsed = collapsed.as_tuple().unwrap();
-    assert!(collapsed[0].ptr_eq(&collapsed[1]), "MU-15 value-level slot collapse");
-    assert!(collapsed[0].ptr_eq(&collapsed[2]), "MU-16 cross-construction collapse");
+    assert!(
+        collapsed[0].ptr_eq(&collapsed[1]),
+        "MU-15 value-level slot collapse"
+    );
+    assert!(
+        collapsed[0].ptr_eq(&collapsed[2]),
+        "MU-16 cross-construction collapse"
+    );
 }
 
 #[test]
@@ -805,8 +856,16 @@ fn then_catch_are_next_library_code() {
     ";
     let (v, _io) = run_with_io(src).unwrap();
     let t = v.as_tuple().unwrap();
-    assert_eq!(t[0].as_number().unwrap(), &Rational::from(6), "success flows through then");
-    assert_eq!(t[1].as_number().unwrap(), &Rational::from(99), "failure recovered by catch");
+    assert_eq!(
+        t[0].as_number().unwrap(),
+        &Rational::from(6),
+        "success flows through then"
+    );
+    assert_eq!(
+        t[1].as_number().unwrap(),
+        &Rational::from(99),
+        "failure recovered by catch"
+    );
 }
 
 // ── Canonical function identity (§5, de-Bruijn half) ─────────────────────────
@@ -817,7 +876,9 @@ fn alpha_equivalent_functions_are_equal() {
     assert!(is_true(&eval("((x) => x) == ((y) => y)")));
     assert!(is_true(&eval("((a, b) => a + b) == ((p, q) => p + q)")));
     // Nested lambdas too.
-    assert!(is_true(&eval("((x) => (y) => x + y) == ((a) => (b) => a + b)")));
+    assert!(is_true(&eval(
+        "((x) => (y) => x + y) == ((a) => (b) => a + b)"
+    )));
 }
 
 #[test]
@@ -828,9 +889,15 @@ fn functions_with_equal_captures_are_equal() {
 
 #[test]
 fn functions_differing_in_body_or_capture_differ() {
-    assert_eq!(eval("((x) => x + 1) == ((x) => x + 2)").as_boolean(), Some(false));
+    assert_eq!(
+        eval("((x) => x + 1) == ((x) => x + 2)").as_boolean(),
+        Some(false)
+    );
     // Different captured values ⇒ different functions.
-    assert_eq!(eval("a = 1\nb = 2\n((x) => x + a) == ((y) => y + b)").as_boolean(), Some(false));
+    assert_eq!(
+        eval("a = 1\nb = 2\n((x) => x + a) == ((y) => y + b)").as_boolean(),
+        Some(false)
+    );
 }
 
 #[test]
@@ -858,7 +925,9 @@ fn self_referential_values_intern_equal() {
 fn mu17_mixed_aggregate_flagships() {
     // Open aggregates as group members: the cycle threads code, never data (B3).
     // The record variant `r = { f: () => r }` interns like the tuple flagship.
-    assert!(is_true(&eval("r = { f: () => r }\ns = { f: () => s }\nr == s")));
+    assert!(is_true(&eval(
+        "r = { f: () => r }\ns = { f: () => s }\nr == s"
+    )));
     // and a record differing in a non-cyclic field is distinct
     assert_eq!(
         eval("r = { f: () => r, tag: 1 }\ns = { f: () => s, tag: 2 }\nr == s").as_boolean(),
@@ -878,7 +947,10 @@ fn symmetric_group_collapses_to_self_loop() {
     ";
     let t = eval(src);
     let parts = t.as_tuple().unwrap();
-    assert!(parts.iter().all(|p| p.as_boolean() == Some(true)), "a == b == y");
+    assert!(
+        parts.iter().all(|p| p.as_boolean() == Some(true)),
+        "a == b == y"
+    );
 }
 
 #[test]
@@ -920,7 +992,11 @@ fn mu04_location_captures_are_nominal() {
     ";
     let t = eval(src);
     let parts = t.as_tuple().unwrap();
-    assert_eq!(parts[0].as_boolean(), Some(false), "distinct locations distinct");
+    assert_eq!(
+        parts[0].as_boolean(),
+        Some(false),
+        "distinct locations distinct"
+    );
     assert_eq!(parts[1].as_boolean(), Some(true), "same location equal");
 }
 
@@ -941,21 +1017,52 @@ fn recursive_self_function_equal_by_shape() {
 fn h05_the_permitted_arithmetic_rewrites() {
     // The three permitted rewrites: reordering, literal folding, like-term
     // combining (every variable survives with its demand).
-    assert!(is_true(&eval("((x) => x + x) == ((x) => 2 * x)")), "x+x == 2x (H-05)");
-    assert!(is_true(&eval("((x) => x + 1 + 1) == ((x) => x + 2)")), "literal fold");
-    assert!(is_true(&eval("((x) => x * 2) == ((x) => 2 * x)")), "mul commutativity");
-    assert!(is_true(&eval("((x, y) => x + y) == ((a, b) => b + a)")), "add commutativity");
-    assert!(is_true(&eval("((x) => x + x + x) == ((x) => 3 * x)")), "like-term sum");
+    assert!(
+        is_true(&eval("((x) => x + x) == ((x) => 2 * x)")),
+        "x+x == 2x (H-05)"
+    );
+    assert!(
+        is_true(&eval("((x) => x + 1 + 1) == ((x) => x + 2)")),
+        "literal fold"
+    );
+    assert!(
+        is_true(&eval("((x) => x * 2) == ((x) => 2 * x)")),
+        "mul commutativity"
+    );
+    assert!(
+        is_true(&eval("((x, y) => x + y) == ((a, b) => b + a)")),
+        "add commutativity"
+    );
+    assert!(
+        is_true(&eval("((x) => x + x + x) == ((x) => 3 * x)")),
+        "like-term sum"
+    );
 }
 
 #[test]
 fn mu10_excluded_rewrites_do_not_fire() {
     // These change divergence and/or operation-safety demands, so the shape-level
     // rewrites are permanently excluded and must NOT fire (μ spec §8 / MU-10).
-    assert_eq!(eval("((x) => x - x) == ((x) => 0)").as_boolean(), Some(false), "cancellation");
-    assert_eq!(eval("((x) => x + 0) == ((x) => x)").as_boolean(), Some(false), "identity-elim (+0)");
-    assert_eq!(eval("((x) => x * 1) == ((x) => x)").as_boolean(), Some(false), "identity-elim (*1)");
-    assert_eq!(eval("((x) => 0 * x) == ((x) => 0)").as_boolean(), Some(false), "annihilation");
+    assert_eq!(
+        eval("((x) => x - x) == ((x) => 0)").as_boolean(),
+        Some(false),
+        "cancellation"
+    );
+    assert_eq!(
+        eval("((x) => x + 0) == ((x) => x)").as_boolean(),
+        Some(false),
+        "identity-elim (+0)"
+    );
+    assert_eq!(
+        eval("((x) => x * 1) == ((x) => x)").as_boolean(),
+        Some(false),
+        "identity-elim (*1)"
+    );
+    assert_eq!(
+        eval("((x) => 0 * x) == ((x) => 0)").as_boolean(),
+        Some(false),
+        "annihilation"
+    );
     // No distribution (not in the enumerated slice).
     assert_eq!(
         eval("((x) => (x + 1) * 2) == ((x) => 2 * x + 2)").as_boolean(),
@@ -963,10 +1070,21 @@ fn mu10_excluded_rewrites_do_not_fire() {
         "distribution not applied",
     );
     // x/x is not 1 (Indeterminate at 0); x % x not simplified.
-    assert_eq!(eval("((x) => x / x) == ((x) => 1)").as_boolean(), Some(false), "x/x != 1");
-    assert_eq!(eval("((x) => x % x) == ((x) => 0)").as_boolean(), Some(false), "x%x != 0");
+    assert_eq!(
+        eval("((x) => x / x) == ((x) => 1)").as_boolean(),
+        Some(false),
+        "x/x != 1"
+    );
+    assert_eq!(
+        eval("((x) => x % x) == ((x) => 0)").as_boolean(),
+        Some(false),
+        "x%x != 0"
+    );
     // and genuinely different functions stay apart
-    assert_eq!(eval("((x) => x) == ((x) => x + 1)").as_boolean(), Some(false));
+    assert_eq!(
+        eval("((x) => x) == ((x) => x + 1)").as_boolean(),
+        Some(false)
+    );
 }
 
 #[test]

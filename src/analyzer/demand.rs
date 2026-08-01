@@ -113,7 +113,10 @@ mod tests {
             &ContractEnv::new(),
             &mut i,
         );
-        assert!(matches!(v, ClaimVerdict::Proven), "Number + Number produces a Number: {v:?}");
+        assert!(
+            matches!(v, ClaimVerdict::Proven),
+            "Number + Number produces a Number: {v:?}"
+        );
     }
 
     /// `f(0) = 1` is a represented completing execution, so the false String claim is
@@ -157,7 +160,10 @@ mod tests {
             &ContractEnv::new(),
             &mut i,
         );
-        assert!(matches!(v, ClaimVerdict::Unproven), "no proof and no witness: {v:?}");
+        assert!(
+            matches!(v, ClaimVerdict::Unproven),
+            "no proof and no witness: {v:?}"
+        );
     }
 
     /// Recursion closes through the fact graph rather than unfolding — and **proves**,
@@ -177,6 +183,9 @@ mod tests {
             &ContractEnv::new(),
             &mut i,
         );
-        assert!(matches!(v, ClaimVerdict::Proven), "recursion closes on the fact and proves: {v:?}");
+        assert!(
+            matches!(v, ClaimVerdict::Proven),
+            "recursion closes on the fact and proves: {v:?}"
+        );
     }
 }

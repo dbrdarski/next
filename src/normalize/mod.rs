@@ -26,7 +26,11 @@ mod tests;
 pub fn normalize_module(module: &Module, interner: &mut Interner) -> Module {
     Module {
         name: module.name.clone(),
-        items: module.items.iter().map(|i| normalize_item(i, interner)).collect(),
+        items: module
+            .items
+            .iter()
+            .map(|i| normalize_item(i, interner))
+            .collect(),
     }
 }
 
@@ -56,7 +60,11 @@ fn normalize_item(item: &Item, interner: &mut Interner) -> Item {
 }
 
 fn normalize_bind(b: &Bind, interner: &mut Interner) -> Bind {
-    Bind { target: b.target.clone(), value: normalize_expr(&b.value, interner), exported: b.exported }
+    Bind {
+        target: b.target.clone(),
+        value: normalize_expr(&b.value, interner),
+        exported: b.exported,
+    }
 }
 
 fn normalize_lambda(l: &Lambda, interner: &mut Interner) -> Lambda {
@@ -81,13 +89,23 @@ pub fn normalize_expr(e: &Expr, interner: &mut Interner) -> Expr {
             args: args.iter().map(|a| normalize_expr(a, interner)).collect(),
         },
         Expr::Match(m) => Expr::Match(normalize_match(m, interner)),
-        Expr::TupleCons(elems) => {
-            Expr::TupleCons(elems.iter().map(|el| normalize_element(el, interner)).collect())
-        }
-        Expr::RecordCons(fields) => {
-            Expr::RecordCons(fields.iter().map(|f| normalize_field(f, interner)).collect())
-        }
-        Expr::Access { target, form, total } => Expr::Access {
+        Expr::TupleCons(elems) => Expr::TupleCons(
+            elems
+                .iter()
+                .map(|el| normalize_element(el, interner))
+                .collect(),
+        ),
+        Expr::RecordCons(fields) => Expr::RecordCons(
+            fields
+                .iter()
+                .map(|f| normalize_field(f, interner))
+                .collect(),
+        ),
+        Expr::Access {
+            target,
+            form,
+            total,
+        } => Expr::Access {
             target: Box::new(normalize_expr(target, interner)),
             form: normalize_access_form(form, interner),
             total: *total,
@@ -116,9 +134,10 @@ fn normalize_element(el: &Element, interner: &mut Interner) -> Element {
 
 fn normalize_field(f: &Field, interner: &mut Interner) -> Field {
     match f {
-        Field::Field { key, value } => {
-            Field::Field { key: key.clone(), value: normalize_expr(value, interner) }
-        }
+        Field::Field { key, value } => Field::Field {
+            key: key.clone(),
+            value: normalize_expr(value, interner),
+        },
         Field::Computed { key, value } => Field::Computed {
             key: normalize_expr(key, interner),
             value: normalize_expr(value, interner),
@@ -140,8 +159,15 @@ fn normalize_access_form(form: &AccessForm, interner: &mut Interner) -> AccessFo
 
 fn normalize_match(m: &Match, interner: &mut Interner) -> Match {
     Match {
-        scrutinee: m.scrutinee.as_ref().map(|e| Box::new(normalize_expr(e, interner))),
-        items: m.items.iter().map(|i| normalize_match_item(i, interner)).collect(),
+        scrutinee: m
+            .scrutinee
+            .as_ref()
+            .map(|e| Box::new(normalize_expr(e, interner))),
+        items: m
+            .items
+            .iter()
+            .map(|i| normalize_match_item(i, interner))
+            .collect(),
     }
 }
 
@@ -185,7 +211,8 @@ fn normalize_template(parts: &[TemplatePart], interner: &mut Interner) -> Expr {
 fn fold_segments(parts: Vec<TemplatePart>) -> Vec<TemplatePart> {
     let mut out: Vec<TemplatePart> = Vec::with_capacity(parts.len());
     for p in parts {
-        if let (Some(TemplatePart::Segment(prev)), TemplatePart::Segment(s)) = (out.last_mut(), &p) {
+        if let (Some(TemplatePart::Segment(prev)), TemplatePart::Segment(s)) = (out.last_mut(), &p)
+        {
             prev.push_str(s);
         } else {
             out.push(p);

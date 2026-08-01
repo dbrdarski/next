@@ -76,14 +76,21 @@ pub fn realized_refutation(
     for tuple in argument_samples(args, interner) {
         let node = Expr::Apply {
             callee: Box::new(Expr::Const(callee.clone())),
-            args: tuple.iter().cloned().map(|v| Arg::Expr(Expr::Const(v))).collect(),
+            args: tuple
+                .iter()
+                .cloned()
+                .map(|v| Arg::Expr(Expr::Const(v)))
+                .collect(),
         };
         // Only a *completing* run with an out-of-claim value is a witness; OutOfFuel
         // (diverged), CompletedWithoutValue, and Trapped are all skipped (§6).
         if let BoundedOutcome::Produced(v) = eval_expr_bounded(&node, REFUTE_FUEL, interner)
             && !claim.contains(&v)
         {
-            return Some(RealizedWitness { arguments: tuple, produced: v });
+            return Some(RealizedWitness {
+                arguments: tuple,
+                produced: v,
+            });
         }
     }
     None

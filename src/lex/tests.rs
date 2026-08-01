@@ -42,7 +42,10 @@ fn slice_lexing_t2() {
 fn question_dot_digit_lookahead_t1() {
     // `a ?.5 : b` lexes `?` `.5` (T1: `?.` not formed before a digit).
     use TokenKind::*;
-    assert_eq!(kinds("a ?.5 : b"), vec![ident("a"), Question, num("0.5"), Colon, ident("b")]);
+    assert_eq!(
+        kinds("a ?.5 : b"),
+        vec![ident("a"), Question, num("0.5"), Colon, ident("b")]
+    );
     // Ordinary `a?.b` is a single `?.`.
     assert_eq!(kinds("a?.b"), vec![ident("a"), QuestionDot, ident("b")]);
 }
@@ -59,7 +62,10 @@ fn member_access_vs_leading_dot_number() {
 #[test]
 fn numeric_bans() {
     assert!(lex("5.").is_err(), "dangling trailing-dot must error");
-    assert!(lex("5. + 1").is_err(), "trailing-dot before an operator must error");
+    assert!(
+        lex("5. + 1").is_err(),
+        "trailing-dot before an operator must error"
+    );
     assert!(lex("017").is_err(), "legacy octal must error");
     assert!(lex("123n").is_err(), "BigInt suffix must error");
 }
@@ -120,7 +126,15 @@ fn holes_and_pattern_glyphs() {
     // `#([..._1])` — rest values as one tuple
     assert_eq!(
         kinds("#([..._1])"),
-        vec![Hash, LParen, LBracket, DotDotDot, IndexedHole(1), RBracket, RParen]
+        vec![
+            Hash,
+            LParen,
+            LBracket,
+            DotDotDot,
+            IndexedHole(1),
+            RBracket,
+            RParen
+        ]
     );
 }
 
@@ -129,9 +143,15 @@ fn strings_with_escapes() {
     // Escapes resolve to UTF-16 at lex time.
     assert_eq!(kinds(r#""a\nb""#), vec![TokenKind::Str(s("a\nb"))]);
     assert_eq!(kinds(r#""tab\tend""#), vec![TokenKind::Str(s("tab\tend"))]);
-    assert_eq!(kinds(r#""quote\"in""#), vec![TokenKind::Str(s("quote\"in"))]);
+    assert_eq!(
+        kinds(r#""quote\"in""#),
+        vec![TokenKind::Str(s("quote\"in"))]
+    );
     assert_eq!(kinds(r#""\u{1F600}""#), vec![TokenKind::Str(s("😀"))]);
-    assert!(lex("\"line\nbreak\"").is_err(), "raw newline in string must error");
+    assert!(
+        lex("\"line\nbreak\"").is_err(),
+        "raw newline in string must error"
+    );
 }
 
 #[test]

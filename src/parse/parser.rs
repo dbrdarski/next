@@ -43,23 +43,34 @@ struct Parser {
 
 impl Parser {
     fn new(toks: Vec<Token>) -> Parser {
-        Parser { toks, pos: 0, force_at_block: false }
+        Parser {
+            toks,
+            pos: 0,
+            force_at_block: false,
+        }
     }
 
     // ── Cursor ───────────────────────────────────────────────────────────────
 
     fn kind(&self) -> &TokenKind {
-        self.toks.get(self.pos).map(|t| &t.kind).unwrap_or(&TokenKind::Eof)
+        self.toks
+            .get(self.pos)
+            .map(|t| &t.kind)
+            .unwrap_or(&TokenKind::Eof)
     }
 
     fn kind_at(&self, n: usize) -> &TokenKind {
-        self.toks.get(self.pos + n).map(|t| &t.kind).unwrap_or(&TokenKind::Eof)
+        self.toks
+            .get(self.pos + n)
+            .map(|t| &t.kind)
+            .unwrap_or(&TokenKind::Eof)
     }
 
     fn line(&self) -> u32 {
-        self.toks.get(self.pos).map(|t| t.line).unwrap_or_else(|| {
-            self.toks.last().map(|t| t.line).unwrap_or(1)
-        })
+        self.toks
+            .get(self.pos)
+            .map(|t| t.line)
+            .unwrap_or_else(|| self.toks.last().map(|t| t.line).unwrap_or(1))
     }
 
     fn advance(&mut self) -> TokenKind {
@@ -77,7 +88,10 @@ impl Parser {
     /// Whether the current token sits on the same source line as the previous
     /// one — used to keep a line-leading `[`/`(` from attaching as a postfix.
     fn adjacent_to_prev(&self) -> bool {
-        match (self.pos.checked_sub(1).and_then(|i| self.toks.get(i)), self.toks.get(self.pos)) {
+        match (
+            self.pos.checked_sub(1).and_then(|i| self.toks.get(i)),
+            self.toks.get(self.pos),
+        ) {
             (Some(prev), Some(cur)) => prev.line == cur.line,
             _ => true,
         }
@@ -102,7 +116,10 @@ impl Parser {
     }
 
     fn err(&self, message: impl Into<String>) -> ParseError {
-        ParseError { message: message.into(), line: self.line() }
+        ParseError {
+            message: message.into(),
+            line: self.line(),
+        }
     }
 
     fn ident(&mut self) -> Result<String, ParseError> {
@@ -243,10 +260,16 @@ impl Parser {
             }
             self.advance();
             let module = self.dotted_name()?;
-            Ok(SStmt::Import { names: Some(names), module })
+            Ok(SStmt::Import {
+                names: Some(names),
+                module,
+            })
         } else {
             let module = self.dotted_name()?;
-            Ok(SStmt::Import { names: None, module })
+            Ok(SStmt::Import {
+                names: None,
+                module,
+            })
         }
     }
 
@@ -280,7 +303,11 @@ impl Parser {
             return Ok(None);
         }
         let value = self.expr()?;
-        Ok(Some(SBinding { target, value, exported }))
+        Ok(Some(SBinding {
+            target,
+            value,
+            exported,
+        }))
     }
 
     fn try_bind_target(&mut self) -> Option<SBindTarget> {
@@ -333,18 +360,33 @@ impl Parser {
         };
         self.advance();
         let value = self.expr()?;
-        Ok(Some(SStmt::Mutation { path: SPath { root, segments }, op, value }))
+        Ok(Some(SStmt::Mutation {
+            path: SPath { root, segments },
+            op,
+            value,
+        }))
     }
 
     fn index_or_slice_path(&mut self) -> Result<SPathSeg, ParseError> {
         if self.eat(&TokenKind::DotDotDot) {
-            let hi = if self.at(&TokenKind::RBracket) { None } else { Some(self.expr()?) };
+            let hi = if self.at(&TokenKind::RBracket) {
+                None
+            } else {
+                Some(self.expr()?)
+            };
             return Ok(SPathSeg::Slice { lo: None, hi });
         }
         let first = self.expr()?;
         if self.eat(&TokenKind::DotDotDot) {
-            let hi = if self.at(&TokenKind::RBracket) { None } else { Some(self.expr()?) };
-            Ok(SPathSeg::Slice { lo: Some(first), hi })
+            let hi = if self.at(&TokenKind::RBracket) {
+                None
+            } else {
+                Some(self.expr()?)
+            };
+            Ok(SPathSeg::Slice {
+                lo: Some(first),
+                hi,
+            })
         } else {
             Ok(SPathSeg::Index(first))
         }
@@ -364,7 +406,14 @@ impl Parser {
             let target = SBindTarget::Name(name);
             self.expect(TokenKind::Eq)?;
             let value = self.expr()?;
-            Ok(SAt::Binding { op, binding: SBinding { target, value, exported: false } })
+            Ok(SAt::Binding {
+                op,
+                binding: SBinding {
+                    target,
+                    value,
+                    exported: false,
+                },
+            })
         };
         self.force_at_block = false;
         result
@@ -381,7 +430,10 @@ impl Parser {
             let params = self.params()?;
             self.expect(TokenKind::FatArrow)?;
             let body = self.arrow_body()?;
-            return Ok(SExpr::Arrow(SArrow { params, body: Box::new(body) }));
+            return Ok(SExpr::Arrow(SArrow {
+                params,
+                body: Box::new(body),
+            }));
         }
         self.match_expr()
     }
@@ -405,9 +457,7 @@ impl Parser {
     /// token at `params_end_idx`.
     fn fat_arrow_same_line(&self, params_end_idx: usize, arrow_idx: usize) -> bool {
         match (self.toks.get(params_end_idx), self.toks.get(arrow_idx)) {
-            (Some(end), Some(arrow)) => {
-                arrow.kind == TokenKind::FatArrow && arrow.line == end.line
-            }
+            (Some(end), Some(arrow)) => arrow.kind == TokenKind::FatArrow && arrow.line == end.line,
             _ => false,
         }
     }
@@ -499,7 +549,10 @@ impl Parser {
             if self.eat(&TokenKind::ColonColon) {
                 self.expect(TokenKind::LBrace)?;
                 let arms = self.arm_block()?;
-                node = SExpr::Match { scrutinee: Box::new(node), arms };
+                node = SExpr::Match {
+                    scrutinee: Box::new(node),
+                    arms,
+                };
                 continue;
             }
             // Ladder note (grammar §3): operators after the block attach to the
@@ -548,7 +601,11 @@ impl Parser {
         };
         self.expect(TokenKind::FatArrow)?;
         let result = self.expr()?;
-        Ok(SArm { pattern, guard, result })
+        Ok(SArm {
+            pattern,
+            guard,
+            result,
+        })
     }
 
     fn pipe_expr(&mut self) -> Result<SExpr, ParseError> {
@@ -730,7 +787,10 @@ impl Parser {
         if let Some(op) = op {
             self.advance();
             let operand = self.unary_expr()?;
-            return Ok(SExpr::Unary { op, operand: Box::new(operand) });
+            return Ok(SExpr::Unary {
+                op,
+                operand: Box::new(operand),
+            });
         }
         self.power_expr()
     }
@@ -762,7 +822,11 @@ impl Parser {
                     if self.eat(&TokenKind::LBracket) {
                         let form = self.index_or_slice()?;
                         self.expect(TokenKind::RBracket)?;
-                        node = SExpr::Access { target: Box::new(node), form, total: true };
+                        node = SExpr::Access {
+                            target: Box::new(node),
+                            form,
+                            total: true,
+                        };
                     } else {
                         let field = self.ident()?;
                         node = SExpr::Access {
@@ -780,13 +844,20 @@ impl Parser {
                     self.advance();
                     let form = self.index_or_slice()?;
                     self.expect(TokenKind::RBracket)?;
-                    node = SExpr::Access { target: Box::new(node), form, total: false };
+                    node = SExpr::Access {
+                        target: Box::new(node),
+                        form,
+                        total: false,
+                    };
                 }
                 TokenKind::LParen if self.adjacent_to_prev() => {
                     self.advance();
                     let args = self.arg_list()?;
                     self.expect(TokenKind::RParen)?;
-                    node = SExpr::Call { callee: Box::new(node), args };
+                    node = SExpr::Call {
+                        callee: Box::new(node),
+                        args,
+                    };
                 }
                 _ => break,
             }
@@ -796,13 +867,24 @@ impl Parser {
 
     fn index_or_slice(&mut self) -> Result<SAccessForm, ParseError> {
         if self.eat(&TokenKind::DotDotDot) {
-            let hi = if self.at(&TokenKind::RBracket) { None } else { Some(Box::new(self.expr()?)) };
+            let hi = if self.at(&TokenKind::RBracket) {
+                None
+            } else {
+                Some(Box::new(self.expr()?))
+            };
             return Ok(SAccessForm::Slice { lo: None, hi });
         }
         let first = self.expr()?;
         if self.eat(&TokenKind::DotDotDot) {
-            let hi = if self.at(&TokenKind::RBracket) { None } else { Some(Box::new(self.expr()?)) };
-            Ok(SAccessForm::Slice { lo: Some(Box::new(first)), hi })
+            let hi = if self.at(&TokenKind::RBracket) {
+                None
+            } else {
+                Some(Box::new(self.expr()?))
+            };
+            Ok(SAccessForm::Slice {
+                lo: Some(Box::new(first)),
+                hi,
+            })
         } else {
             Ok(SAccessForm::Index(Box::new(first)))
         }
@@ -861,7 +943,9 @@ impl Parser {
                 // legal below the loose-prefix tier (§3 Primary).
                 self.advance();
                 if !self.at(&TokenKind::LParen) {
-                    return Err(self.err("a bare hask `#` is not allowed here; group it as `#(...)`"));
+                    return Err(
+                        self.err("a bare hask `#` is not allowed here; group it as `#(...)`")
+                    );
                 }
                 self.advance();
                 let inner = self.expr()?;
@@ -880,7 +964,10 @@ impl Parser {
         }
     }
 
-    fn template_parts(&mut self, parts: Vec<crate::lex::TemplateElem>) -> Result<Vec<STemplatePart>, ParseError> {
+    fn template_parts(
+        &mut self,
+        parts: Vec<crate::lex::TemplateElem>,
+    ) -> Result<Vec<STemplatePart>, ParseError> {
         let mut out = Vec::new();
         for part in parts {
             match part {
@@ -1023,7 +1110,9 @@ impl Parser {
                         self.advance();
                         Ok(SPattern::Number(-n))
                     }
-                    other => Err(self.err(format!("expected a number after `-` in pattern, found {other:?}"))),
+                    other => Err(self.err(format!(
+                        "expected a number after `-` in pattern, found {other:?}"
+                    ))),
                 }
             }
             TokenKind::Number(n) => {
@@ -1053,7 +1142,9 @@ impl Parser {
                         self.advance();
                         Ok(SPattern::PinHole(Hole::Indexed(n)))
                     }
-                    other => Err(self.err(format!("expected name or hole after `^`, found {other:?}"))),
+                    other => {
+                        Err(self.err(format!("expected name or hole after `^`, found {other:?}")))
+                    }
                 }
             }
             TokenKind::Ident(name) => {
@@ -1083,7 +1174,12 @@ impl Parser {
         }
         self.expect(TokenKind::RBracket)?;
         // One rest per level (§3, P-29).
-        if elems.iter().filter(|e| matches!(e, SPatElem::Rest(_))).count() > 1 {
+        if elems
+            .iter()
+            .filter(|e| matches!(e, SPatElem::Rest(_)))
+            .count()
+            > 1
+        {
             return Err(self.err("one rest per pattern level"));
         }
         Ok(elems)
@@ -1108,7 +1204,11 @@ impl Parser {
                     exact = false;
                 } else {
                     let key = self.ident()?;
-                    let pat = if self.eat(&TokenKind::Colon) { Some(self.pattern()?) } else { None };
+                    let pat = if self.eat(&TokenKind::Colon) {
+                        Some(self.pattern()?)
+                    } else {
+                        None
+                    };
                     fields.push(SPatField::Field(key, pat));
                 }
                 if !self.eat(&TokenKind::Comma) {
@@ -1121,7 +1221,12 @@ impl Parser {
         }
         self.expect(TokenKind::RBrace)?;
         // One rest per level (§3, P-29) — records too.
-        if fields.iter().filter(|f| matches!(f, SPatField::Rest(_))).count() > 1 {
+        if fields
+            .iter()
+            .filter(|f| matches!(f, SPatField::Rest(_)))
+            .count()
+            > 1
+        {
             return Err(self.err("one rest per pattern level"));
         }
         Ok((fields, exact))
@@ -1138,13 +1243,19 @@ impl Parser {
                 self.advance();
                 Ok(Some(name))
             }
-            other => Err(self.err(format!("expected `_` or a name after `...`, found {other:?}"))),
+            other => Err(self.err(format!(
+                "expected `_` or a name after `...`, found {other:?}"
+            ))),
         }
     }
 }
 
 fn binary(op: BinOp, left: SExpr, right: SExpr) -> SExpr {
-    SExpr::Binary { op, left: Box::new(left), right: Box::new(right) }
+    SExpr::Binary {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
 }
 
 /// Classify an identifier appearing in pattern position (§4, §8): the prelude

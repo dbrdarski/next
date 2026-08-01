@@ -41,10 +41,17 @@ fn sources() -> Vec<(String, String)> {
     files
         .into_iter()
         .map(|p| {
-            let rel = p.strip_prefix(root()).unwrap().to_string_lossy().replace('\\', "/");
+            let rel = p
+                .strip_prefix(root())
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             let src = std::fs::read_to_string(&p).expect("readable source");
-            let stripped: String =
-                src.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+            let stripped: String = src
+                .lines()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
             (rel, stripped)
         })
         .collect()
@@ -70,7 +77,11 @@ fn has_ident(hay: &str, needle: &str) -> bool {
 /// its own name is the single most likely repeat.
 #[test]
 fn the_reverted_reaching_engine_does_not_exist() {
-    for banned in ["src/analyzer/summary.rs", "src/analyzer/reaching.rs", "src/analyzer/widening.rs"] {
+    for banned in [
+        "src/analyzer/summary.rs",
+        "src/analyzer/reaching.rs",
+        "src/analyzer/widening.rs",
+    ] {
         assert!(
             !root().join(banned).exists(),
             "{banned} exists. This is the reverted forward-reaching/widening engine (or a \
@@ -87,7 +98,12 @@ fn the_reverted_reaching_engine_does_not_exist() {
 /// implementations and make a later accidental rewire possible.
 #[test]
 fn the_quarantined_reaching_core_is_deleted() {
-    const RETIRED: &[&str] = &["bodycheck", "check_recursive_body", "reachable_rows", "grow"];
+    const RETIRED: &[&str] = &[
+        "bodycheck",
+        "check_recursive_body",
+        "reachable_rows",
+        "grow",
+    ];
     const HOME: &str = "src/analyzer/bodycheck.rs";
 
     assert!(
@@ -121,8 +137,11 @@ fn a_call_sites_completion_is_not_asserted_by_the_body_pass() {
         .1
         .split_once("\nfn ")
         .map_or_else(|| src.clone(), |(b, _)| b.to_string());
-    let code: String =
-        body.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+    let code: String = body
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         has_ident(&code, "completes"),
         "callee_completion no longer consults the settled completion fact. `Produces` at a \

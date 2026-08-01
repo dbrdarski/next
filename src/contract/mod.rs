@@ -148,10 +148,16 @@ pub enum Contract {
     LessEq(Rational),
     /// Integers `x` with `x ≡ r (mod n)` (rational moduli clear to integer
     /// lattices — C§3.1); `n > 0`.
-    Mod { n: BigInt, r: BigInt },
+    Mod {
+        n: BigInt,
+        r: BigInt,
+    },
     /// The geometric sequence `b, b·r, b·r², …` (`r > 1`, `b ≠ 0`; `Geo(0, r)`
     /// normalizes to `Equals(0)`).
-    Geo { b: Rational, r: Rational },
+    Geo {
+        b: Rational,
+        r: Rational,
+    },
     /// Union / Intersection / Difference (the sole negative form, C§6).
     Union(CRef, CRef),
     Intersection(CRef, CRef),
@@ -232,11 +238,12 @@ impl Contract {
     pub fn kind_abstraction(&self) -> Contract {
         let num = Contract::Kind(Kind::Number);
         match self {
-            Contract::Top
-            | Contract::Bottom
-            | Contract::Kind(_)
-            | Contract::Indeterminate(_) => self.clone(),
-            Contract::Equals(v) => value_kind(v).map(Contract::Kind).unwrap_or_else(|| self.clone()),
+            Contract::Top | Contract::Bottom | Contract::Kind(_) | Contract::Indeterminate(_) => {
+                self.clone()
+            }
+            Contract::Equals(v) => value_kind(v)
+                .map(Contract::Kind)
+                .unwrap_or_else(|| self.clone()),
             Contract::Range(..)
             | Contract::Greater(_)
             | Contract::GreaterEq(_)
@@ -244,7 +251,9 @@ impl Contract {
             | Contract::LessEq(_)
             | Contract::Mod { .. }
             | Contract::Geo { .. } => num,
-            Contract::Tuple(_) | Contract::Concat(_) | Contract::LengthRestricted(..) => Contract::Kind(Kind::Tuple),
+            Contract::Tuple(_) | Contract::Concat(_) | Contract::LengthRestricted(..) => {
+                Contract::Kind(Kind::Tuple)
+            }
             Contract::Record(_) | Contract::HasField(_) => Contract::Kind(Kind::Record),
             Contract::Union(a, b) => {
                 let (ka, kb) = (a.kind_abstraction(), b.kind_abstraction());
@@ -270,7 +279,10 @@ impl Contract {
     /// is simply not returned. Used by the analyzer to run concrete inputs (E10
     /// fall-through; §6 realized-witness refutation).
     pub fn proven_members(&self, interner: &mut crate::interner::Interner) -> Vec<ValueRef> {
-        subcontract::sample(self, interner).into_iter().filter(|v| self.contains(v)).collect()
+        subcontract::sample(self, interner)
+            .into_iter()
+            .filter(|v| self.contains(v))
+            .collect()
     }
 
     /// Smart constructor for [`Contract::Concat`], applying the family's normal
@@ -370,9 +382,9 @@ impl Contract {
                 Some(items) => concat_matches(segs, items),
                 None => false,
             },
-            Contract::Indeterminate(form) => {
-                v.as_indeterminate().is_some_and(|value| value.tag() == *form)
-            }
+            Contract::Indeterminate(form) => v
+                .as_indeterminate()
+                .is_some_and(|value| value.tag() == *form),
             // A bare reference has no ambient group to resolve against; recursive
             // membership goes through `recursive::contains`.
             Contract::Ref(_) => false,
@@ -387,7 +399,9 @@ impl Contract {
 /// record's field count (`None` for a non-aggregate — it has no length, so no
 /// length restriction admits it).
 pub(crate) fn value_length(v: &ValueRef) -> Option<usize> {
-    v.as_tuple().map(<[ValueRef]>::len).or_else(|| v.as_record().map(|r| r.len()))
+    v.as_tuple()
+        .map(<[ValueRef]>::len)
+        .or_else(|| v.as_record().map(|r| r.len()))
 }
 
 /// Whether the natural number `n` inhabits a **Number** contract `d` (a length
@@ -551,8 +565,7 @@ impl Contract {
     fn contains_tuple_window(&self, window: &[ValueRef]) -> bool {
         match self {
             Contract::Tuple(elems) => {
-                elems.len() == window.len()
-                    && elems.iter().zip(window).all(|(c, v)| c.contains(v))
+                elems.len() == window.len() && elems.iter().zip(window).all(|(c, v)| c.contains(v))
             }
             Contract::Concat(segs) => concat_matches(segs, window),
             Contract::Union(a, b) => {

@@ -13,7 +13,11 @@ use crate::rational::Rational;
 
 /// Evaluate a lambda expression to a concrete closure value.
 fn closure(i: &mut Interner, params: Pat, body: Expr, act_kind: ActKind) -> ValueRef {
-    let lam = Expr::Lambda(Lambda { params, body: Box::new(body), act_kind });
+    let lam = Expr::Lambda(Lambda {
+        params,
+        body: Box::new(body),
+        act_kind,
+    });
     match eval_expr(&lam, i) {
         Ok(Outcome::Produced(v)) => v,
         other => panic!("lambda did not produce a closure: {other:?}"),
@@ -24,21 +28,39 @@ fn one_param(name: &str) -> Pat {
     Pat::Tuple(vec![PatElem::Pat(Pat::Bind(name.into()))])
 }
 fn apply(callee: Expr, args: Vec<Expr>) -> Expr {
-    Expr::Apply { callee: Box::new(callee), args: args.into_iter().map(Arg::Expr).collect() }
+    Expr::Apply {
+        callee: Box::new(callee),
+        args: args.into_iter().map(Arg::Expr).collect(),
+    }
 }
 
 fn matchx(scrut: Option<Expr>, items: Vec<MatchItem>) -> Expr {
-    Expr::Match(Match { scrutinee: scrut.map(Box::new), items })
+    Expr::Match(Match {
+        scrutinee: scrut.map(Box::new),
+        items,
+    })
 }
 fn arm(pattern: Option<Pat>, guard: Option<Expr>, result: Expr) -> MatchItem {
-    MatchItem::Arm(Arm { pattern, guard, result })
+    MatchItem::Arm(Arm {
+        pattern,
+        guard,
+        result,
+    })
 }
 
 fn afield(target: Expr, field: &str, total: bool) -> Expr {
-    Expr::Access { target: Box::new(target), form: AccessForm::Field(field.into()), total }
+    Expr::Access {
+        target: Box::new(target),
+        form: AccessForm::Field(field.into()),
+        total,
+    }
 }
 fn aindex(target: Expr, idx: Expr, total: bool) -> Expr {
-    Expr::Access { target: Box::new(target), form: AccessForm::Index(Box::new(idx)), total }
+    Expr::Access {
+        target: Box::new(target),
+        form: AccessForm::Index(Box::new(idx)),
+        total,
+    }
 }
 
 fn konst(v: ValueRef) -> Expr {
@@ -111,9 +133,16 @@ fn numeric_is_an_umbrella_while_arithmetic_still_demands_number() {
 
     let div = prim(PrimOp::Div, vec![name("x"), name("y")]);
     let result = analyze(&div, &numbers, &nc(), &mut i);
-    assert!(result.accepted(), "Number / Number is total: {:?}", result.findings);
+    assert!(
+        result.accepted(),
+        "Number / Number is total: {:?}",
+        result.findings
+    );
     let numeric = Contract::numeric(&mut i);
-    assert!(matches!(subcontract(&result.contract, &numeric, &mut i), Verdict::Proven));
+    assert!(matches!(
+        subcontract(&result.contract, &numeric, &mut i),
+        Verdict::Proven
+    ));
     let div_zero = i.div_zero(Rational::from(1));
     let mod_zero = i.mod_zero(Rational::from(1));
     assert!(result.contract.contains(&div_zero));
@@ -124,7 +153,10 @@ fn numeric_is_an_umbrella_while_arithmetic_still_demands_number() {
     let consume = prim(PrimOp::Add, vec![name("z"), konst(i.integer(1))]);
     let rejected = analyze(&consume, &indeterminate, &nc(), &mut i);
     assert!(!rejected.accepted());
-    assert_eq!(rejected.findings[0].class, TrapClass::UndischargedIndeterminate);
+    assert_eq!(
+        rejected.findings[0].class,
+        TrapClass::UndischargedIndeterminate
+    );
 }
 
 #[test]
@@ -137,8 +169,15 @@ fn zero_to_negative_power_traps() {
     let five = prim(PrimOp::Add, vec![konst(i.integer(2)), konst(i.integer(3))]);
     let ok = prim(PrimOp::Pow, vec![five, konst(i.integer(-1))]);
     let a = analyze(&ok, &empty(), &nc(), &mut i);
-    assert!(a.accepted(), "5^-1 = 1/5 must not be flagged, got {:?}", a.findings);
-    assert_eq!(a.contract, Contract::Equals(i.number(Rational::new(1.into(), 5.into()))));
+    assert!(
+        a.accepted(),
+        "5^-1 = 1/5 must not be flagged, got {:?}",
+        a.findings
+    );
+    assert_eq!(
+        a.contract,
+        Contract::Equals(i.number(Rational::new(1.into(), 5.into())))
+    );
 }
 
 #[test]
@@ -194,11 +233,17 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
     let half = konst(i.number(Rational::new(1.into(), 2.into())));
     c.push(prim(PrimOp::Pow, vec![n(i, 4), half])); // trap
     // Nesting and constructors.
-    c.push(prim(PrimOp::Add, vec![prim(PrimOp::Mul, vec![n(i, 2), n(i, 3)]), n(i, 4)]));
+    c.push(prim(
+        PrimOp::Add,
+        vec![prim(PrimOp::Mul, vec![n(i, 2), n(i, 3)]), n(i, 4)],
+    ));
     let (t1, t2) = (n(i, 1), prim(PrimOp::Add, vec![n(i, 2), s(i, "!")])); // trap inside tuple
     c.push(Expr::TupleCons(vec![Element::Expr(t1), Element::Expr(t2)]));
     let good = prim(PrimOp::Add, vec![n(i, 1), n(i, 2)]);
-    c.push(Expr::RecordCons(vec![Field::Field { key: "k".into(), value: good }]));
+    c.push(Expr::RecordCons(vec![Field::Field {
+        key: "k".into(),
+        value: good,
+    }]));
     // Templates: a printable interpolation, and a structure interpolation (trap).
     let printable = prim(PrimOp::Add, vec![n(i, 1), n(i, 2)]);
     c.push(Expr::Template(vec![
@@ -226,10 +271,19 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
 
     // Match (E9/E10), closed → exact against the oracle.
     let five = i.integer(5);
-    c.push(matchx(Some(n(i, 5)), vec![arm(Some(Pat::Const(five)), None, n(i, 10))])); // → 10
-    c.push(matchx(Some(n(i, 5)), vec![arm(Some(Pat::Wild), Some(n(i, 3)), n(i, 10))])); // tested-seat trap
+    c.push(matchx(
+        Some(n(i, 5)),
+        vec![arm(Some(Pat::Const(five)), None, n(i, 10))],
+    )); // → 10
+    c.push(matchx(
+        Some(n(i, 5)),
+        vec![arm(Some(Pat::Wild), Some(n(i, 3)), n(i, 10))],
+    )); // tested-seat trap
     let one = i.integer(1);
-    let nonexhaustive = matchx(Some(n(i, 5)), vec![arm(Some(Pat::Const(one)), None, n(i, 10))]);
+    let nonexhaustive = matchx(
+        Some(n(i, 5)),
+        vec![arm(Some(Pat::Const(one)), None, n(i, 10))],
+    );
     c.push(prim(PrimOp::Add, vec![nonexhaustive, n(i, 1)])); // expecting-seat trap
     let pair = Pat::Tuple(vec![
         PatElem::Pat(Pat::Bind("a".into())),
@@ -237,7 +291,14 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
     ]);
     c.push(matchx(
         None,
-        vec![MatchItem::Bind(Bind { target: BindTarget::Pattern(pair), value: n(i, 5), exported: false }), MatchItem::Stmt(name("a"))],
+        vec![
+            MatchItem::Bind(Bind {
+                target: BindTarget::Pattern(pair),
+                value: n(i, 5),
+                exported: false,
+            }),
+            MatchItem::Stmt(name("a")),
+        ],
     )); // refuted-binding trap
 
     // Apply (C§7/B5), closed → exact against the oracle.
@@ -257,14 +318,23 @@ fn closed_corpus(i: &mut Interner) -> Vec<Expr> {
     c.push(Expr::TupleCons(vec![Element::Spread(n(i, 5))])); // spread-kind: [...5]
     let one_v = i.integer(1);
     let one_tuple = konst(i.tuple(vec![one_v]));
-    c.push(Expr::TupleCons(vec![Element::Expr(n(i, 9)), Element::Spread(one_tuple.clone())])); // [9, ...[1]] — fine
+    c.push(Expr::TupleCons(vec![
+        Element::Expr(n(i, 9)),
+        Element::Spread(one_tuple.clone()),
+    ])); // [9, ...[1]] — fine
     c.push(Expr::RecordCons(vec![Field::Spread(one_tuple)])); // spread-kind: {...[1]}
     let a_v = i.integer(1);
     let rec_ok = konst(i.record_str(vec![("a", a_v)]));
     c.push(Expr::RecordCons(vec![Field::Spread(rec_ok)])); // {...{a:1}} — fine
-    c.push(Expr::RecordCons(vec![Field::Computed { key: n(i, 5), value: n(i, 1) }])); // computed-key: {[5]: v}
+    c.push(Expr::RecordCons(vec![Field::Computed {
+        key: n(i, 5),
+        value: n(i, 1),
+    }])); // computed-key: {[5]: v}
     let key_k = konst(i.string("k"));
-    c.push(Expr::RecordCons(vec![Field::Computed { key: key_k, value: n(i, 1) }])); // {["k"]: v} — fine
+    c.push(Expr::RecordCons(vec![Field::Computed {
+        key: key_k,
+        value: n(i, 1),
+    }])); // {["k"]: v} — fine
     c
 }
 
@@ -279,7 +349,10 @@ fn closed_expression_concordance() {
         let oracle = eval_expr(e, &mut i);
         match oracle {
             Err(trap) => {
-                assert!(!analysis.accepted(), "oracle traps but analyzer accepts: {e:?}");
+                assert!(
+                    !analysis.accepted(),
+                    "oracle traps but analyzer accepts: {e:?}"
+                );
                 let err = analysis
                     .findings
                     .iter()
@@ -306,7 +379,11 @@ fn template_interpolation_is_total_never_rejected() {
     let tuple = Expr::TupleCons(vec![Element::Expr(konst(i.integer(1)))]);
     let t = Expr::Template(vec![TemplatePart::Interp(tuple)]);
     let a = analyze(&t, &empty(), &nc(), &mut i);
-    assert!(a.accepted() && a.findings.is_empty(), "got {:?}", a.findings);
+    assert!(
+        a.accepted() && a.findings.is_empty(),
+        "got {:?}",
+        a.findings
+    );
     assert_eq!(a.contract, Contract::Kind(Kind::String));
 
     // An unconstrained receiver likewise carries no finding.
@@ -314,13 +391,20 @@ fn template_interpolation_is_total_never_rejected() {
     env.insert("x".into(), Contract::Top);
     let t = Expr::Template(vec![TemplatePart::Interp(name("x"))]);
     let a = analyze(&t, &env, &nc(), &mut i);
-    assert!(a.accepted() && a.findings.is_empty(), "got {:?}", a.findings);
+    assert!(
+        a.accepted() && a.findings.is_empty(),
+        "got {:?}",
+        a.findings
+    );
 
     // Real findings inside an interpolation still surface (it is an expecting seat).
     let bad = prim(PrimOp::Add, vec![konst(i.integer(1)), konst(i.string("x"))]);
     let t = Expr::Template(vec![TemplatePart::Interp(bad)]);
     let a = analyze(&t, &empty(), &nc(), &mut i);
-    assert!(!a.accepted(), "a trapping subexpression must still be reported");
+    assert!(
+        !a.accepted(),
+        "a trapping subexpression must still be reported"
+    );
     assert_eq!(a.findings[0].class, TrapClass::OperationSafety);
 }
 
@@ -371,10 +455,18 @@ fn match_tested_seat_guard() {
     // match 5 { _ if 3 => 10 } — a non-Boolean guard is a tested-seat trap.
     let m = matchx(
         Some(konst(i.integer(5))),
-        vec![arm(Some(Pat::Wild), Some(konst(i.integer(3))), konst(i.integer(10)))],
+        vec![arm(
+            Some(Pat::Wild),
+            Some(konst(i.integer(3))),
+            konst(i.integer(10)),
+        )],
     );
     let a = analyze(&m, &empty(), &nc(), &mut i);
-    assert!(a.findings.iter().any(|f| f.class == TrapClass::TestedSeat && f.severity == Severity::Error));
+    assert!(
+        a.findings
+            .iter()
+            .any(|f| f.class == TrapClass::TestedSeat && f.severity == Severity::Error)
+    );
 }
 
 #[test]
@@ -388,12 +480,20 @@ fn match_refuted_destructuring_binding() {
     let m = matchx(
         None,
         vec![
-            MatchItem::Bind(Bind { target: BindTarget::Pattern(pat), value: konst(i.integer(5)), exported: false }),
+            MatchItem::Bind(Bind {
+                target: BindTarget::Pattern(pat),
+                value: konst(i.integer(5)),
+                exported: false,
+            }),
             MatchItem::Stmt(name("a")),
         ],
     );
     let a = analyze(&m, &empty(), &nc(), &mut i);
-    assert!(a.findings.iter().any(|f| f.class == TrapClass::RefutedBinding && f.severity == Severity::Error));
+    assert!(
+        a.findings
+            .iter()
+            .any(|f| f.class == TrapClass::RefutedBinding && f.severity == Severity::Error)
+    );
 }
 
 #[test]
@@ -409,7 +509,11 @@ fn match_exhaustiveness_and_expecting_seat() {
     let e = prim(PrimOp::Add, vec![nonexhaustive, konst(i.integer(1))]);
     let a = analyze(&e, &empty(), &nc(), &mut i);
     assert!(!a.accepted());
-    assert!(a.findings.iter().any(|f| f.class == TrapClass::ExpectingSeat));
+    assert!(
+        a.findings
+            .iter()
+            .any(|f| f.class == TrapClass::ExpectingSeat)
+    );
 
     // (match 5 { _ => 10 }) + 1 — exhaustive, always produces; accepted.
     let exhaustive = matchx(
@@ -418,7 +522,11 @@ fn match_exhaustiveness_and_expecting_seat() {
     );
     let ok = prim(PrimOp::Add, vec![exhaustive, konst(i.integer(1))]);
     let a = analyze(&ok, &empty(), &nc(), &mut i);
-    assert!(a.accepted(), "exhaustive match must not trip expecting-seat: {:?}", a.findings);
+    assert!(
+        a.accepted(),
+        "exhaustive match must not trip expecting-seat: {:?}",
+        a.findings
+    );
 }
 
 #[test]
@@ -503,7 +611,11 @@ fn match_arm_narrows_scrutinee() {
     let body = prim(PrimOp::Add, vec![name("a"), name("b")]);
     let m = matchx(Some(name("x")), vec![arm(Some(pat), None, body)]);
     let a = analyze(&m, &env, &nc(), &mut i);
-    assert!(a.accepted() && a.findings.is_empty(), "narrowing should prove a+b safe: {:?}", a.findings);
+    assert!(
+        a.accepted() && a.findings.is_empty(),
+        "narrowing should prove a+b safe: {:?}",
+        a.findings
+    );
 }
 
 #[test]
@@ -524,7 +636,11 @@ fn apply_known_callee_argument_obligation() {
     let bad = apply(name("f"), vec![name("n"), name("n")]);
     let a = analyze(&bad, &env, &nc(), &mut i);
     assert!(!a.accepted());
-    assert!(a.findings.iter().any(|f| f.class == TrapClass::ArgumentObligation));
+    assert!(
+        a.findings
+            .iter()
+            .any(|f| f.class == TrapClass::ArgumentObligation)
+    );
 }
 
 #[test]
@@ -563,16 +679,29 @@ fn user_contract_pattern_narrows() {
     env.insert("x".into(), Contract::Kind(Kind::Number));
 
     // match x { Percent => 1 }  with x : Number.
-    let m = matchx(Some(name("x")), vec![arm(Some(contract_pat("Percent")), None, konst(i.integer(1)))]);
+    let m = matchx(
+        Some(name("x")),
+        vec![arm(
+            Some(contract_pat("Percent")),
+            None,
+            konst(i.integer(1)),
+        )],
+    );
 
     // Resolved: a Number need not be a Percent, so the match is NOT exhaustive.
     let a = analyze(&m, &env, &cenv, &mut i);
-    assert!(a.may_complete(), "Percent must narrow — Number is not covered by Range(0,100)");
+    assert!(
+        a.may_complete(),
+        "Percent must narrow — Number is not covered by Range(0,100)"
+    );
 
     // Unresolved (empty contract env): the pattern widens to Top and covers
     // everything — the discriminating control for the test above.
     let a = analyze(&m, &env, &nc(), &mut i);
-    assert!(!a.may_complete(), "an unresolved contract name widens to Top");
+    assert!(
+        !a.may_complete(),
+        "an unresolved contract name widens to Top"
+    );
 }
 
 #[test]
@@ -592,7 +721,9 @@ fn user_contract_binding_can_be_refuted() {
 
     let a = analyze(&m, &empty(), &cenv, &mut i);
     assert!(
-        a.findings.iter().any(|f| f.class == TrapClass::RefutedBinding && f.severity == Severity::Error),
+        a.findings
+            .iter()
+            .any(|f| f.class == TrapClass::RefutedBinding && f.severity == Severity::Error),
         "500 ∉ Percent must refute the binding: {:?}",
         a.findings,
     );
@@ -614,7 +745,10 @@ fn computed_key_finiteness_demand() {
         value: konst(i.integer(1)),
     }]);
     let a = analyze(&open_key, &env, &nc(), &mut i);
-    assert!(!a.accepted(), "Kind(String) computed key must REJECT (finite-set demand)");
+    assert!(
+        !a.accepted(),
+        "Kind(String) computed key must REJECT (finite-set demand)"
+    );
     assert_eq!(a.findings[0].class, TrapClass::ComputedKey);
 
     // A finite union of string singletons accepts.
@@ -691,7 +825,11 @@ fn open_expression_soundness() {
         (
             prim(PrimOp::Add, vec![name("x"), konst(i.integer(1))]),
             Contract::Kind(crate::contract::Kind::Number),
-            vec![i.integer(0), i.integer(-4), i.number(Rational::new(1.into(), 2.into()))],
+            vec![
+                i.integer(0),
+                i.integer(-4),
+                i.number(Rational::new(1.into(), 2.into())),
+            ],
         ),
         // x < 10 with x : [0,5] — accepted, never traps.
         (
@@ -767,10 +905,16 @@ mod domain {
     }
     /// A single-capture instance of `shape` whose capture is a plain contract.
     fn inst(shape: &Lambda, cap: Contract) -> Instance {
-        Instance { shape: shape.clone(), env: vec![AnalysisContract::of_contract(cap)] }
+        Instance {
+            shape: shape.clone(),
+            env: vec![AnalysisContract::of_contract(cap)],
+        }
     }
     fn known(insts: Vec<Instance>) -> AnalysisContract {
-        AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(insts))
+        AnalysisContract::leaf(
+            Contract::Kind(Kind::Function),
+            InstanceMetadata::Known(insts),
+        )
     }
     fn unknown_fn() -> AnalysisContract {
         AnalysisContract::of_contract(Contract::Kind(Kind::Function))
@@ -786,17 +930,29 @@ mod domain {
         let a = inst(&s, eq(&mut i, 1));
         let b = inst(&s, range(1, 5));
         // Known ∪ Known = union (dedup); anything ∪ Unknown = Unknown.
-        let j = InstanceMetadata::join(&InstanceMetadata::Known(vec![a.clone()]), &InstanceMetadata::Known(vec![b.clone()]));
+        let j = InstanceMetadata::join(
+            &InstanceMetadata::Known(vec![a.clone()]),
+            &InstanceMetadata::Known(vec![b.clone()]),
+        );
         assert_eq!(j, InstanceMetadata::Known(vec![a.clone(), b.clone()]));
         assert_eq!(
-            InstanceMetadata::join(&InstanceMetadata::Known(vec![a.clone()]), &InstanceMetadata::Unknown),
+            InstanceMetadata::join(
+                &InstanceMetadata::Known(vec![a.clone()]),
+                &InstanceMetadata::Unknown
+            ),
             InstanceMetadata::Unknown,
         );
         // Normalization to the one canonical bottom.
         assert!(AnalysisContract::leaf(Contract::Bottom, InstanceMetadata::Unknown).is_bottom());
-        assert!(known(vec![]).is_bottom(), "function-only + Known(∅) ⇒ bottom");
+        assert!(
+            known(vec![]).is_bottom(),
+            "function-only + Known(∅) ⇒ bottom"
+        );
         // A non-function contract with Known(∅) is NOT empty — metadata is vacuous.
-        let num_empty = AnalysisContract::leaf(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
+        let num_empty = AnalysisContract::leaf(
+            Contract::Kind(Kind::Number),
+            InstanceMetadata::Known(vec![]),
+        );
         assert!(!num_empty.is_bottom());
     }
 
@@ -807,14 +963,34 @@ mod domain {
         let eq1 = inst(&s, eq(&mut i, 1));
         let r15 = inst(&s, range(1, 5));
         // instance(shape, Equals(1)) ⊑ instance(shape, Range(1,5)) despite distinct keys.
-        assert!(proven(prove_subcontract_a(&known(vec![eq1.clone()]), &known(vec![r15.clone()]), &mut i)));
+        assert!(proven(prove_subcontract_a(
+            &known(vec![eq1.clone()]),
+            &known(vec![r15.clone()]),
+            &mut i
+        )));
         // Known(S) ⊑ Unknown proven; Unknown ⊑ Known(T) unproven.
-        assert!(proven(prove_subcontract_a(&known(vec![eq1.clone()]), &unknown_fn(), &mut i)));
-        assert!(!proven(prove_subcontract_a(&unknown_fn(), &known(vec![r15.clone()]), &mut i)));
+        assert!(proven(prove_subcontract_a(
+            &known(vec![eq1.clone()]),
+            &unknown_fn(),
+            &mut i
+        )));
+        assert!(!proven(prove_subcontract_a(
+            &unknown_fn(),
+            &known(vec![r15.clone()]),
+            &mut i
+        )));
         // Known(∅) ⊑ X proven (bottom source, vacuous coverage).
-        assert!(proven(prove_subcontract_a(&AnalysisContract::bottom(), &known(vec![r15.clone()]), &mut i)));
+        assert!(proven(prove_subcontract_a(
+            &AnalysisContract::bottom(),
+            &known(vec![r15.clone()]),
+            &mut i
+        )));
         // The reverse fails: Range(1,5) is not covered by Equals(1).
-        assert!(!proven(prove_subcontract_a(&known(vec![r15]), &known(vec![eq1]), &mut i)));
+        assert!(!proven(prove_subcontract_a(
+            &known(vec![r15]),
+            &known(vec![eq1]),
+            &mut i
+        )));
     }
 
     #[test]
@@ -839,7 +1015,10 @@ mod domain {
         let other = inst(&s2, eq(&mut i, 1));
         let s_eq1 = inst(&s, eq(&mut i, 1));
         let disjoint = intersect_a(&known(vec![s_eq1]), &known(vec![other]), &mut i);
-        assert!(disjoint.is_bottom(), "different shapes ⇒ γ-disjoint ⇒ bottom");
+        assert!(
+            disjoint.is_bottom(),
+            "different shapes ⇒ γ-disjoint ⇒ bottom"
+        );
     }
     fn konst_zero(i: &mut Interner) -> Expr {
         Expr::Const(i.integer(0))
@@ -851,19 +1030,34 @@ mod domain {
         let idv = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
         let z = konst_zero(&mut i);
         let zerov = closure(&mut i, one_param("x"), z, ActKind::Pure);
-        let id_inst = Instance { shape: shape_of(&idv), env: vec![] };
+        let id_inst = Instance {
+            shape: shape_of(&idv),
+            env: vec![],
+        };
         // realizes: the identity closure realizes its own (capture-free) instance.
         assert!(realizes(&idv, &id_inst, &mut i));
-        assert!(!realizes(&zerov, &id_inst, &mut i), "a different shape does not realize");
+        assert!(
+            !realizes(&zerov, &id_inst, &mut i),
+            "a different shape does not realize"
+        );
         // γ over Known(S): the id closure is in, the zero closure is out.
-        let ac = AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![id_inst]));
+        let ac = AnalysisContract::leaf(
+            Contract::Kind(Kind::Function),
+            InstanceMetadata::Known(vec![id_inst]),
+        );
         assert!(gamma_contains(&ac, &idv, &mut i));
         assert!(!gamma_contains(&ac, &zerov, &mut i));
         // Unknown admits every function; non-functions are governed by the contract alone.
         assert!(gamma_contains(&unknown_fn(), &zerov, &mut i));
         let five = i.integer(5);
-        let num = AnalysisContract::leaf(Contract::Kind(Kind::Number), InstanceMetadata::Known(vec![]));
-        assert!(gamma_contains(&num, &five, &mut i), "metadata is vacuous for a non-function");
+        let num = AnalysisContract::leaf(
+            Contract::Kind(Kind::Number),
+            InstanceMetadata::Known(vec![]),
+        );
+        assert!(
+            gamma_contains(&num, &five, &mut i),
+            "metadata is vacuous for a non-function"
+        );
     }
 
     #[test]
@@ -876,14 +1070,24 @@ mod domain {
         let f = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
         let z = konst_zero(&mut i);
         let g = closure(&mut i, one_param("x"), z, ActKind::Pure);
-        let f_inst = Instance { shape: shape_of(&f), env: vec![] };
-        let g_inst = Instance { shape: shape_of(&g), env: vec![] };
+        let f_inst = Instance {
+            shape: shape_of(&f),
+            env: vec![],
+        };
+        let g_inst = Instance {
+            shape: shape_of(&g),
+            env: vec![],
+        };
         let five = i.integer(5);
         let hi = i.string("hi");
         let fn_leaf = |inst: Instance| {
-            AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![inst]))
+            AnalysisContract::leaf(
+                Contract::Kind(Kind::Function),
+                InstanceMetadata::Known(vec![inst]),
+            )
         };
-        let val_leaf = |v: ValueRef| AnalysisContract::leaf(Contract::Equals(v), InstanceMetadata::Unknown);
+        let val_leaf =
+            |v: ValueRef| AnalysisContract::leaf(Contract::Equals(v), InstanceMetadata::Unknown);
         let alt1 = AnalysisContract::tuple(vec![fn_leaf(f_inst), val_leaf(five.clone())]);
         let alt2 = AnalysisContract::tuple(vec![fn_leaf(g_inst), val_leaf(hi.clone())]);
         let operand = AnalysisContract::alt(vec![alt1, alt2]);
@@ -895,8 +1099,14 @@ mod domain {
         // The synthesized cross-pairs are NOT — correlation survives.
         let cross1 = i.tuple(vec![f.clone(), hi]);
         let cross2 = i.tuple(vec![g.clone(), five]);
-        assert!(!gamma_contains(&operand, &cross1, &mut i), "[f, \"hi\"] is not represented");
-        assert!(!gamma_contains(&operand, &cross2, &mut i), "[g, 5] is not represented");
+        assert!(
+            !gamma_contains(&operand, &cross1, &mut i),
+            "[f, \"hi\"] is not represented"
+        );
+        assert!(
+            !gamma_contains(&operand, &cross2, &mut i),
+            "[g, 5] is not represented"
+        );
     }
 }
 
@@ -916,13 +1126,21 @@ mod application {
     use crate::value::ValueRef;
 
     fn shape(i: &mut Interner, act: ActKind) -> Lambda {
-        closure(i, one_param("x"), name("x"), act).as_fn().unwrap().shape().clone()
+        closure(i, one_param("x"), name("x"), act)
+            .as_fn()
+            .unwrap()
+            .shape()
+            .clone()
     }
     fn inst(shape: Lambda) -> Instance {
         Instance { shape, env: vec![] }
     }
     fn out(produced: Contract, completion: C, mnc: bool) -> ApplicationOutcome {
-        ApplicationOutcome { produced: AnalysisContract::of_contract(produced), completion, may_not_complete: mnc }
+        ApplicationOutcome {
+            produced: AnalysisContract::of_contract(produced),
+            completion,
+            may_not_complete: mnc,
+        }
     }
     fn num() -> Contract {
         Contract::Kind(Kind::Number)
@@ -934,7 +1152,10 @@ mod application {
     fn dummy_witness(i: &mut Interner) -> ApplicationWitness {
         let f = closure(i, one_param("x"), name("x"), ActKind::Pure);
         let a = i.integer(0);
-        ApplicationWitness { callee: f, arguments: vec![a] }
+        ApplicationWitness {
+            callee: f,
+            arguments: vec![a],
+        }
     }
 
     #[test]
@@ -950,7 +1171,10 @@ mod application {
             SeatVerdict::Refuted(got) => assert_eq!(got.callee, w.callee),
             other => panic!("expected Refuted(witness), got {other:?}"),
         }
-        assert!(matches!(seat_demand(&unproven, true), SeatVerdict::Unproven));
+        assert!(matches!(
+            seat_demand(&unproven, true),
+            SeatVerdict::Unproven
+        ));
         // Statement seat accepts all three.
         for o in [&absent, &present, &unproven] {
             assert!(matches!(seat_demand(o, false), SeatVerdict::Proven));
@@ -981,10 +1205,19 @@ mod application {
         let b = out(Contract::Kind(Kind::String), C::ProvenPresent(w), true);
         let j = join(a, b);
         assert!(j.may_not_complete, "or of the flags");
-        assert!(matches!(&j.completion, C::ProvenPresent(_)), "ProvenPresent dominates");
-        assert!(matches!(j.produced, AnalysisContract::Alt(_)), "produced by correlated union");
+        assert!(
+            matches!(&j.completion, C::ProvenPresent(_)),
+            "ProvenPresent dominates"
+        );
+        assert!(
+            matches!(j.produced, AnalysisContract::Alt(_)),
+            "produced by correlated union"
+        );
         // UnprovenPossible beats ProvenAbsent; the empty join is the Known(∅) identity.
-        let mixed = join(out(num(), C::UnprovenPossible, false), out(num(), C::ProvenAbsent, false));
+        let mixed = join(
+            out(num(), C::UnprovenPossible, false),
+            out(num(), C::ProvenAbsent, false),
+        );
         assert!(matches!(mixed.completion, C::UnprovenPossible));
         let empty = join_all(std::iter::empty());
         assert!(empty.produced.is_bottom());
@@ -1002,12 +1235,24 @@ mod application {
         assert!(proven(&admit_callee(&known_pure, pure_world_admits)));
         // An effect member is inadmissible — unproven (no witness at the algebra layer).
         let known_eff = InstanceMetadata::Known(vec![eff]);
-        assert!(matches!(admit_callee(&known_eff, pure_world_admits), Verdict::Unproven));
+        assert!(matches!(
+            admit_callee(&known_eff, pure_world_admits),
+            Verdict::Unproven
+        ));
         // Known(∅) passes vacuously (AP-21); Unknown is unproven (AP-15).
-        assert!(proven(&admit_callee(&InstanceMetadata::Known(vec![]), pure_world_admits)));
-        assert!(matches!(admit_callee(&InstanceMetadata::Unknown, pure_world_admits), Verdict::Unproven));
+        assert!(proven(&admit_callee(
+            &InstanceMetadata::Known(vec![]),
+            pure_world_admits
+        )));
+        assert!(matches!(
+            admit_callee(&InstanceMetadata::Unknown, pure_world_admits),
+            Verdict::Unproven
+        ));
         // A proven-empty member is dropped, so it does not block admission.
-        let dead = Instance { shape: pure.shape.clone(), env: vec![AnalysisContract::bottom()] };
+        let dead = Instance {
+            shape: pure.shape.clone(),
+            env: vec![AnalysisContract::bottom()],
+        };
         let known_dead = InstanceMetadata::Known(vec![dead]);
         assert!(proven(&admit_callee(&known_dead, pure_world_admits)));
     }
@@ -1024,7 +1269,10 @@ mod application {
 
     /// A callee leaf carrying a single known instance of `shape`.
     fn callee_leaf(shape: Lambda) -> AnalysisContract {
-        AnalysisContract::leaf(Contract::Kind(Kind::Function), InstanceMetadata::Known(vec![inst(shape)]))
+        AnalysisContract::leaf(
+            Contract::Kind(Kind::Function),
+            InstanceMetadata::Known(vec![inst(shape)]),
+        )
     }
     /// A value leaf `Equals(v)`.
     fn val_leaf(v: ValueRef) -> AnalysisContract {
@@ -1032,15 +1280,19 @@ mod application {
     }
     fn callee_shape(ac: &AnalysisContract) -> Option<Lambda> {
         match ac {
-            AnalysisContract::Leaf { metadata: InstanceMetadata::Known(s), .. } if s.len() == 1 => {
-                Some(s[0].shape.clone())
-            }
+            AnalysisContract::Leaf {
+                metadata: InstanceMetadata::Known(s),
+                ..
+            } if s.len() == 1 => Some(s[0].shape.clone()),
             _ => None,
         }
     }
     fn arg_value(ac: &AnalysisContract) -> Option<ValueRef> {
         match ac {
-            AnalysisContract::Leaf { contract: Contract::Equals(v), .. } => Some(v.clone()),
+            AnalysisContract::Leaf {
+                contract: Contract::Equals(v),
+                ..
+            } => Some(v.clone()),
             _ => None,
         }
     }
@@ -1062,7 +1314,8 @@ mod application {
         let (ns, ss) = (num_shape.clone(), str_shape.clone());
         let (nfv, sfv) = (numfn.clone(), strfn.clone());
         let accepts = move |callee: &AnalysisContract, args: &[AnalysisContract]| -> SeatVerdict {
-            let (Some(shape), Some(av)) = (callee_shape(callee), args.first().and_then(arg_value)) else {
+            let (Some(shape), Some(av)) = (callee_shape(callee), args.first().and_then(arg_value))
+            else {
                 return SeatVerdict::Unproven;
             };
             let ok = if shape == ns {
@@ -1075,8 +1328,15 @@ mod application {
             if ok {
                 SeatVerdict::Proven
             } else {
-                let callee_val = if shape == ns { nfv.clone() } else { sfv.clone() };
-                SeatVerdict::Refuted(ApplicationWitness { callee: callee_val, arguments: vec![av] })
+                let callee_val = if shape == ns {
+                    nfv.clone()
+                } else {
+                    sfv.clone()
+                };
+                SeatVerdict::Refuted(ApplicationWitness {
+                    callee: callee_val,
+                    arguments: vec![av],
+                })
             }
         };
 
@@ -1090,7 +1350,10 @@ mod application {
         assert_eq!(a.len(), 2, "two live correlated alternatives");
         assert!(correlated_flag);
         assert!(
-            matches!(analyze_application(&correlated, pure_world_admits, &accepts), SeatVerdict::Proven),
+            matches!(
+                analyze_application(&correlated, pure_world_admits, &accepts),
+                SeatVerdict::Proven
+            ),
             "correlated application proves; no synthesized cross-pair",
         );
 
@@ -1098,14 +1361,20 @@ mod application {
         // cross-pairs; (numFn,"hi") and (strFn,5) fail, but a synthesized cross-pair
         // failure must be UNPROVEN, never refuted.
         let projected = AnalysisContract::tuple(vec![
-            AnalysisContract::alt(vec![callee_leaf(num_shape.clone()), callee_leaf(str_shape.clone())]),
+            AnalysisContract::alt(vec![
+                callee_leaf(num_shape.clone()),
+                callee_leaf(str_shape.clone()),
+            ]),
             AnalysisContract::alt(vec![val_leaf(five), val_leaf(hi)]),
         ]);
         let (pa, projected_flag) = live_alternatives(&projected);
         assert_eq!(pa.len(), 4, "four projected cross-pairs");
         assert!(!projected_flag, "projected form is uncorrelated");
         assert!(
-            matches!(analyze_application(&projected, pure_world_admits, &accepts), SeatVerdict::Unproven),
+            matches!(
+                analyze_application(&projected, pure_world_admits, &accepts),
+                SeatVerdict::Unproven
+            ),
             "a cross-pair failure degrades to unproven, never refuted (AP-29)",
         );
     }
@@ -1125,11 +1394,7 @@ mod application {
             assert!(represented);
             AlternativeContribution {
                 verdict: SeatVerdict::Refuted(witness.clone()),
-                outcome: out(
-                    Contract::Bottom,
-                    C::ProvenPresent(witness.clone()),
-                    false,
-                ),
+                outcome: out(Contract::Bottom, C::ProvenPresent(witness.clone()), false),
                 detail: (),
             }
         });
@@ -1139,21 +1404,14 @@ mod application {
         let other_shape = shape(&mut i, ActKind::Pure);
         let text = i.string("x");
         let projected = AnalysisContract::tuple(vec![
-            AnalysisContract::alt(vec![
-                callee_leaf(callee_shape),
-                callee_leaf(other_shape),
-            ]),
+            AnalysisContract::alt(vec![callee_leaf(callee_shape), callee_leaf(other_shape)]),
             AnalysisContract::alt(vec![val_leaf(zero), val_leaf(text)]),
         ]);
         let projected = drive_application(&projected, |_, represented| {
             assert!(!represented);
             AlternativeContribution {
                 verdict: SeatVerdict::Refuted(witness.clone()),
-                outcome: out(
-                    Contract::Bottom,
-                    C::ProvenPresent(witness.clone()),
-                    false,
-                ),
+                outcome: out(Contract::Bottom, C::ProvenPresent(witness.clone()), false),
                 detail: (),
             }
         });
@@ -1197,13 +1455,17 @@ mod application {
         let ns = num_shape.clone();
         let nfv = numfn.clone();
         let accepts = move |callee: &AnalysisContract, args: &[AnalysisContract]| -> SeatVerdict {
-            let (Some(shape), Some(av)) = (callee_shape(callee), args.first().and_then(arg_value)) else {
+            let (Some(shape), Some(av)) = (callee_shape(callee), args.first().and_then(arg_value))
+            else {
                 return SeatVerdict::Unproven;
             };
             if shape == ns && av.as_number().is_some() {
                 SeatVerdict::Proven
             } else {
-                SeatVerdict::Refuted(ApplicationWitness { callee: nfv.clone(), arguments: vec![av] })
+                SeatVerdict::Refuted(ApplicationWitness {
+                    callee: nfv.clone(),
+                    arguments: vec![av],
+                })
             }
         };
         // [numFn, "hi"] — a single correlated alternative that genuinely rejects.
@@ -1233,7 +1495,11 @@ mod inventory {
 
     /// A capture-free instance with the shape of `x => <body>`.
     fn mk(i: &mut Interner, body: Expr) -> Instance {
-        let shape = closure(i, one_param("x"), body, ActKind::Pure).as_fn().unwrap().shape().clone();
+        let shape = closure(i, one_param("x"), body, ActKind::Pure)
+            .as_fn()
+            .unwrap()
+            .shape()
+            .clone();
         Instance { shape, env: vec![] }
     }
 
@@ -1270,7 +1536,13 @@ mod inventory {
         let a = mk(&mut i, name("x"));
         let sa = a.shape.clone();
         let a2 = a.clone();
-        let trans = move |inst: &Instance| if inst.shape == sa { vec![a2.clone()] } else { vec![] };
+        let trans = move |inst: &Instance| {
+            if inst.shape == sa {
+                vec![a2.clone()]
+            } else {
+                vec![]
+            }
+        };
         let inv = build_inventory(vec![a.clone()], trans);
         assert_eq!(inv.len(), 1);
         assert!(inv.contains(&a));
@@ -1372,7 +1644,10 @@ mod inventory {
         let key = |v: &mut Vec<Instance>| v.sort_by_key(|x| format!("{:?}", x.shape));
         key(&mut fwd);
         key(&mut rev);
-        assert_eq!(fwd, rev, "inventory membership is independent of root order");
+        assert_eq!(
+            fwd, rev,
+            "inventory membership is independent of root order"
+        );
         assert_eq!(fwd.len(), 3, "A, B, C admitted");
     }
 }
@@ -1405,11 +1680,9 @@ mod bodywalk {
 
     #[test]
     fn mutual_recursion_crosses_and_is_finite() {
-        let even = run(
-            "even = (n) => n == 0 ? true : odd(n - 1)\n\
+        let even = run("even = (n) => n == 0 ? true : odd(n - 1)\n\
              odd = (n) => n == 0 ? false : even(n - 1)\n\
-             even",
-        );
+             even");
         let odd = {
             let t = callee_targets(&even);
             assert_eq!(t.len(), 1, "even calls one function");
@@ -1437,11 +1710,9 @@ mod bodywalk {
     #[test]
     fn nonrecursive_helper_is_reached_but_bounded() {
         // g calls h (a captured helper); h calls nothing. Reachable = {g, h}.
-        let g = run(
-            "h = (x) => x + 1\n\
+        let g = run("h = (x) => x + 1\n\
              g = (n) => h(n)\n\
-             g",
-        );
+             g");
         let targets = callee_targets(&g);
         assert_eq!(targets.len(), 1, "g calls h");
         let reach = reachable_closures(g);
@@ -1805,12 +2076,19 @@ mod driver {
         Contract::Kind(Kind::Boolean)
     }
     fn cand(callee: ValueRef, contract: Contract) -> Candidate {
-        Candidate { callee, args: vec![Contract::Kind(Kind::Number)], claim: Claim::Return(contract), cutoff: false }
+        Candidate {
+            callee,
+            args: vec![Contract::Kind(Kind::Number)],
+            claim: Claim::Return(contract),
+            cutoff: false,
+        }
     }
 
     /// `quad` calls `double`; `double` is a leaf. Returns `(double, quad)`.
     fn double_quad() -> (ValueRef, ValueRef) {
-        let quad = run_source("double = (n) => n * 2\nquad = (n) => double(n) + double(n)\nquad").unwrap().0;
+        let quad = run_source("double = (n) => n * 2\nquad = (n) => double(n) + double(n)\nquad")
+            .unwrap()
+            .0;
         let double = callee_targets(&quad)[0].clone();
         (double, quad)
     }
@@ -1925,7 +2203,8 @@ mod inference {
     /// Contract equivalence: mutual subcontract (so `Union(Number, Number)` counts as
     /// `Number`, the proposal's un-normalized shape).
     fn equiv(a: &Contract, b: &Contract, i: &mut Interner) -> bool {
-        matches!(subcontract(a, b, i), Verdict::Proven) && matches!(subcontract(b, a, i), Verdict::Proven)
+        matches!(subcontract(a, b, i), Verdict::Proven)
+            && matches!(subcontract(b, a, i), Verdict::Proven)
     }
 
     #[test]
@@ -1939,8 +2218,7 @@ mod inference {
             .unwrap()
             .0;
         let mut i = Interner::new();
-        let fact =
-            infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
+        let fact = infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
         assert!(
             matches!(subcontract(&num(), &fact, &mut i), Verdict::Proven),
             "Number ⊑ inferred {fact:?}"
@@ -1965,8 +2243,8 @@ mod inference {
         .unwrap()
         .0;
         let mut i = Interner::new();
-        let fact = infer_return_fact(&even, None, &cenv(), &mut i)
-            .expect("even's return is inferred");
+        let fact =
+            infer_return_fact(&even, None, &cenv(), &mut i).expect("even's return is inferred");
         assert!(
             equiv(&fact, &Contract::Kind(Kind::Boolean), &mut i),
             "even returns Boolean, got {fact:?}"
@@ -1979,8 +2257,7 @@ mod inference {
         // claim is Number — a sound over-approximation (Equals(0) ⊑ Number).
         let f = run_source("f = (n) => n == 0 ? 0 : f(n - 1)\nf").unwrap().0;
         let mut i = Interner::new();
-        let fact =
-            infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
+        let fact = infer_return_fact(&f, None, &cenv(), &mut i).expect("a return fact is inferred");
         let zero = Contract::Equals(i.integer(0));
         assert!(
             matches!(subcontract(&zero, &fact, &mut i), Verdict::Proven),
@@ -2011,7 +2288,8 @@ mod apply_wiring {
     use crate::oracle::run_source;
 
     fn equiv(a: &Contract, b: &Contract, i: &mut Interner) -> bool {
-        matches!(subcontract(a, b, i), Verdict::Proven) && matches!(subcontract(b, a, i), Verdict::Proven)
+        matches!(subcontract(a, b, i), Verdict::Proven)
+            && matches!(subcontract(b, a, i), Verdict::Proven)
     }
 
     #[test]
@@ -2019,7 +2297,9 @@ mod apply_wiring {
         // `f(x)` with `x : Number` — `analyze_apply` now infers f's return over the
         // call-site argument, giving pure Number rather than Top.
         let mut i = Interner::new();
-        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf")
+            .unwrap()
+            .0;
         let mut env = empty();
         env.insert("f".into(), Contract::Equals(f));
         env.insert("x".into(), Contract::Kind(Kind::Number));
@@ -2027,7 +2307,11 @@ mod apply_wiring {
         let call = apply(name("f"), vec![name("x")]);
         let a = analyze(&call, &env, &nc(), &mut i);
         assert!(a.accepted(), "the call is accepted: {:?}", a.findings);
-        assert!(equiv(&a.contract, &Contract::Kind(Kind::Number), &mut i), "f(x) : Number, got {:?}", a.contract);
+        assert!(
+            equiv(&a.contract, &Contract::Kind(Kind::Number), &mut i),
+            "f(x) : Number, got {:?}",
+            a.contract
+        );
     }
 
     #[test]
@@ -2047,9 +2331,19 @@ mod apply_wiring {
         env.insert("x".into(), Contract::Kind(Kind::Number));
 
         let guard = apply(name("even"), vec![name("x")]);
-        let m = matchx(None, vec![arm(None, Some(guard), konst(i.integer(1))), arm(None, None, konst(i.integer(2)))]);
+        let m = matchx(
+            None,
+            vec![
+                arm(None, Some(guard), konst(i.integer(1))),
+                arm(None, None, konst(i.integer(2))),
+            ],
+        );
         let a = analyze(&m, &env, &nc(), &mut i);
-        assert!(a.findings.is_empty(), "even(x) : Boolean satisfies the guard with no finding: {:?}", a.findings);
+        assert!(
+            a.findings.is_empty(),
+            "even(x) : Boolean satisfies the guard with no finding: {:?}",
+            a.findings
+        );
     }
 
     #[test]
@@ -2057,14 +2351,23 @@ mod apply_wiring {
         // `f(x)` with `x : Top` — no call-site constraint. The successful return
         // over-approximation still admits Number; body safety is a separate judgment.
         let mut i = Interner::new();
-        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf").unwrap().0;
+        let f = run_source("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf")
+            .unwrap()
+            .0;
         let mut env = empty();
         env.insert("f".into(), Contract::Equals(f));
         env.insert("x".into(), Contract::Top);
 
         let call = apply(name("f"), vec![name("x")]);
         let a = analyze(&call, &env, &nc(), &mut i);
-        assert!(matches!(subcontract(&Contract::Kind(Kind::Number), &a.contract, &mut i), Verdict::Proven), "Number ⊑ {:?}", a.contract);
+        assert!(
+            matches!(
+                subcontract(&Contract::Kind(Kind::Number), &a.contract, &mut i),
+                Verdict::Proven
+            ),
+            "Number ⊑ {:?}",
+            a.contract
+        );
     }
 }
 
@@ -2093,10 +2396,15 @@ mod refute {
     /// factorial, built **in `i`** — evaluating it needs the same interner (interned
     /// `==` is pointer identity, so a cross-interner `n == 0` would never fire).
     fn factorial(i: &mut Interner) -> ValueRef {
-        run_source_in("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf", i).unwrap().0
+        run_source_in("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf", i)
+            .unwrap()
+            .0
     }
     fn call(callee: ValueRef, arg: ValueRef) -> Expr {
-        Expr::Apply { callee: Box::new(Expr::Const(callee)), args: vec![Arg::Expr(Expr::Const(arg))] }
+        Expr::Apply {
+            callee: Box::new(Expr::Const(callee)),
+            args: vec![Arg::Expr(Expr::Const(arg))],
+        }
     }
 
     #[test]
@@ -2104,8 +2412,12 @@ mod refute {
         // f does not return String: f(0) = 1 (a Number) ∉ String — a represented witness.
         let mut i = Interner::new();
         let f = factorial(&mut i);
-        let w = realized_refutation(&f, &[num()], &string(), &mut i).expect("String claim is refuted");
-        assert!(!string().contains(&w.produced), "the witness value is genuinely not a String");
+        let w =
+            realized_refutation(&f, &[num()], &string(), &mut i).expect("String claim is refuted");
+        assert!(
+            !string().contains(&w.produced),
+            "the witness value is genuinely not a String"
+        );
         assert_eq!(w.arguments.len(), 1, "a represented single-argument tuple");
     }
 
@@ -2189,12 +2501,20 @@ mod refute {
         // A baseless recursion never completes → OutOfFuel (the call-depth bound), not a
         // hang; a terminating call completes within the bound.
         let mut i = Interner::new();
-        let loop_fn = run_source_in("loop = (n) => loop(n)\nloop", &mut i).unwrap().0;
+        let loop_fn = run_source_in("loop = (n) => loop(n)\nloop", &mut i)
+            .unwrap()
+            .0;
         let zero = i.integer(0);
-        assert!(matches!(eval_expr_bounded(&call(loop_fn, zero), 5_000, &mut i), BoundedOutcome::OutOfFuel));
+        assert!(matches!(
+            eval_expr_bounded(&call(loop_fn, zero), 5_000, &mut i),
+            BoundedOutcome::OutOfFuel
+        ));
         let f = factorial(&mut i);
         let five = i.integer(5);
-        assert!(matches!(eval_expr_bounded(&call(f, five), 200_000, &mut i), BoundedOutcome::Produced(_)));
+        assert!(matches!(
+            eval_expr_bounded(&call(f, five), 200_000, &mut i),
+            BoundedOutcome::Produced(_)
+        ));
     }
 }
 
@@ -2270,14 +2590,34 @@ mod fact_identity {
         use crate::analyzer::induction::{Claim, Hypothesis, hypothesis_for, with_hypotheses};
         let mut i = Interner::new();
         let f = run_source_in("f = (n) => n\nf", &mut i).unwrap().0;
-        let hyp = Hypothesis { callee: f.clone(), input: vec![Contract::Kind(Kind::Number)], claim: Claim::Return(Contract::Kind(Kind::Boolean)) };
+        let hyp = Hypothesis {
+            callee: f.clone(),
+            input: vec![Contract::Kind(Kind::Number)],
+            claim: Claim::Return(Contract::Kind(Kind::Boolean)),
+        };
         let one = Contract::Equals(i.integer(1));
         with_hypotheses(vec![hyp], || {
             let boolean = Some(Contract::Kind(Kind::Boolean));
-            assert_eq!(hypothesis_for(&f, &[Contract::Kind(Kind::Number)], &mut i), boolean, "[Number] ⊑ [Number]");
-            assert_eq!(hypothesis_for(&f, std::slice::from_ref(&one), &mut i), boolean, "[Equals(1)] ⊑ [Number]");
-            assert_eq!(hypothesis_for(&f, &[Contract::Kind(Kind::String)], &mut i), None, "[String] ⊄ [Number]");
-            assert_eq!(hypothesis_for(&f, &[Contract::Top], &mut i), None, "[Top] ⊄ [Number]");
+            assert_eq!(
+                hypothesis_for(&f, &[Contract::Kind(Kind::Number)], &mut i),
+                boolean,
+                "[Number] ⊑ [Number]"
+            );
+            assert_eq!(
+                hypothesis_for(&f, std::slice::from_ref(&one), &mut i),
+                boolean,
+                "[Equals(1)] ⊑ [Number]"
+            );
+            assert_eq!(
+                hypothesis_for(&f, &[Contract::Kind(Kind::String)], &mut i),
+                None,
+                "[String] ⊄ [Number]"
+            );
+            assert_eq!(
+                hypothesis_for(&f, &[Contract::Top], &mut i),
+                None,
+                "[Top] ⊄ [Number]"
+            );
         });
     }
 
@@ -2317,20 +2657,36 @@ mod body_safety {
     #[test]
     fn direct_body_trap_is_rejected() {
         let a = analyze_call("bad = () => 1 + \"x\"\nbad", "bad", &[]);
-        assert!(!a.accepted(), "the callee body traps (1 + \"x\"): {:?}", a.findings);
+        assert!(
+            !a.accepted(),
+            "the callee body traps (1 + \"x\"): {:?}",
+            a.findings
+        );
     }
 
     #[test]
     fn transitive_body_trap_is_rejected() {
         // bad calls helper, whose body traps — the dependency component settles first,
         // and its refutation must reach bad's call site.
-        let a = analyze_call("helper = () => 1 + \"x\"\nbad = () => helper()\nbad", "bad", &[]);
-        assert!(!a.accepted(), "a transitive body trap must be surfaced: {:?}", a.findings);
+        let a = analyze_call(
+            "helper = () => 1 + \"x\"\nbad = () => helper()\nbad",
+            "bad",
+            &[],
+        );
+        assert!(
+            !a.accepted(),
+            "a transitive body trap must be surfaced: {:?}",
+            a.findings
+        );
     }
 
     #[test]
     fn a_safe_transitive_call_is_accepted() {
-        let a = analyze_call("helper = (x) => x + 1\nf = (x) => helper(x)\nf", "f", &[("n", num())]);
+        let a = analyze_call(
+            "helper = (x) => x + 1\nf = (x) => helper(x)\nf",
+            "f",
+            &[("n", num())],
+        );
         assert!(a.accepted(), "no trap anywhere: {:?}", a.findings);
     }
 
@@ -2338,15 +2694,31 @@ mod body_safety {
     fn a_recursive_safe_body_terminates_without_false_findings() {
         // factorial: safety, completion, and return all close over the covering Number
         // fact, so the recursive operand is safe and analysis terminates.
-        let a = analyze_call("f = (n) => n == 0 ? 1 : n * f(n - 1)\nf", "f", &[("n", num())]);
+        let a = analyze_call(
+            "f = (n) => n == 0 ? 1 : n * f(n - 1)\nf",
+            "f",
+            &[("n", num())],
+        );
         assert!(a.accepted(), "factorial accepted: {:?}", a.findings);
-        assert!(a.findings.is_empty(), "no false findings from the coarsened recursion: {:?}", a.findings);
+        assert!(
+            a.findings.is_empty(),
+            "no false findings from the coarsened recursion: {:?}",
+            a.findings
+        );
     }
 
     #[test]
     fn a_recursive_body_with_a_local_trap_is_rejected() {
-        let a = analyze_call("f = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\nf", "f", &[("n", num())]);
-        assert!(!a.accepted(), "the local trap must be surfaced: {:?}", a.findings);
+        let a = analyze_call(
+            "f = (n) => n == 0 ? (1 + \"x\") : f(n - 1)\nf",
+            "f",
+            &[("n", num())],
+        );
+        assert!(
+            !a.accepted(),
+            "the local trap must be surfaced: {:?}",
+            a.findings
+        );
     }
 
     #[test]
@@ -2358,7 +2730,11 @@ mod body_safety {
             "f",
             &[("n", num())],
         );
-        assert!(!a.accepted(), "g's trap must reach f's call site: {:?}", a.findings);
+        assert!(
+            !a.accepted(),
+            "g's trap must reach f's call site: {:?}",
+            a.findings
+        );
     }
 
     #[test]
@@ -2378,20 +2754,41 @@ mod body_safety {
         // reachable-closure walk misses it. The actual-edge walk resolves `f = bad` from
         // the argument value and surfaces bad's body trap.
         let mut i = Interner::new();
-        let bad = run_source_in("bad = () => 1 + \"x\"\nbad", &mut i).unwrap().0;
-        let invoke = run_source_in("invoke = (f) => f()\ninvoke", &mut i).unwrap().0;
+        let bad = run_source_in("bad = () => 1 + \"x\"\nbad", &mut i)
+            .unwrap()
+            .0;
+        let invoke = run_source_in("invoke = (f) => f()\ninvoke", &mut i)
+            .unwrap()
+            .0;
         let mut env = empty();
         env.insert("invoke".into(), Contract::Equals(invoke));
-        let a = analyze(&apply(name("invoke"), vec![konst(bad)]), &env, &nc(), &mut i);
-        assert!(!a.accepted(), "invoke(bad) must be rejected — bad() traps: {:?}", a.findings);
+        let a = analyze(
+            &apply(name("invoke"), vec![konst(bad)]),
+            &env,
+            &nc(),
+            &mut i,
+        );
+        assert!(
+            !a.accepted(),
+            "invoke(bad) must be rejected — bad() traps: {:?}",
+            a.findings
+        );
     }
 
     #[test]
     fn a_callee_is_checked_over_its_actual_edge_domain() {
         // §11.2/§11.4: root(Number) calls helper("x"). helper must be analyzed over the
         // actual [String] edge — where `"x" + 1` traps — NOT over root's Number domain.
-        let a = analyze_call("helper = (x) => x + 1\nroot = (n) => helper(\"x\")\nroot", "root", &[("n", num())]);
-        assert!(!a.accepted(), "helper(\"x\") traps over its actual String domain: {:?}", a.findings);
+        let a = analyze_call(
+            "helper = (x) => x + 1\nroot = (n) => helper(\"x\")\nroot",
+            "root",
+            &[("n", num())],
+        );
+        assert!(
+            !a.accepted(),
+            "helper(\"x\") traps over its actual String domain: {:?}",
+            a.findings
+        );
     }
 
     #[test]
@@ -2403,7 +2800,11 @@ mod body_safety {
             "root",
             &[],
         );
-        assert!(a.accepted(), "helper(0)'s bad branch is dead — no false trap: {:?}", a.findings);
+        assert!(
+            a.accepted(),
+            "helper(0)'s bad branch is dead — no false trap: {:?}",
+            a.findings
+        );
     }
 
     // ── Archive8 §11 — (instance, input-domain) identity + multi-callee + return facts ─
@@ -2432,12 +2833,18 @@ mod body_safety {
         // repeated shape and therefore not admitted through this path; the honest graph
         // result is Unproven, which must block rather than silently accept.
         let mut i = Interner::new();
-        let f = run_source_in("f = (x) => x == 0 ? f(\"x\") : x + 1\nf", &mut i).unwrap().0;
+        let f = run_source_in("f = (x) => x == 0 ? f(\"x\") : x + 1\nf", &mut i)
+            .unwrap()
+            .0;
         let mut env = empty();
         env.insert("f".into(), Contract::Equals(f));
         let zero = i.integer(0);
         let a = analyze(&apply(name("f"), vec![konst(zero)]), &env, &nc(), &mut i);
-        assert!(!a.accepted(), "f(0) → f(\"x\") → \"x\" + 1 traps: {:?}", a.findings);
+        assert!(
+            !a.accepted(),
+            "f(0) → f(\"x\") → \"x\" + 1 traps: {:?}",
+            a.findings
+        );
     }
 
     #[test]
@@ -2485,12 +2892,21 @@ mod alternatives {
         // represented execution traps. It must not vanish because a known function
         // alternative is present.
         let mut i = Interner::new();
-        let root = run_source_in("good = () => 1\nroot = (b) => (b ? good : 1)()\nroot", &mut i).unwrap().0;
+        let root = run_source_in(
+            "good = () => 1\nroot = (b) => (b ? good : 1)()\nroot",
+            &mut i,
+        )
+        .unwrap()
+        .0;
         let mut env = empty();
         env.insert("root".into(), Contract::Equals(root));
         env.insert("c".into(), Contract::Kind(Kind::Boolean));
         let a = analyze(&apply(name("root"), vec![name("c")]), &env, &nc(), &mut i);
-        assert!(!a.accepted(), "the non-function alternative `1` traps when called: {:?}", a.findings);
+        assert!(
+            !a.accepted(),
+            "the non-function alternative `1` traps when called: {:?}",
+            a.findings
+        );
     }
 
     #[test]
@@ -2517,8 +2933,19 @@ mod alternatives {
             a.contract
         );
         // And a downstream numeric use is not proven safe.
-        let b = analyze(&prim(PrimOp::Add, vec![apply(name("f"), vec![]), konst(i.integer(1))]), &env, &nc(), &mut i);
-        assert!(!b.findings.is_empty(), "the unknown callee leaves the downstream `+ 1` unproven");
+        let b = analyze(
+            &prim(
+                PrimOp::Add,
+                vec![apply(name("f"), vec![]), konst(i.integer(1))],
+            ),
+            &env,
+            &nc(),
+            &mut i,
+        );
+        assert!(
+            !b.findings.is_empty(),
+            "the unknown callee leaves the downstream `+ 1` unproven"
+        );
     }
 }
 
@@ -2550,7 +2977,11 @@ mod recursive_domains {
         env.insert("f".into(), Contract::Equals(f));
         let zero = i.integer(0);
         let a = analyze(&apply(name("f"), vec![konst(zero)]), &env, &nc(), &mut i);
-        assert!(a.accepted(), "f(0) → f(1) → 1 is safe; the Number-only trap must not refute it: {:?}", a.findings);
+        assert!(
+            a.accepted(),
+            "f(0) → f(1) → 1 is safe; the Number-only trap must not refute it: {:?}",
+            a.findings
+        );
     }
 
     #[test]
@@ -2561,12 +2992,25 @@ mod recursive_domains {
         // vocabulary, so the recursive edge widens into the Kind basis and stabilizes),
         // not from a fuel counter. This test *terminating* is the assertion.
         let mut i = Interner::new();
-        let f = run_source_in("f = (x, y) => f(x + y, y)\nf", &mut i).unwrap().0;
+        let f = run_source_in("f = (x, y) => f(x + y, y)\nf", &mut i)
+            .unwrap()
+            .0;
         let mut env = empty();
         env.insert("f".into(), Contract::Equals(f));
-        env.insert("a".into(), Contract::Range(Rational::from(0), Rational::from(1)));
-        env.insert("b".into(), Contract::Range(Rational::from(1), Rational::from(2)));
-        let a = analyze(&apply(name("f"), vec![name("a"), name("b")]), &env, &nc(), &mut i);
+        env.insert(
+            "a".into(),
+            Contract::Range(Rational::from(0), Rational::from(1)),
+        );
+        env.insert(
+            "b".into(),
+            Contract::Range(Rational::from(1), Rational::from(2)),
+        );
+        let a = analyze(
+            &apply(name("f"), vec![name("a"), name("b")]),
+            &env,
+            &nc(),
+            &mut i,
+        );
         // No claim about the verdict — only that analysis terminated by construction.
         let _ = a.accepted();
     }
@@ -2580,12 +3024,19 @@ fn a_growing_union_recursive_domain_terminates() {
     // distinct `(instance, domain)` key, so widening never fired and the walk overflowed
     // the stack. Atoms-only admission widens at the first union, so this terminates.
     let mut i = Interner::new();
-    let f = crate::oracle::run_source_in("f = (x, b) => f(b ? x : 0, b)\nf", &mut i).unwrap().0;
+    let f = crate::oracle::run_source_in("f = (x, b) => f(b ? x : 0, b)\nf", &mut i)
+        .unwrap()
+        .0;
     let mut env = empty();
     env.insert("f".into(), Contract::Equals(f));
     env.insert("k".into(), Contract::Equals(i.integer(0)));
     env.insert("c".into(), Contract::Kind(Kind::Boolean));
-    let a = analyze(&apply(name("f"), vec![name("k"), name("c")]), &env, &nc(), &mut i);
+    let a = analyze(
+        &apply(name("f"), vec![name("k"), name("c")]),
+        &env,
+        &nc(),
+        &mut i,
+    );
     let _ = a.accepted(); // the assertion is that analysis terminated at all
 }
 
@@ -2613,7 +3064,11 @@ mod region {
         matchx(
             None,
             vec![
-                arm(None, Some(prim(PrimOp::Eq, vec![name("n"), konst(zero)])), konst(one)),
+                arm(
+                    None,
+                    Some(prim(PrimOp::Eq, vec![name("n"), konst(zero)])),
+                    konst(one),
+                ),
                 arm(None, None, prim(PrimOp::Add, vec![name("n"), konst(x)])),
             ],
         )
@@ -2655,7 +3110,10 @@ mod region {
         let rows = region_table(&body, "n", &cenv(), &mut i);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].exact);
-        assert_eq!(rows[0].result, body, "the local-binding prefix must remain executable");
+        assert_eq!(
+            rows[0].result, body,
+            "the local-binding prefix must remain executable"
+        );
     }
 
     #[test]

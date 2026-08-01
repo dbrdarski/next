@@ -24,7 +24,9 @@ pub struct DesugarError {
 }
 
 fn err<T>(message: impl Into<String>) -> Result<T, DesugarError> {
-    Err(DesugarError { message: message.into() })
+    Err(DesugarError {
+        message: message.into(),
+    })
 }
 
 /// Lowers surface syntax to kernel AST, interning constants through `interner`.
@@ -38,7 +40,11 @@ pub struct Desugarer<'a> {
 
 impl<'a> Desugarer<'a> {
     pub fn new(interner: &'a mut Interner) -> Desugarer<'a> {
-        Desugarer { interner, gensym: 0, hask_stack: Vec::new() }
+        Desugarer {
+            interner,
+            gensym: 0,
+            hask_stack: Vec::new(),
+        }
     }
 
     /// A fresh synthetic binding name. Uses a `%` prefix, which no surface
@@ -70,7 +76,10 @@ impl<'a> Desugarer<'a> {
         for stmt in &p.statements {
             items.extend(self.top_item(stmt)?);
         }
-        Ok(Module { name: p.header.as_ref().map(|parts| parts.join(".")), items })
+        Ok(Module {
+            name: p.header.as_ref().map(|parts| parts.join(".")),
+            items,
+        })
     }
 
     fn top_item(&mut self, stmt: &SStmt) -> Result<Vec<Item>, DesugarError> {
@@ -106,9 +115,10 @@ impl<'a> Desugarer<'a> {
         Ok(match t {
             SBindTarget::Name(n) => BindTarget::Name(n.clone()),
             SBindTarget::Tuple(elems) => BindTarget::Pattern(Pat::Tuple(self.pat_elems(elems)?)),
-            SBindTarget::Record(fields, exact) => {
-                BindTarget::Pattern(Pat::Record { fields: self.pat_fields(fields)?, exact: *exact })
-            }
+            SBindTarget::Record(fields, exact) => BindTarget::Pattern(Pat::Record {
+                fields: self.pat_fields(fields)?,
+                exact: *exact,
+            }),
         })
     }
 
@@ -156,19 +166,28 @@ impl<'a> Desugarer<'a> {
                         SBindTarget::Name(n) => n.clone(),
                         _ => return err("@mutate/@effect require a simple name target"),
                     };
-                    let kind = if op == "mutate" { ActKind::Mutator } else { ActKind::Effect };
+                    let kind = if op == "mutate" {
+                        ActKind::Mutator
+                    } else {
+                        ActKind::Effect
+                    };
                     let mut lambda = self.expect_lambda(&binding.value)?;
                     lambda.act_kind = kind;
-                    Ok(Item::ActBind(ActBind { kind, name, lambda, exported: binding.exported }))
+                    Ok(Item::ActBind(ActBind {
+                        kind,
+                        name,
+                        lambda,
+                        exported: binding.exported,
+                    }))
                 }
                 "computed" | "reactive" => {
                     err("@computed/@reactive are the fenced reactive layer (G1); not implemented")
                 }
                 other => err(format!("unknown privileged operation `@{other}`")),
             },
-            SAt::Anon { op, .. } => {
-                err(format!("anonymous `@{op}` declarations are the fenced reactive layer (G1)"))
-            }
+            SAt::Anon { op, .. } => err(format!(
+                "anonymous `@{op}` declarations are the fenced reactive layer (G1)"
+            )),
         }
     }
 
@@ -210,7 +229,10 @@ impl<'a> Desugarer<'a> {
                         items.push(MatchItem::Arm(a));
                     }
                 }
-                Expr::Match(Match { scrutinee: Some(Box::new(scrut)), items })
+                Expr::Match(Match {
+                    scrutinee: Some(Box::new(scrut)),
+                    items,
+                })
             }
             SExpr::Pipe { dir, left, right } => self.pipe(*dir, left, right)?,
             SExpr::Ternary { cond, then, els } => {
@@ -222,7 +244,11 @@ impl<'a> Desugarer<'a> {
             }
             SExpr::Binary { op, left, right } => self.binary(*op, left, right)?,
             SExpr::Unary { op, operand } => self.unary(*op, operand)?,
-            SExpr::Access { target, form, total } => Expr::Access {
+            SExpr::Access {
+                target,
+                form,
+                total,
+            } => Expr::Access {
                 target: Box::new(self.expr(target)?),
                 form: self.access_form(form)?,
                 total: *total,
@@ -267,13 +293,18 @@ impl<'a> Desugarer<'a> {
             .iter()
             .map(|f| {
                 Ok(match f {
-                    SField::Shorthand(name) => {
-                        Field::Field { key: name.clone(), value: Self::name_ref(name) }
-                    }
-                    SField::KeyValue(k, v) => Field::Field { key: k.clone(), value: self.expr(v)? },
-                    SField::Computed(k, v) => {
-                        Field::Computed { key: self.expr(k)?, value: self.expr(v)? }
-                    }
+                    SField::Shorthand(name) => Field::Field {
+                        key: name.clone(),
+                        value: Self::name_ref(name),
+                    },
+                    SField::KeyValue(k, v) => Field::Field {
+                        key: k.clone(),
+                        value: self.expr(v)?,
+                    },
+                    SField::Computed(k, v) => Field::Computed {
+                        key: self.expr(k)?,
+                        value: self.expr(v)?,
+                    },
                     SField::Spread(e) => Field::Spread(self.expr(e)?),
                 })
             })
@@ -326,7 +357,11 @@ impl<'a> Desugarer<'a> {
 
     fn binary(&mut self, op: BinOp, left: &SExpr, right: &SExpr) -> Result<Expr, DesugarError> {
         // Escaped-selection forms: `~a || b`, `~a && b` (E10 / §4).
-        if let SExpr::Unary { op: UnOp::Loosen, operand } = left {
+        if let SExpr::Unary {
+            op: UnOp::Loosen,
+            operand,
+        } = left
+        {
             match op {
                 BinOp::Or => return self.escaped_or(operand, right),
                 BinOp::And => return self.escaped_and(operand, right),
@@ -357,7 +392,11 @@ impl<'a> Desugarer<'a> {
                 Ok(Expr::Match(Match {
                     scrutinee: Some(Box::new(a)),
                     items: vec![
-                        MatchItem::Arm(Arm { pattern: Some(null_pat), guard: None, result: b }),
+                        MatchItem::Arm(Arm {
+                            pattern: Some(null_pat),
+                            guard: None,
+                            result: b,
+                        }),
                         MatchItem::Arm(Arm {
                             pattern: Some(Pat::Bind(v.clone())),
                             guard: None,
@@ -392,10 +431,17 @@ impl<'a> Desugarer<'a> {
 
     fn unary(&mut self, op: UnOp, operand: &SExpr) -> Result<Expr, DesugarError> {
         match op {
-            UnOp::Neg => Ok(Expr::PrimOp { op: PrimOp::Neg, args: vec![self.expr(operand)?] }),
+            UnOp::Neg => Ok(Expr::PrimOp {
+                op: PrimOp::Neg,
+                args: vec![self.expr(operand)?],
+            }),
             UnOp::Not => {
                 // `!~x` is the falsiness test emitting Booleans (E10 / §4).
-                if let SExpr::Unary { op: UnOp::Loosen, operand: inner } = operand {
+                if let SExpr::Unary {
+                    op: UnOp::Loosen,
+                    operand: inner,
+                } = operand
+                {
                     let a = self.expr(inner)?;
                     let (t, f) = (self.c_bool(true), self.c_bool(false));
                     // is-falsy: false/null => true, else false
@@ -428,8 +474,16 @@ impl<'a> Desugarer<'a> {
         Ok(Expr::Match(Match {
             scrutinee: Some(Box::new(scrut)),
             items: vec![
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(false_p)), guard: None, result: b1 }),
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(null_p)), guard: None, result: b2 }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Const(false_p)),
+                    guard: None,
+                    result: b1,
+                }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Const(null_p)),
+                    guard: None,
+                    result: b2,
+                }),
                 MatchItem::Arm(Arm {
                     pattern: Some(Pat::Bind(v.clone())),
                     guard: None,
@@ -449,9 +503,21 @@ impl<'a> Desugarer<'a> {
         Ok(Expr::Match(Match {
             scrutinee: Some(Box::new(scrut)),
             items: vec![
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(false_p)), guard: None, result: false_c }),
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(null_p)), guard: None, result: null_c }),
-                MatchItem::Arm(Arm { pattern: Some(Pat::Bind(v)), guard: None, result: b1 }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Const(false_p)),
+                    guard: None,
+                    result: false_c,
+                }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Const(null_p)),
+                    guard: None,
+                    result: null_c,
+                }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Bind(v)),
+                    guard: None,
+                    result: b1,
+                }),
             ],
         }))
     }
@@ -467,8 +533,16 @@ impl<'a> Desugarer<'a> {
         Expr::Match(Match {
             scrutinee: None,
             items: vec![
-                MatchItem::Arm(Arm { pattern: None, guard: Some(test), result: t }),
-                MatchItem::Arm(Arm { pattern: None, guard: None, result: f }),
+                MatchItem::Arm(Arm {
+                    pattern: None,
+                    guard: Some(test),
+                    result: t,
+                }),
+                MatchItem::Arm(Arm {
+                    pattern: None,
+                    guard: None,
+                    result: f,
+                }),
             ],
         })
     }
@@ -480,9 +554,21 @@ impl<'a> Desugarer<'a> {
         Expr::Match(Match {
             scrutinee: Some(Box::new(scrut)),
             items: vec![
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(fp)), guard: None, result: falsy }),
-                MatchItem::Arm(Arm { pattern: Some(Pat::Const(np)), guard: None, result: falsy2 }),
-                MatchItem::Arm(Arm { pattern: Some(Pat::Wild), guard: None, result: other }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Const(fp)),
+                    guard: None,
+                    result: falsy,
+                }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Const(np)),
+                    guard: None,
+                    result: falsy2,
+                }),
+                MatchItem::Arm(Arm {
+                    pattern: Some(Pat::Wild),
+                    guard: None,
+                    result: other,
+                }),
             ],
         })
     }
@@ -495,7 +581,11 @@ impl<'a> Desugarer<'a> {
             SArrowBody::Expr(e) => self.expr(e)?,
             SArrowBody::Block(stmts) => Expr::Match(self.block_match(stmts)?),
         };
-        Ok(Lambda { params, body: Box::new(body), act_kind: ActKind::Pure })
+        Ok(Lambda {
+            params,
+            body: Box::new(body),
+            act_kind: ActKind::Pure,
+        })
     }
 
     /// Parameters lower to a pattern over the complete argument tuple (the arity
@@ -506,9 +596,10 @@ impl<'a> Desugarer<'a> {
             elems.push(match p {
                 SParam::Ident(n) => PatElem::Pat(Pat::Bind(n.clone())),
                 SParam::Tuple(es) => PatElem::Pat(Pat::Tuple(self.pat_elems(es)?)),
-                SParam::Record(fs, exact) => {
-                    PatElem::Pat(Pat::Record { fields: self.pat_fields(fs)?, exact: *exact })
-                }
+                SParam::Record(fs, exact) => PatElem::Pat(Pat::Record {
+                    fields: self.pat_fields(fs)?,
+                    exact: *exact,
+                }),
                 SParam::Rest(n) => PatElem::Rest(Some(n.clone())),
             });
         }
@@ -541,7 +632,10 @@ impl<'a> Desugarer<'a> {
                 }
             }
         }
-        Ok(Match { scrutinee: None, items })
+        Ok(Match {
+            scrutinee: None,
+            items,
+        })
     }
 
     // ── Match arms and patterns ──────────────────────────────────────────────
@@ -572,14 +666,22 @@ impl<'a> Desugarer<'a> {
             }
             Some(p) => vec![p],
             None => {
-                return Ok(vec![Arm { pattern: None, guard: base_guard, result }]);
+                return Ok(vec![Arm {
+                    pattern: None,
+                    guard: base_guard,
+                    result,
+                }]);
             }
         };
 
         let mut out = Vec::with_capacity(patterns.len());
         for p in patterns {
             let (pat, guard) = self.arm_pattern(p, base_guard.clone())?;
-            out.push(Arm { pattern: Some(pat), guard, result: result.clone() });
+            out.push(Arm {
+                pattern: Some(pat),
+                guard,
+                result: result.clone(),
+            });
         }
         Ok(out)
     }
@@ -619,7 +721,11 @@ impl<'a> Desugarer<'a> {
     /// A guard is a strict tested seat; a `~`-loosened guard becomes the
     /// truthiness test (E10). Plain guards pass through as Boolean expressions.
     fn guard(&mut self, g: &SExpr) -> Result<Expr, DesugarError> {
-        if let SExpr::Unary { op: UnOp::Loosen, operand } = g {
+        if let SExpr::Unary {
+            op: UnOp::Loosen,
+            operand,
+        } = g
+        {
             let a = self.expr(operand)?;
             let (t, f) = (self.c_bool(true), self.c_bool(false));
             return Ok(self.falsy_set_match(a, f, t));
@@ -638,13 +744,12 @@ impl<'a> Desugarer<'a> {
             }),
             SPattern::Bind(n) => Pat::Bind(n.clone()),
             SPattern::Wild => Pat::Wild,
-            SPattern::Contract(n) => {
-                Pat::Contract(Ref::Immutable(BindingRef::Name(n.clone())))
-            }
+            SPattern::Contract(n) => Pat::Contract(Ref::Immutable(BindingRef::Name(n.clone()))),
             SPattern::Tuple(elems) => Pat::Tuple(self.pat_elems(elems)?),
-            SPattern::Record(fields, exact) => {
-                Pat::Record { fields: self.pat_fields(fields)?, exact: *exact }
-            }
+            SPattern::Record(fields, exact) => Pat::Record {
+                fields: self.pat_fields(fields)?,
+                exact: *exact,
+            },
             SPattern::Pin(_) | SPattern::PinHole(_) => {
                 return err("pins are only supported at the top level of an arm pattern (v0.1)");
             }
@@ -738,7 +843,10 @@ impl<'a> Desugarer<'a> {
 
         // Functional update: rebuild the root with the nested field replaced.
         let updated = self.field_update(&path.root, &fields, new_value);
-        Ok(Expr::Write { slot: SlotRef::Name(path.root.clone()), value: Box::new(updated) })
+        Ok(Expr::Write {
+            slot: SlotRef::Name(path.root.clone()),
+            value: Box::new(updated),
+        })
     }
 
     /// Read expression for a field path: `root.f1.f2…` (demand form).
@@ -769,7 +877,10 @@ impl<'a> Desugarer<'a> {
                     let inner = build(inner_base, rest, new_value);
                     Expr::RecordCons(vec![
                         Field::Spread(base),
-                        Field::Field { key: f.clone(), value: inner },
+                        Field::Field {
+                            key: f.clone(),
+                            value: inner,
+                        },
                     ])
                 }
             }
@@ -806,7 +917,11 @@ impl<'a> Desugarer<'a> {
                 Expr::Match(Match {
                     scrutinee: Some(Box::new(read)),
                     items: vec![
-                        MatchItem::Arm(Arm { pattern: Some(null_pat), guard: None, result: rhs }),
+                        MatchItem::Arm(Arm {
+                            pattern: Some(null_pat),
+                            guard: None,
+                            result: rhs,
+                        }),
                         MatchItem::Arm(Arm {
                             pattern: Some(Pat::Bind(v.clone())),
                             guard: None,
@@ -820,7 +935,10 @@ impl<'a> Desugarer<'a> {
 }
 
 fn prim(op: PrimOp, a: Expr, b: Expr) -> Expr {
-    Expr::PrimOp { op, args: vec![a, b] }
+    Expr::PrimOp {
+        op,
+        args: vec![a, b],
+    }
 }
 
 /// The first bound name in a surface pattern, if any — alternation alternatives

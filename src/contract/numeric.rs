@@ -63,10 +63,16 @@ impl Bound {
 
 impl Interval {
     pub fn unbounded() -> Interval {
-        Interval { low: Bound::Unbounded, high: Bound::Unbounded }
+        Interval {
+            low: Bound::Unbounded,
+            high: Bound::Unbounded,
+        }
     }
     pub fn point(v: Rational) -> Interval {
-        Interval { low: Bound::Incl(v.clone()), high: Bound::Incl(v) }
+        Interval {
+            low: Bound::Incl(v.clone()),
+            high: Bound::Incl(v),
+        }
     }
     /// Proven empty — the bounds cross, or meet at a point one side excludes.
     fn is_empty(&self) -> bool {
@@ -134,7 +140,10 @@ impl Congruence {
         Congruence { n, r }
     }
     fn exact(v: BigInt) -> Congruence {
-        Congruence { n: BigInt::zero(), r: v }
+        Congruence {
+            n: BigInt::zero(),
+            r: v,
+        }
     }
 
     fn add(&self, o: &Congruence) -> Congruence {
@@ -206,37 +215,54 @@ impl NumAbs {
 pub(crate) fn num_abs(c: &Contract) -> Option<NumAbs> {
     Some(match c {
         Contract::Kind(Kind::Number) => NumAbs::of(Interval::unbounded()),
-        Contract::Range(l, h) => {
-            NumAbs::of(Interval { low: Bound::Incl(l.clone()), high: Bound::Incl(h.clone()) })
-        }
-        Contract::Greater(m) => {
-            NumAbs::of(Interval { low: Bound::Excl(m.clone()), high: Bound::Unbounded })
-        }
-        Contract::GreaterEq(m) => {
-            NumAbs::of(Interval { low: Bound::Incl(m.clone()), high: Bound::Unbounded })
-        }
-        Contract::Less(m) => {
-            NumAbs::of(Interval { low: Bound::Unbounded, high: Bound::Excl(m.clone()) })
-        }
-        Contract::LessEq(m) => {
-            NumAbs::of(Interval { low: Bound::Unbounded, high: Bound::Incl(m.clone()) })
-        }
+        Contract::Range(l, h) => NumAbs::of(Interval {
+            low: Bound::Incl(l.clone()),
+            high: Bound::Incl(h.clone()),
+        }),
+        Contract::Greater(m) => NumAbs::of(Interval {
+            low: Bound::Excl(m.clone()),
+            high: Bound::Unbounded,
+        }),
+        Contract::GreaterEq(m) => NumAbs::of(Interval {
+            low: Bound::Incl(m.clone()),
+            high: Bound::Unbounded,
+        }),
+        Contract::Less(m) => NumAbs::of(Interval {
+            low: Bound::Unbounded,
+            high: Bound::Excl(m.clone()),
+        }),
+        Contract::LessEq(m) => NumAbs::of(Interval {
+            low: Bound::Unbounded,
+            high: Bound::Incl(m.clone()),
+        }),
         Contract::Equals(v) => {
             let q = v.as_number()?.clone();
-            let cong = q.is_integer().then(|| Congruence::exact(q.as_ratio().numer().clone()));
-            NumAbs { iv: Interval::point(q), cong }
+            let cong = q
+                .is_integer()
+                .then(|| Congruence::exact(q.as_ratio().numer().clone()));
+            NumAbs {
+                iv: Interval::point(q),
+                cong,
+            }
         }
         // The lattice: unbounded extent, exact congruence.
-        Contract::Mod { n, r } => {
-            NumAbs { iv: Interval::unbounded(), cong: Some(Congruence::new(n.clone(), r.clone())) }
-        }
+        Contract::Mod { n, r } => NumAbs {
+            iv: Interval::unbounded(),
+            cong: Some(Congruence::new(n.clone(), r.clone())),
+        },
         // `b, b·r, b·r², …` with `r > 1` — bounded on the side `b` sits.
         Contract::Geo { b, .. } => {
             let zero = Rational::from(0);
             let iv = if *b > zero {
-                Interval { low: Bound::Incl(b.clone()), high: Bound::Unbounded }
+                Interval {
+                    low: Bound::Incl(b.clone()),
+                    high: Bound::Unbounded,
+                }
             } else {
-                Interval { low: Bound::Unbounded, high: Bound::Incl(b.clone()) }
+                Interval {
+                    low: Bound::Unbounded,
+                    high: Bound::Incl(b.clone()),
+                }
             };
             NumAbs::of(iv)
         }
@@ -249,7 +275,10 @@ pub(crate) fn num_abs(c: &Contract) -> Option<NumAbs> {
                         (Some(p), None) => Some(p.clone()),
                         (None, q) => q.clone(),
                     };
-                    NumAbs { iv: meet(x.iv, y.iv), cong }
+                    NumAbs {
+                        iv: meet(x.iv, y.iv),
+                        cong,
+                    }
                 }
                 // `⟦A ∩ B⟧ ⊆ ⟦A⟧`, so one side alone already contains the meet.
                 (Some(x), None) | (None, Some(x)) => x,
@@ -262,7 +291,10 @@ pub(crate) fn num_abs(c: &Contract) -> Option<NumAbs> {
                 (Some(p), Some(q)) => Some(p.join(q)),
                 _ => None,
             };
-            NumAbs { iv: hull(x.iv, y.iv), cong }
+            NumAbs {
+                iv: hull(x.iv, y.iv),
+                cong,
+            }
         }
         // Dropping the exclusion only widens (sound) — but a **singleton exclusion sitting
         // on an endpoint** tightens that endpoint instead of being lost: `[0,∞) ∖ {0}` is
@@ -323,7 +355,11 @@ fn next_on_lattice(q: &Rational, c: &Congruence, up: bool) -> Option<Rational> {
         return None;
     }
     let qi = q.as_ratio().numer().clone();
-    let step = if up { BigInt::from(1) } else { BigInt::from(-1) };
+    let step = if up {
+        BigInt::from(1)
+    } else {
+        BigInt::from(-1)
+    };
     let mut v = &qi + &step;
     // At most `n` steps to the next residue-matching integer.
     for _ in 0..c.n.to_u32_digits().1.first().copied().unwrap_or(1).max(1) {
@@ -338,7 +374,11 @@ fn next_on_lattice(q: &Rational, c: &Congruence, up: bool) -> Option<Rational> {
 /// The hull (union) of two intervals: lowest low, highest high.
 pub(crate) fn hull(a: Interval, b: Interval) -> Interval {
     let low = if low_ge(&a.low, &b.low) { b.low } else { a.low };
-    let high = if high_le(&a.high, &b.high) { b.high } else { a.high };
+    let high = if high_le(&a.high, &b.high) {
+        b.high
+    } else {
+        a.high
+    };
     Interval { low, high }
 }
 
@@ -430,7 +470,10 @@ pub(crate) fn abs_neg(x: &NumAbs) -> NumAbs {
         Bound::Excl(v) => Bound::Excl(-v.clone()),
     };
     NumAbs {
-        iv: Interval { low: flip(&x.iv.high), high: flip(&x.iv.low) },
+        iv: Interval {
+            low: flip(&x.iv.high),
+            high: flip(&x.iv.low),
+        },
         cong: x.cong.as_ref().map(Congruence::neg),
     }
 }
@@ -445,7 +488,10 @@ pub(crate) fn abs_mul(x: &NumAbs, y: &NumAbs) -> NumAbs {
         (Some(p), Some(q)) if p.n.is_zero() => Some(q.scale(&p.r)),
         _ => None,
     };
-    NumAbs { iv: mul_iv(&x.iv, &y.iv), cong }
+    NumAbs {
+        iv: mul_iv(&x.iv, &y.iv),
+        cong,
+    }
 }
 
 /// An endpoint under **extended arithmetic** — a finite rational or a signed
@@ -537,7 +583,10 @@ fn from_corners(corners: &[Ext]) -> Interval {
             Bound::Unbounded
         }
     };
-    Interval { low: bound(lo, true), high: bound(hi, false) }
+    Interval {
+        low: bound(lo, true),
+        high: bound(hi, false),
+    }
 }
 
 /// The four corner products under extended arithmetic — total, and exact on the
@@ -545,8 +594,12 @@ fn from_corners(corners: &[Ext]) -> Interval {
 fn mul_iv(a: &Interval, b: &Interval) -> Interval {
     let (al, ah) = (low_ext(&a.low), high_ext(&a.high));
     let (bl, bh) = (low_ext(&b.low), high_ext(&b.high));
-    let corners =
-        [mul_ext(&al, &bl), mul_ext(&al, &bh), mul_ext(&ah, &bl), mul_ext(&ah, &bh)];
+    let corners = [
+        mul_ext(&al, &bl),
+        mul_ext(&al, &bh),
+        mul_ext(&ah, &bl),
+        mul_ext(&ah, &bh),
+    ];
     from_corners(&corners)
 }
 
@@ -558,8 +611,10 @@ pub(crate) fn abs_div(x: &NumAbs, y: &NumAbs) -> NumAbs {
     }
     let (al, ah) = (low_ext(&x.iv.low), high_ext(&x.iv.high));
     let (bl, bh) = (low_ext(&y.iv.low), high_ext(&y.iv.high));
-    let corners: Option<Vec<Ext>> =
-        [(&al, &bl), (&al, &bh), (&ah, &bl), (&ah, &bh)].iter().map(|(p, q)| div_ext(p, q)).collect();
+    let corners: Option<Vec<Ext>> = [(&al, &bl), (&al, &bh), (&ah, &bl), (&ah, &bh)]
+        .iter()
+        .map(|(p, q)| div_ext(p, q))
+        .collect();
     match corners {
         Some(cs) => NumAbs::of(from_corners(&cs)),
         None => NumAbs::of(Interval::unbounded()), // ∞/∞ — genuinely indeterminate
@@ -581,7 +636,10 @@ pub(crate) fn abs_rem(x: &NumAbs, y: &NumAbs) -> NumAbs {
             Bound::Incl(zero),
         ),
         SignClass::Unknown => (
-            bound.clone().map(|q| Bound::Excl(-q)).unwrap_or(Bound::Unbounded),
+            bound
+                .clone()
+                .map(|q| Bound::Excl(-q))
+                .unwrap_or(Bound::Unbounded),
             bound.map(Bound::Excl).unwrap_or(Bound::Unbounded),
         ),
     };
@@ -596,7 +654,11 @@ fn max_abs(iv: &Interval) -> Option<Rational> {
 }
 
 fn abs_rat(v: &Rational) -> Rational {
-    if *v < Rational::from(0) { -v.clone() } else { v.clone() }
+    if *v < Rational::from(0) {
+        -v.clone()
+    } else {
+        v.clone()
+    }
 }
 
 /// `**` — sign facts only (the exact image needs the exponent, which the singleton
@@ -609,7 +671,10 @@ pub(crate) fn abs_pow(x: &NumAbs, y: &NumAbs) -> NumAbs {
         .as_ref()
         .is_some_and(|c| c.n.is_zero() && (&c.r % BigInt::from(2)).is_zero());
     if sign_class(&x.iv) == SignClass::NonNeg || even_exponent {
-        return NumAbs::of(Interval { low: Bound::Incl(zero), high: Bound::Unbounded });
+        return NumAbs::of(Interval {
+            low: Bound::Incl(zero),
+            high: Bound::Unbounded,
+        });
     }
     NumAbs::of(Interval::unbounded())
 }
@@ -653,7 +718,11 @@ fn combine(a: &Bound, b: &Bound, f: impl Fn(Rational, Rational) -> Rational) -> 
     match (a.value(), b.value()) {
         (Some(p), Some(q)) => {
             let v = f(p.clone(), q.clone());
-            if a.is_incl() && b.is_incl() { Bound::Incl(v) } else { Bound::Excl(v) }
+            if a.is_incl() && b.is_incl() {
+                Bound::Incl(v)
+            } else {
+                Bound::Excl(v)
+            }
         }
         _ => Bound::Unbounded,
     }
@@ -675,11 +744,26 @@ fn both(
 /// module note on the direction asymmetry before reusing it for images.
 pub(crate) fn interval_exact(c: &Contract) -> Option<Interval> {
     Some(match c {
-        Contract::Range(lo, hi) => Interval { low: Bound::Incl(lo.clone()), high: Bound::Incl(hi.clone()) },
-        Contract::Greater(m) => Interval { low: Bound::Excl(m.clone()), high: Bound::Unbounded },
-        Contract::GreaterEq(m) => Interval { low: Bound::Incl(m.clone()), high: Bound::Unbounded },
-        Contract::Less(m) => Interval { low: Bound::Unbounded, high: Bound::Excl(m.clone()) },
-        Contract::LessEq(m) => Interval { low: Bound::Unbounded, high: Bound::Incl(m.clone()) },
+        Contract::Range(lo, hi) => Interval {
+            low: Bound::Incl(lo.clone()),
+            high: Bound::Incl(hi.clone()),
+        },
+        Contract::Greater(m) => Interval {
+            low: Bound::Excl(m.clone()),
+            high: Bound::Unbounded,
+        },
+        Contract::GreaterEq(m) => Interval {
+            low: Bound::Incl(m.clone()),
+            high: Bound::Unbounded,
+        },
+        Contract::Less(m) => Interval {
+            low: Bound::Unbounded,
+            high: Bound::Excl(m.clone()),
+        },
+        Contract::LessEq(m) => Interval {
+            low: Bound::Unbounded,
+            high: Bound::Incl(m.clone()),
+        },
         // Landing zones: an intersection of intervals is their meet (C§4).
         Contract::Intersection(a, b) => meet(interval_exact(a)?, interval_exact(b)?),
         _ => return None,
@@ -689,7 +773,11 @@ pub(crate) fn interval_exact(c: &Contract) -> Option<Interval> {
 /// The meet (intersection) of two intervals: highest low, lowest high.
 pub(crate) fn meet(a: Interval, b: Interval) -> Interval {
     let low = if low_ge(&a.low, &b.low) { a.low } else { b.low };
-    let high = if high_le(&a.high, &b.high) { a.high } else { b.high };
+    let high = if high_le(&a.high, &b.high) {
+        a.high
+    } else {
+        b.high
+    };
     Interval { low, high }
 }
 

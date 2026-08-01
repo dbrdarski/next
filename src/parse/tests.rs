@@ -28,13 +28,24 @@ fn id(s: &str) -> SExpr {
     SExpr::Ident(s.to_string())
 }
 fn b(op: BinOp, l: SExpr, r: SExpr) -> SExpr {
-    SExpr::Binary { op, left: Box::new(l), right: Box::new(r) }
+    SExpr::Binary {
+        op,
+        left: Box::new(l),
+        right: Box::new(r),
+    }
 }
 fn u(op: UnOp, e: SExpr) -> SExpr {
-    SExpr::Unary { op, operand: Box::new(e) }
+    SExpr::Unary {
+        op,
+        operand: Box::new(e),
+    }
 }
 fn pipe(dir: PipeDir, l: SExpr, r: SExpr) -> SExpr {
-    SExpr::Pipe { dir, left: Box::new(l), right: Box::new(r) }
+    SExpr::Pipe {
+        dir,
+        left: Box::new(l),
+        right: Box::new(r),
+    }
 }
 
 #[test]
@@ -42,7 +53,11 @@ fn pipes_left_associate_forward() {
     // a |> f |> g  ≡  g(f(a))  →  Pipe(Pipe(a,f),g)
     assert_eq!(
         expr("a |> f |> g"),
-        pipe(PipeDir::Forward, pipe(PipeDir::Forward, id("a"), id("f")), id("g"))
+        pipe(
+            PipeDir::Forward,
+            pipe(PipeDir::Forward, id("a"), id("f")),
+            id("g")
+        )
     );
 }
 
@@ -51,13 +66,20 @@ fn pipes_right_associate_backward() {
     // f <| g <| x  ≡  f(g(x))  →  Pipe(f, Pipe(g, x))
     assert_eq!(
         expr("f <| g <| x"),
-        pipe(PipeDir::Backward, id("f"), pipe(PipeDir::Backward, id("g"), id("x")))
+        pipe(
+            PipeDir::Backward,
+            id("f"),
+            pipe(PipeDir::Backward, id("g"), id("x"))
+        )
     );
 }
 
 #[test]
 fn mixed_pipes_are_a_parse_error() {
-    assert!(parse_err("a |> f <| b"), "unparenthesized pipe mixing must error");
+    assert!(
+        parse_err("a |> f <| b"),
+        "unparenthesized pipe mixing must error"
+    );
     // Parenthesized mixing is fine.
     assert!(!parse_err("(a |> f) <| b"));
 }
@@ -93,7 +115,10 @@ fn power_binds_tighter_than_unary_minus() {
 #[test]
 fn comparison_chain_parses_left_assoc() {
     // a < b < c parses as (a < b) < c — self-refutes at the contract level, not here.
-    assert_eq!(expr("a < b < c"), b(BinOp::Lt, b(BinOp::Lt, id("a"), id("b")), id("c")));
+    assert_eq!(
+        expr("a < b < c"),
+        b(BinOp::Lt, b(BinOp::Lt, id("a"), id("b")), id("c"))
+    );
 }
 
 #[test]
@@ -117,7 +142,10 @@ fn from_end_slice() {
     // t[-2...] — last two, clamped
     let slice = SExpr::Access {
         target: Box::new(id("t")),
-        form: SAccessForm::Slice { lo: Some(Box::new(u(UnOp::Neg, n(2)))), hi: None },
+        form: SAccessForm::Slice {
+            lo: Some(Box::new(u(UnOp::Neg, n(2)))),
+            hi: None,
+        },
         total: false,
     };
     assert_eq!(expr("t[-2...]"), slice);
@@ -210,7 +238,13 @@ fn match_left_of_pipe_and_arms() {
     // a |> b :: { ... }  ≡  (a |> b) :: { ... }
     match expr("a |> b :: {\n 0 => \"z\"\n _ => \"o\"\n }") {
         SExpr::Match { scrutinee, arms } => {
-            assert!(matches!(*scrutinee, SExpr::Pipe { dir: PipeDir::Forward, .. }));
+            assert!(matches!(
+                *scrutinee,
+                SExpr::Pipe {
+                    dir: PipeDir::Forward,
+                    ..
+                }
+            ));
             assert_eq!(arms.len(), 2);
             assert_eq!(arms[0].pattern, Some(SPattern::Number(Rational::from(0))));
             assert_eq!(arms[1].pattern, Some(SPattern::Wild));
@@ -315,7 +349,10 @@ fn import_and_module_header() {
     assert_eq!(prog.header, Some(vec!["App".into(), "Main".into()]));
     match &prog.statements[0] {
         SStmt::Import { names, module } => {
-            assert_eq!(names.as_deref(), Some(["a".to_string(), "b".to_string()].as_slice()));
+            assert_eq!(
+                names.as_deref(),
+                Some(["a".to_string(), "b".to_string()].as_slice())
+            );
             assert_eq!(module, &vec!["Foo".to_string(), "Bar".to_string()]);
         }
         other => panic!("expected import, got {other:?}"),

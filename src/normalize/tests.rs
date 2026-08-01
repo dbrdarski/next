@@ -15,7 +15,9 @@ use crate::value::ValueRef;
 type Observed = Result<ValueRef, TrapClass>;
 
 fn run(module: &Module, interner: &mut Interner) -> Observed {
-    Oracle::new(interner).run_module(module).map_err(|t| t.class)
+    Oracle::new(interner)
+        .run_module(module)
+        .map_err(|t| t.class)
 }
 
 /// Desugar a program, evaluate both it and its normalization, and confirm the
@@ -24,18 +26,26 @@ fn run(module: &Module, interner: &mut Interner) -> Observed {
 fn assert_normalization_sound(src: &str) {
     let mut interner = Interner::new();
     let sprogram = parse_program(lex(src).expect("lex")).expect("parse");
-    let module = Desugarer::new(&mut interner).program(&sprogram).expect("desugar");
+    let module = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .expect("desugar");
 
     let normalized = normalize_module(&module, &mut interner);
 
     // eval ∘ normalize = eval
     let original = run(&module, &mut interner);
     let after = run(&normalized, &mut interner);
-    assert_eq!(original, after, "normalization changed evaluation for:\n{src}");
+    assert_eq!(
+        original, after,
+        "normalization changed evaluation for:\n{src}"
+    );
 
     // idempotence: normalize(normalize(m)) == normalize(m)
     let twice = normalize_module(&normalized, &mut interner);
-    assert_eq!(twice, normalized, "normalization is not idempotent for:\n{src}");
+    assert_eq!(
+        twice, normalized,
+        "normalization is not idempotent for:\n{src}"
+    );
 }
 
 /// The corpus: a spread of programs exercising every node kind. Any future rule
@@ -104,7 +114,10 @@ fn interpolated_template_stays_a_template_with_folded_segments() {
             let mut prev_was_segment = false;
             for p in &parts {
                 let is_seg = matches!(p, TemplatePart::Segment(_));
-                assert!(!(is_seg && prev_was_segment), "adjacent segments not folded");
+                assert!(
+                    !(is_seg && prev_was_segment),
+                    "adjacent segments not folded"
+                );
                 prev_was_segment = is_seg;
             }
             assert!(parts.iter().any(|p| matches!(p, TemplatePart::Interp(_))));

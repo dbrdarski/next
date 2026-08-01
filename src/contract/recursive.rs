@@ -39,11 +39,15 @@ pub struct RecGroup {
 
 impl RecGroup {
     pub fn new(defs: impl IntoIterator<Item = (String, Contract)>) -> RecGroup {
-        RecGroup { defs: defs.into_iter().collect() }
+        RecGroup {
+            defs: defs.into_iter().collect(),
+        }
     }
 
     fn get(&self, name: &str) -> &Contract {
-        self.defs.get(name).expect("reference to a name outside its group")
+        self.defs
+            .get(name)
+            .expect("reference to a name outside its group")
     }
 
     fn is_member(&self, name: &str) -> bool {
@@ -92,17 +96,17 @@ fn check_positive(group: &RecGroup, c: &Contract, positive: bool) -> Result<(), 
             check_positive(group, b, positive)?;
             check_positive(group, e, !positive)
         }
-        Contract::Tuple(elems) => {
-            elems.iter().try_for_each(|e| check_positive(group, e, positive))
-        }
-        Contract::Record(fields) => {
-            fields.iter().try_for_each(|(_, e)| check_positive(group, e, positive))
-        }
+        Contract::Tuple(elems) => elems
+            .iter()
+            .try_for_each(|e| check_positive(group, e, positive)),
+        Contract::Record(fields) => fields
+            .iter()
+            .try_for_each(|(_, e)| check_positive(group, e, positive)),
         // `Concat` is positive in every segment (declared by the tuple family per
         // §1a's future-constructor rule).
-        Contract::Concat(segs) => {
-            segs.iter().try_for_each(|s| check_positive(group, s, positive))
-        }
+        Contract::Concat(segs) => segs
+            .iter()
+            .try_for_each(|s| check_positive(group, s, positive)),
         _ => Ok(()),
     }
 }
@@ -125,7 +129,10 @@ fn check_guarded(group: &RecGroup) -> Result<(), DefError> {
     for name in group.defs.keys() {
         if reaches_self(name, &succ) {
             let hint = guardedness_hint(group, name);
-            return Err(DefError::Unguarded { name: name.clone(), hint });
+            return Err(DefError::Unguarded {
+                name: name.clone(),
+                hint,
+            });
         }
     }
     Ok(())
@@ -167,7 +174,12 @@ fn collect_unguarded(group: &RecGroup, c: &Contract, out: &mut HashSet<String>) 
 }
 
 fn reaches_self(start: &str, succ: &BTreeMap<&str, HashSet<String>>) -> bool {
-    let mut stack: Vec<&str> = succ.get(start).into_iter().flatten().map(String::as_str).collect();
+    let mut stack: Vec<&str> = succ
+        .get(start)
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
     let mut seen = HashSet::new();
     while let Some(n) = stack.pop() {
         if n == start {
@@ -212,7 +224,10 @@ pub fn contains(group: &RecGroup, c: &Contract, v: &ValueRef) -> bool {
         Contract::Tuple(elems) => match v.as_tuple() {
             Some(items) => {
                 items.len() == elems.len()
-                    && items.iter().zip(elems).all(|(item, ce)| contains(group, ce, item))
+                    && items
+                        .iter()
+                        .zip(elems)
+                        .all(|(item, ce)| contains(group, ce, item))
             }
             None => false,
         },
@@ -276,7 +291,10 @@ fn window_contains(group: &RecGroup, c: &Contract, window: &[ValueRef]) -> bool 
         // A singleton admits exactly the window equal to it, elementwise.
         Contract::Equals(t) => t.as_tuple().is_some_and(|items| {
             items.len() == window.len()
-                && items.iter().zip(window).all(|(x, y)| crate::oracle::values_equal(x, y))
+                && items
+                    .iter()
+                    .zip(window)
+                    .all(|(x, y)| crate::oracle::values_equal(x, y))
         }),
         _ => false,
     }
@@ -312,7 +330,10 @@ impl EmptyEnv {
     fn analyze(group: &RecGroup, interner: &mut Interner) -> EmptyEnv {
         let productive = productivity(group, interner);
         let verdict = exactness(group, &productive, interner);
-        EmptyEnv { productive, verdict }
+        EmptyEnv {
+            productive,
+            verdict,
+        }
     }
 
     /// The emptiness voice of an arbitrary contract under this environment.
@@ -328,7 +349,11 @@ fn productivity(group: &RecGroup, interner: &mut Interner) -> BTreeMap<String, O
 
     loop {
         let mut changed = false;
-        let names: Vec<String> = states.iter().filter(|(_, s)| s.is_none()).map(|(n, _)| n.clone()).collect();
+        let names: Vec<String> = states
+            .iter()
+            .filter(|(_, s)| s.is_none())
+            .map(|(n, _)| n.clone())
+            .collect();
         for name in names {
             let def = group.get(&name).clone();
             if let Some(w) = prod_eval(group, &def, &states, interner) {
@@ -422,7 +447,9 @@ fn prod_eval(
         // no sample, so `None`, i.e. not-yet-productive).
         Contract::LengthRestricted(t, d) => super::subcontract::sample(t, interner)
             .into_iter()
-            .find(|x| super::value_length(x).is_some_and(|n| super::nat_in(d, n)) && contains(group, t, x)),
+            .find(|x| {
+                super::value_length(x).is_some_and(|n| super::nat_in(d, n)) && contains(group, t, x)
+            }),
     }
 }
 
@@ -448,7 +475,12 @@ fn exactness(
 ) -> BTreeMap<String, E3> {
     let mut verdict: BTreeMap<String, E3> = productive
         .iter()
-        .map(|(n, s)| (n.clone(), if s.is_some() { E3::NonEmpty } else { E3::Empty }))
+        .map(|(n, s)| {
+            (
+                n.clone(),
+                if s.is_some() { E3::NonEmpty } else { E3::Empty },
+            )
+        })
         .collect();
 
     loop {
@@ -516,8 +548,10 @@ fn exact_eval(
             }
         }
         Contract::Tuple(elems) => {
-            let voices: Vec<E3> =
-                elems.iter().map(|e| exact_eval(group, e, productive, verdict, interner)).collect();
+            let voices: Vec<E3> = elems
+                .iter()
+                .map(|e| exact_eval(group, e, productive, verdict, interner))
+                .collect();
             join_product(voices.into_iter())
         }
         // Every Concat segment is required, so the product join applies — exactly
@@ -525,8 +559,10 @@ fn exact_eval(
         // empty Concat as NonEmpty: unsound, since emptiness feeds subcontract
         // step 0.)
         Contract::Concat(segs) => {
-            let voices: Vec<E3> =
-                segs.iter().map(|s| exact_eval(group, s, productive, verdict, interner)).collect();
+            let voices: Vec<E3> = segs
+                .iter()
+                .map(|s| exact_eval(group, s, productive, verdict, interner))
+                .collect();
             join_product(voices.into_iter())
         }
         Contract::Record(fields) => {
@@ -539,10 +575,12 @@ fn exact_eval(
         // A length restriction is empty at least when its base is; when the base
         // is inhabited it may still be empty (no fitting length), so the witness
         // pass (`prod_eval`) settles NonEmpty vs Unproven.
-        Contract::LengthRestricted(t, _) => match exact_eval(group, t, productive, verdict, interner) {
-            E3::Empty => E3::Empty,
-            _ => E3::Unproven,
-        },
+        Contract::LengthRestricted(t, _) => {
+            match exact_eval(group, t, productive, verdict, interner) {
+                E3::Empty => E3::Empty,
+                _ => E3::Unproven,
+            }
+        }
         // Every remaining leaf (Top, non-Function Kind, bounds, Mod, Geo, Equals,
         // Indeterminate(F), HasField) is inhabited.
         _ => E3::NonEmpty,
@@ -569,7 +607,11 @@ fn join_product(parts: impl Iterator<Item = E3>) -> E3 {
             E3::NonEmpty => {}
         }
     }
-    if all_nonempty { E3::NonEmpty } else { E3::Unproven }
+    if all_nonempty {
+        E3::NonEmpty
+    } else {
+        E3::Unproven
+    }
 }
 
 /// The emptiness verdict of every group member.
@@ -612,7 +654,12 @@ pub fn emptiness(group: &RecGroup, interner: &mut Interner) -> BTreeMap<String, 
 /// descend into paired components, `Equals` decides exactly by membership, and
 /// leaf pairs bottom out in disjointness plus a sampled common witness.
 #[allow(clippy::mutable_key_type)] // keys embed immutable interned values (stable hash/eq)
-fn intersection_emptiness(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut Interner) -> Emptiness {
+fn intersection_emptiness(
+    group: &RecGroup,
+    a: &Contract,
+    b: &Contract,
+    interner: &mut Interner,
+) -> Emptiness {
     let mut visiting: HashSet<(Contract, Contract)> = HashSet::new();
     inter(group, a, b, &mut visiting, interner)
 }
@@ -629,10 +676,18 @@ fn inter(
 
     // Singletons decide exactly: `Equals(v) ∩ B` is `{v}` if `v ∈ B`, else empty.
     if let Equals(v) = a {
-        return if contains(group, b, v) { Emptiness::NonEmpty(v.clone()) } else { Emptiness::Empty };
+        return if contains(group, b, v) {
+            Emptiness::NonEmpty(v.clone())
+        } else {
+            Emptiness::Empty
+        };
     }
     if let Equals(v) = b {
-        return if contains(group, a, v) { Emptiness::NonEmpty(v.clone()) } else { Emptiness::Empty };
+        return if contains(group, a, v) {
+            Emptiness::NonEmpty(v.clone())
+        } else {
+            Emptiness::Empty
+        };
     }
 
     // Reference resolution introduces a product state; cut a revisited pair.
@@ -757,7 +812,12 @@ const REFUTE_DEPTH: usize = 4;
 // `Contract` keys embed interned `ValueRef`s. Interned values are immutable, so
 // their hash/eq are stable — the `mutable_key_type` lint's concern does not apply.
 #[allow(clippy::mutable_key_type)]
-pub fn subcontract(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut Interner) -> Verdict {
+pub fn subcontract(
+    group: &RecGroup,
+    a: &Contract,
+    b: &Contract,
+    interner: &mut Interner,
+) -> Verdict {
     let env = EmptyEnv::analyze(group, interner);
     let mut assumed: HashMap<(Contract, Contract), usize> = HashMap::new();
     if prove(group, &env, a, b, 0, &mut assumed, interner) {
@@ -776,10 +836,18 @@ pub fn subcontract(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut 
 /// increasing unfolding depth. Every returned witness is re-checked against both
 /// sides, so the verdict is sound (bounded, hence incomplete — a deeper-only
 /// counterexample stays `Unproven`).
-fn refute(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut Interner) -> Option<ValueRef> {
+fn refute(
+    group: &RecGroup,
+    a: &Contract,
+    b: &Contract,
+    interner: &mut Interner,
+) -> Option<ValueRef> {
     for depth in 0..=REFUTE_DEPTH {
         let candidates = inhabitants(group, a, depth, interner);
-        if let Some(w) = candidates.into_iter().find(|w| contains(group, a, w) && !contains(group, b, w)) {
+        if let Some(w) = candidates
+            .into_iter()
+            .find(|w| contains(group, a, w) && !contains(group, b, w))
+        {
             return Some(w);
         }
     }
@@ -789,7 +857,12 @@ fn refute(group: &RecGroup, a: &Contract, b: &Contract, interner: &mut Interner)
 /// A bounded set of finite inhabitants of `c`, unfolding references up to `depth`.
 /// References past the budget contribute nothing (that branch simply yields fewer
 /// witnesses — soundness is unaffected because every witness is re-verified).
-fn inhabitants(group: &RecGroup, c: &Contract, depth: usize, interner: &mut Interner) -> Vec<ValueRef> {
+fn inhabitants(
+    group: &RecGroup,
+    c: &Contract,
+    depth: usize,
+    interner: &mut Interner,
+) -> Vec<ValueRef> {
     // Keep the per-node fan-out small; a counterexample needs only one witness.
     const FANOUT: usize = 3;
     match c {
@@ -816,14 +889,18 @@ fn inhabitants(group: &RecGroup, c: &Contract, depth: usize, interner: &mut Inte
             v
         }
         Contract::Tuple(elems) => {
-            let per: Vec<Vec<ValueRef>> =
-                elems.iter().map(|e| take(inhabitants(group, e, depth, interner), FANOUT)).collect();
+            let per: Vec<Vec<ValueRef>> = elems
+                .iter()
+                .map(|e| take(inhabitants(group, e, depth, interner), FANOUT))
+                .collect();
             product_values(&per, interner, false, &[])
         }
         // A Concat inhabitant is a segment-wise choice, concatenated.
         Contract::Concat(segs) => {
-            let per: Vec<Vec<ValueRef>> =
-                segs.iter().map(|s| take(inhabitants(group, s, depth, interner), FANOUT)).collect();
+            let per: Vec<Vec<ValueRef>> = segs
+                .iter()
+                .map(|s| take(inhabitants(group, s, depth, interner), FANOUT))
+                .collect();
             if per.iter().any(|c| c.is_empty()) {
                 return vec![];
             }
@@ -846,13 +923,24 @@ fn inhabitants(group: &RecGroup, c: &Contract, depth: usize, interner: &mut Inte
             out
         }
         Contract::Record(fields) => {
-            let keys: Vec<Vec<u16>> = fields.iter().map(|(k, _)| k.encode_utf16().collect()).collect();
-            let per: Vec<Vec<ValueRef>> =
-                fields.iter().map(|(_, e)| take(inhabitants(group, e, depth, interner), FANOUT)).collect();
+            let keys: Vec<Vec<u16>> = fields
+                .iter()
+                .map(|(k, _)| k.encode_utf16().collect())
+                .collect();
+            let per: Vec<Vec<ValueRef>> = fields
+                .iter()
+                .map(|(_, e)| take(inhabitants(group, e, depth, interner), FANOUT))
+                .collect();
             product_values(&per, interner, true, &keys)
         }
         // Leaves — a few concrete samples, re-filtered by membership.
-        _ => take(super::subcontract::sample(c, interner).into_iter().filter(|v| c.contains(v)).collect(), FANOUT),
+        _ => take(
+            super::subcontract::sample(c, interner)
+                .into_iter()
+                .filter(|v| c.contains(v))
+                .collect(),
+            FANOUT,
+        ),
     }
 }
 
@@ -863,7 +951,12 @@ fn take(mut v: Vec<ValueRef>, n: usize) -> Vec<ValueRef> {
 
 /// Assemble tuple/record values from a per-component inhabitant grid (bounded
 /// cartesian product). If any component is empty, there are no inhabitants.
-fn product_values(per: &[Vec<ValueRef>], interner: &mut Interner, record: bool, keys: &[Vec<u16>]) -> Vec<ValueRef> {
+fn product_values(
+    per: &[Vec<ValueRef>],
+    interner: &mut Interner,
+    record: bool,
+    keys: &[Vec<u16>],
+) -> Vec<ValueRef> {
     const CAP: usize = 12;
     if per.iter().any(|c| c.is_empty()) {
         return vec![];
@@ -942,13 +1035,29 @@ fn prove_body(
     // μ-head traversal — resolve references without incrementing depth.
     match a {
         Contract::Ref(name) if group.is_member(name) => {
-            return prove(group, env, group.get(name), b, source_progress, assumed, interner);
+            return prove(
+                group,
+                env,
+                group.get(name),
+                b,
+                source_progress,
+                assumed,
+                interner,
+            );
         }
         _ => {}
     }
     match b {
         Contract::Ref(name) if group.is_member(name) => {
-            return prove(group, env, a, group.get(name), source_progress, assumed, interner);
+            return prove(
+                group,
+                env,
+                a,
+                group.get(name),
+                source_progress,
+                assumed,
+                interner,
+            );
         }
         _ => {}
     }
@@ -1002,10 +1111,14 @@ fn prove_body(
         }
         (Contract::Record(fa), Contract::Record(fb)) => {
             fa.len() == fb.len()
-                && fa.iter().all(|(key, ca)| match fb.iter().find(|(k, _)| k == key) {
-                    Some((_, cb)) => prove(group, env, ca, cb, source_progress + 1, assumed, interner),
-                    None => false,
-                })
+                && fa
+                    .iter()
+                    .all(|(key, ca)| match fb.iter().find(|(k, _)| k == key) {
+                        Some((_, cb)) => {
+                            prove(group, env, ca, cb, source_progress + 1, assumed, interner)
+                        }
+                        None => false,
+                    })
         }
         // Leaf pair — neither side recursive here; the C.2 check is complete.
         _ => matches!(super::subcontract(a, b, interner), Verdict::Proven),

@@ -101,9 +101,8 @@ fn join_completion(a: CompletionWithoutValue, b: CompletionWithoutValue) -> Comp
     match (a, b) {
         (CompletionWithoutValue::ProvenPresent(w), _) => CompletionWithoutValue::ProvenPresent(w),
         (_, CompletionWithoutValue::ProvenPresent(w)) => CompletionWithoutValue::ProvenPresent(w),
-        (CompletionWithoutValue::UnprovenPossible, _) | (_, CompletionWithoutValue::UnprovenPossible) => {
-            CompletionWithoutValue::UnprovenPossible
-        }
+        (CompletionWithoutValue::UnprovenPossible, _)
+        | (_, CompletionWithoutValue::UnprovenPossible) => CompletionWithoutValue::UnprovenPossible,
         _ => CompletionWithoutValue::ProvenAbsent,
     }
 }
@@ -145,7 +144,10 @@ pub fn admit_callee(meta: &InstanceMetadata, world_admits: impl Fn(ActKind) -> b
     match meta {
         InstanceMetadata::Unknown => Verdict::Unproven,
         InstanceMetadata::Known(s) => {
-            let all_admitted = s.iter().filter(|i| !i.is_empty()).all(|i| world_admits(i.shape.act_kind));
+            let all_admitted = s
+                .iter()
+                .filter(|i| !i.is_empty())
+                .all(|i| world_admits(i.shape.act_kind));
             if all_admitted {
                 Verdict::Proven
             } else {
@@ -239,10 +241,9 @@ pub(crate) fn operand_from_annotated(
 fn callee_branches(callee: &AnalysisContract) -> Vec<AnalysisContract> {
     match callee {
         AnalysisContract::Bottom => Vec::new(),
-        AnalysisContract::Alt(alternatives) => alternatives
-            .iter()
-            .flat_map(callee_branches)
-            .collect(),
+        AnalysisContract::Alt(alternatives) => {
+            alternatives.iter().flat_map(callee_branches).collect()
+        }
         AnalysisContract::Leaf { contract, metadata } => match contract {
             Contract::Union(left, right) => [left, right]
                 .into_iter()
@@ -313,11 +314,17 @@ pub fn live_alternatives(operand: &AnalysisContract) -> (Vec<Alternative>, bool)
                 let combos = cross_product(&positions);
                 let out = combos
                     .into_iter()
-                    .map(|combo| Alternative { callee: combo[0].clone(), arguments: combo[1..].to_vec() })
+                    .map(|combo| Alternative {
+                        callee: combo[0].clone(),
+                        arguments: combo[1..].to_vec(),
+                    })
                     .collect();
                 (out, false)
             } else {
-                let alt = Alternative { callee: elems[0].clone(), arguments: elems[1..].to_vec() };
+                let alt = Alternative {
+                    callee: elems[0].clone(),
+                    arguments: elems[1..].to_vec(),
+                };
                 (vec![alt], true)
             }
         }

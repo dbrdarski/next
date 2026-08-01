@@ -141,17 +141,22 @@ tuple/record cycles all produce one exposed pointer. Distinct captures, act kind
 remain distinct. MU-18 is live: an interleaved `a == a` inside `a`/`b`'s open window traps
 `unbound-evaluation`. A machinery gate prevents routing runtime equality back through Algorithm B.
 
-Remaining measured P0 implementation drift, to be recovered in authority order:
+The twelfth repair closes the repository-wide formatting gate. `cargo fmt --all` was applied as one
+mechanical Rust-only rewrite after the semantic repairs, and `cargo fmt --all -- --check` is now
+green. The semantic, machinery, lint, and normative-manifest gates retain the same outcomes after the
+rewrite.
 
-1. The repository-wide formatting gate is red (measured separately below).
+**Remaining measured P0 implementation drift: none in this recovery rebaseline.** This does not mean
+the language implementation is complete: the ignored and staged work recorded below remains outside
+the P0 recovery set.
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
 demand's realized-refutation consumer, source-level AP-29 operand propagation, exact function
-operation transfer, and universal function construction/interning are complete. Next is the measured
-repository formatting debt. Normative files remain manifest-protected and are not edited by these
-implementation slices.
+operation transfer, universal function construction/interning, and repository formatting are
+complete. Normative files remain manifest-protected and were not edited by these implementation
+slices.
 
 ---
 
@@ -361,11 +366,11 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **427 passed, 0 failed, 1 ignored** (exact-singleton chain) |
-| `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
-| `cargo test --test machinery_gate` | **9 passed, 0 failed** |
+| `cargo test --lib` | **437 passed, 0 failed, 1 ignored** (exact-singleton chain) |
+| `cargo test --test conformance` | **113 passed, 0 failed, 11 ignored** (MU-18 activated) |
+| `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
-| `cargo fmt --check` | **FAILED** — 8,695 formatting output lines |
+| `cargo fmt --all -- --check` | **PASS** |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /

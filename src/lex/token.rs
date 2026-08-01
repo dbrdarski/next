@@ -60,47 +60,47 @@ pub enum TokenKind {
     DotDotDot,
 
     // ── Operators (§1.6) ─────────────────────────────────────────────────────
-    FatArrow,          // =>
-    ColonColon,        // ::
-    PipeGt,            // |>
-    LtPipe,            // <|
-    Hash,              // #
-    Question,          // ?
-    Colon,             // :
-    QuestionDot,       // ?.
-    QuestionQuestion,  // ??
-    PipePipe,          // ||
-    AmpAmp,            // &&
-    EqEq,              // ==
-    BangEq,            // !=
-    Lt,                // <
-    Le,                // <=
-    Gt,                // >
-    Ge,                // >=
-    Plus,              // +
-    Minus,             // -
-    Star,              // *
-    Slash,             // /
-    Percent,           // %
-    StarStar,          // **
-    Bang,              // !
-    Tilde,             // ~
-    Eq,                // =
-    At,                // @
-    Caret,             // ^
-    Pipe,              // |  (pattern alternation only)
+    FatArrow,         // =>
+    ColonColon,       // ::
+    PipeGt,           // |>
+    LtPipe,           // <|
+    Hash,             // #
+    Question,         // ?
+    Colon,            // :
+    QuestionDot,      // ?.
+    QuestionQuestion, // ??
+    PipePipe,         // ||
+    AmpAmp,           // &&
+    EqEq,             // ==
+    BangEq,           // !=
+    Lt,               // <
+    Le,               // <=
+    Gt,               // >
+    Ge,               // >=
+    Plus,             // +
+    Minus,            // -
+    Star,             // *
+    Slash,            // /
+    Percent,          // %
+    StarStar,         // **
+    Bang,             // !
+    Tilde,            // ~
+    Eq,               // =
+    At,               // @
+    Caret,            // ^
+    Pipe,             // |  (pattern alternation only)
 
     // ── Mutation compound assignment (statement-level, §2.4) ─────────────────
-    ColonEq,           // :=
-    PlusEq,            // +:=
-    MinusEq,           // -:=
-    StarEq,            // *:=
-    SlashEq,           // /:=
-    PercentEq,         // %:=
-    StarStarEq,        // **:=
-    AmpAmpEq,          // &&:=
-    PipePipeEq,        // ||:=
-    QuestionQuestionEq,// ??:=
+    ColonEq,            // :=
+    PlusEq,             // +:=
+    MinusEq,            // -:=
+    StarEq,             // *:=
+    SlashEq,            // /:=
+    PercentEq,          // %:=
+    StarStarEq,         // **:=
+    AmpAmpEq,           // &&:=
+    PipePipeEq,         // ||:=
+    QuestionQuestionEq, // ??:=
 
     /// End of input.
     Eof,

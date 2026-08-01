@@ -48,7 +48,10 @@ pub(super) fn canonicalize(lambda: &Lambda, interner: &mut Interner) -> Shape {
     };
     let code = c.lambda(lambda);
     let code = super::poly::normalize_lambda(&code, interner);
-    Shape { code, free_vars: c.free }
+    Shape {
+        code,
+        free_vars: c.free,
+    }
 }
 
 struct Canon {
@@ -69,7 +72,10 @@ impl Canon {
 
     fn bind(&mut self, name: &str) -> String {
         let canonical = self.fresh_bound();
-        self.scopes.last_mut().expect("a scope is open").insert(name.to_string(), canonical.clone());
+        self.scopes
+            .last_mut()
+            .expect("a scope is open")
+            .insert(name.to_string(), canonical.clone());
         canonical
     }
 
@@ -92,7 +98,11 @@ impl Canon {
         let params = self.pattern(&l.params);
         let body = self.expr(&l.body);
         self.scopes.pop();
-        Lambda { params, body: Box::new(body), act_kind: l.act_kind }
+        Lambda {
+            params,
+            body: Box::new(body),
+            act_kind: l.act_kind,
+        }
     }
 
     fn expr(&mut self, e: &Expr) -> Expr {
@@ -109,14 +119,24 @@ impl Canon {
                 args: args.iter().map(|a| self.expr(a)).collect(),
             },
             Expr::Match(m) => Expr::Match(self.match_expr(m)),
-            Expr::TupleCons(elems) => Expr::TupleCons(elems.iter().map(|el| self.element(el)).collect()),
-            Expr::RecordCons(fields) => Expr::RecordCons(fields.iter().map(|f| self.field(f)).collect()),
-            Expr::Access { target, form, total } => Expr::Access {
+            Expr::TupleCons(elems) => {
+                Expr::TupleCons(elems.iter().map(|el| self.element(el)).collect())
+            }
+            Expr::RecordCons(fields) => {
+                Expr::RecordCons(fields.iter().map(|f| self.field(f)).collect())
+            }
+            Expr::Access {
+                target,
+                form,
+                total,
+            } => Expr::Access {
                 target: Box::new(self.expr(target)),
                 form: self.access_form(form),
                 total: *total,
             },
-            Expr::Template(parts) => Expr::Template(parts.iter().map(|p| self.template_part(p)).collect()),
+            Expr::Template(parts) => {
+                Expr::Template(parts.iter().map(|p| self.template_part(p)).collect())
+            }
             Expr::Write { slot, value } => Expr::Write {
                 slot: self.slot_ref(slot),
                 value: Box::new(self.expr(value)),
@@ -162,9 +182,10 @@ impl Canon {
             .items
             .iter()
             .map(|item| match item {
-                MatchItem::Bind(Bind { target: BindTarget::Name(name), .. }) => {
-                    Some(self.bind(name))
-                }
+                MatchItem::Bind(Bind {
+                    target: BindTarget::Name(name),
+                    ..
+                }) => Some(self.bind(name)),
                 _ => None,
             })
             .collect();
@@ -179,7 +200,11 @@ impl Canon {
                         }
                         _ => self.bind_target(&b.target),
                     };
-                    MatchItem::Bind(Bind { target, value, exported: b.exported })
+                    MatchItem::Bind(Bind {
+                        target,
+                        value,
+                        exported: b.exported,
+                    })
                 }
                 MatchItem::Stmt(e) => MatchItem::Stmt(self.expr(e)),
                 MatchItem::Arm(arm) => {
@@ -188,7 +213,11 @@ impl Canon {
                     let guard = arm.guard.as_ref().map(|g| self.expr(g));
                     let result = self.expr(&arm.result);
                     self.scopes.pop();
-                    MatchItem::Arm(Arm { pattern, guard, result })
+                    MatchItem::Arm(Arm {
+                        pattern,
+                        guard,
+                        result,
+                    })
                 }
             });
         }
@@ -219,10 +248,14 @@ impl Canon {
 
     fn field(&mut self, f: &Field) -> Field {
         match f {
-            Field::Field { key, value } => Field::Field { key: key.clone(), value: self.expr(value) },
-            Field::Computed { key, value } => {
-                Field::Computed { key: self.expr(key), value: self.expr(value) }
-            }
+            Field::Field { key, value } => Field::Field {
+                key: key.clone(),
+                value: self.expr(value),
+            },
+            Field::Computed { key, value } => Field::Computed {
+                key: self.expr(key),
+                value: self.expr(value),
+            },
             Field::Spread(e) => Field::Spread(self.expr(e)),
         }
     }
@@ -270,7 +303,10 @@ impl Canon {
 
     fn pat_field(&mut self, f: &PatField) -> PatField {
         match f {
-            PatField::Field { key, pat } => PatField::Field { key: key.clone(), pat: self.pattern(pat) },
+            PatField::Field { key, pat } => PatField::Field {
+                key: key.clone(),
+                pat: self.pattern(pat),
+            },
             PatField::Rest(Some(n)) => PatField::Rest(Some(self.bind(n))),
             PatField::Rest(None) => PatField::Rest(None),
         }

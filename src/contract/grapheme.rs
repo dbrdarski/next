@@ -57,7 +57,10 @@ pub struct Summary {
 impl Summary {
     /// Summarize a literal string.
     pub fn of_literal(units: &[u16]) -> Summary {
-        Summary { count: count(units), units: units.to_vec() }
+        Summary {
+            count: count(units),
+            units: units.to_vec(),
+        }
     }
 
     /// Concatenate two summaries. Exact for literals: the seam is recomputed by the
@@ -67,7 +70,10 @@ impl Summary {
     pub fn compose(&self, rhs: &Summary) -> Summary {
         let mut joined = self.units.clone();
         joined.extend_from_slice(&rhs.units);
-        Summary { count: count(&joined), units: joined }
+        Summary {
+            count: count(&joined),
+            units: joined,
+        }
     }
 
     /// The seam delta `count(a ++ b) − count(a) − count(b)`. Always `≤ 0` (clustering
@@ -86,7 +92,10 @@ impl Summary {
 /// is the `Approx` fallback for abstract string operands, until string-length
 /// contracts and the finite boundary-state lift land; use [`Summary::compose`] for
 /// the exact literal seam.
-pub fn concat_len_bound(a: (usize, Option<usize>), b: (usize, Option<usize>)) -> (usize, Option<usize>) {
+pub fn concat_len_bound(
+    a: (usize, Option<usize>),
+    b: (usize, Option<usize>),
+) -> (usize, Option<usize>) {
     let lo = a.0;
     let hi = match (a.1, b.1) {
         (Some(x), Some(y)) => Some(x + y),

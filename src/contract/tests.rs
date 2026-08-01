@@ -38,7 +38,9 @@ fn eval_in(i: &mut Interner, src: &str) -> ValueRef {
     let tokens = lex(src).expect("lex ok");
     let surface = parse_program(tokens).expect("parse ok");
     let module = Desugarer::new(i).program(&surface).expect("desugar ok");
-    Oracle::new(i).run_module(&module).expect("evaluated without trapping")
+    Oracle::new(i)
+        .run_module(&module)
+        .expect("evaluated without trapping")
 }
 
 #[test]
@@ -117,7 +119,10 @@ fn numeric_bounds_and_range() {
 fn modular_contract() {
     let mut i = Interner::new();
     // even numbers: x ≡ 0 (mod 2)
-    let even = Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) };
+    let even = Contract::Mod {
+        n: BigInt::from(2),
+        r: BigInt::from(0),
+    };
     assert!(even.contains(&i.integer(0)));
     assert!(even.contains(&i.integer(4)));
     assert!(even.contains(&i.integer(-6)));
@@ -125,7 +130,10 @@ fn modular_contract() {
     // non-integers are excluded
     assert!(!even.contains(&i.number(rat(1, 2))));
     // x ≡ 1 (mod 3)
-    let m = Contract::Mod { n: BigInt::from(3), r: BigInt::from(1) };
+    let m = Contract::Mod {
+        n: BigInt::from(3),
+        r: BigInt::from(1),
+    };
     assert!(m.contains(&i.integer(1)));
     assert!(m.contains(&i.integer(4)));
     assert!(m.contains(&i.integer(-2))); // -2 ≡ 1 (mod 3)
@@ -253,12 +261,18 @@ fn function_kind_and_equality() {
 use super::{Verdict, subcontract};
 
 fn proven(a: &Contract, b: &Contract, i: &mut Interner) {
-    assert!(matches!(subcontract(a, b, i), Verdict::Proven), "expected {a:?} ⊑ {b:?} proven");
+    assert!(
+        matches!(subcontract(a, b, i), Verdict::Proven),
+        "expected {a:?} ⊑ {b:?} proven"
+    );
 }
 fn refuted(a: &Contract, b: &Contract, i: &mut Interner) {
     match subcontract(a, b, i) {
         Verdict::Refuted(w) => {
-            assert!(a.contains(&w) && !b.contains(&w), "witness {w:?} must be in A\\B");
+            assert!(
+                a.contains(&w) && !b.contains(&w),
+                "witness {w:?} must be in A\\B"
+            );
         }
         v => panic!("expected {a:?} ⊑ {b:?} refuted, got {v:?}"),
     }
@@ -496,7 +510,10 @@ fn operation_add_type_mismatch_refuted() {
     );
     match res.safety {
         OpSafety::Refuted(w) => {
-            assert!(eval_prim(PrimOp::Add, &w, &mut i).is_err(), "witness must trap");
+            assert!(
+                eval_prim(PrimOp::Add, &w, &mut i).is_err(),
+                "witness must trap"
+            );
         }
         other => panic!("expected Refuted, got {other:?}"),
     }
@@ -510,11 +527,23 @@ fn operation_division_is_total() {
     let a = Contract::Kind(Kind::Number);
     let b = Contract::Range(r(0), r(10));
     let res = analyze_operation(PrimOp::Div, &[a, b], &mut i);
-    assert!(matches!(res.safety, OpSafety::Proven), "division never traps");
+    assert!(
+        matches!(res.safety, OpSafety::Proven),
+        "division never traps"
+    );
     let one_over_zero = eval_prim(PrimOp::Div, &[i.integer(1), i.integer(0)], &mut i).unwrap();
-    assert!(res.output.contains(&one_over_zero), "output must cover specific 1/0");
-    assert!(res.output.contains(&div_zero(&mut i, 2)), "output must cover specific 2/0");
-    assert!(!res.output.contains(&mod_zero(&mut i, 2)), "division must not produce ModZero");
+    assert!(
+        res.output.contains(&one_over_zero),
+        "output must cover specific 1/0"
+    );
+    assert!(
+        res.output.contains(&div_zero(&mut i, 2)),
+        "output must cover specific 2/0"
+    );
+    assert!(
+        !res.output.contains(&mod_zero(&mut i, 2)),
+        "division must not produce ModZero"
+    );
     proven(&res.output, &Contract::numeric(&mut i), &mut i);
     // A nonzero divisor drops Indeterminate from the image.
     let safe = analyze_operation(
@@ -566,7 +595,10 @@ fn operation_equality_agrees_with_oracle_for_equal_function_singletons() {
 
     let eq = analyze_operation(
         PrimOp::Eq,
-        &[Contract::Equals(left.clone()), Contract::Equals(right.clone())],
+        &[
+            Contract::Equals(left.clone()),
+            Contract::Equals(right.clone()),
+        ],
         &mut i,
     );
     let ne = analyze_operation(
@@ -604,21 +636,36 @@ fn rulebook_additive_bounds_compose() {
     // Half-lines compose — the gap that motivated F0 (the algebra has no infinity,
     // so half-lines *are* the unbounded form).
     assert_eq!(
-        out(PrimOp::Add, &[Contract::GreaterEq(r(8)), Contract::GreaterEq(r(10))], &mut i),
+        out(
+            PrimOp::Add,
+            &[Contract::GreaterEq(r(8)), Contract::GreaterEq(r(10))],
+            &mut i
+        ),
         Contract::GreaterEq(r(18))
     );
     // Strictness rides along: inclusive only when both are.
     assert_eq!(
-        out(PrimOp::Add, &[Contract::Greater(r(0)), Contract::GreaterEq(r(5))], &mut i),
+        out(
+            PrimOp::Add,
+            &[Contract::Greater(r(0)), Contract::GreaterEq(r(5))],
+            &mut i
+        ),
         Contract::Greater(r(5))
     );
     // Subtraction pairs each bound with the subtrahend's *opposite* bound.
     assert_eq!(
-        out(PrimOp::Sub, &[Contract::Range(r(0), r(10)), Contract::Greater(r(0))], &mut i),
+        out(
+            PrimOp::Sub,
+            &[Contract::Range(r(0), r(10)), Contract::Greater(r(0))],
+            &mut i
+        ),
         Contract::Less(r(10))
     );
     // Negation flips a half-line.
-    assert_eq!(out(PrimOp::Neg, &[Contract::GreaterEq(r(3))], &mut i), Contract::LessEq(r(-3)));
+    assert_eq!(
+        out(PrimOp::Neg, &[Contract::GreaterEq(r(3))], &mut i),
+        Contract::LessEq(r(-3))
+    );
 }
 
 #[test]
@@ -660,12 +707,20 @@ fn rulebook_multiplicative_signs_and_form_preservation() {
     let mut i = Interner::new();
     // Corner products under extended arithmetic — no sign-class special-casing.
     assert_eq!(
-        out(PrimOp::Mul, &[Contract::Range(r(-5), r(2)), Contract::Range(r(3), r(4))], &mut i),
+        out(
+            PrimOp::Mul,
+            &[Contract::Range(r(-5), r(2)), Contract::Range(r(3), r(4))],
+            &mut i
+        ),
         Contract::Range(r(-20), r(8))
     );
     // `0 · ∞ = 0` keeps a non-negative half-line non-negative rather than unbounded.
     assert_eq!(
-        out(PrimOp::Mul, &[Contract::GreaterEq(r(0)), Contract::GreaterEq(r(0))], &mut i),
+        out(
+            PrimOp::Mul,
+            &[Contract::GreaterEq(r(0)), Contract::GreaterEq(r(0))],
+            &mut i
+        ),
         Contract::GreaterEq(r(0))
     );
     // Table C — form preservation: scaling a geometric sequence stays geometric.
@@ -680,28 +735,51 @@ fn rulebook_multiplicative_signs_and_form_preservation() {
 #[test]
 fn rulebook_comparisons_decide_when_bounds_decide() {
     let mut i = Interner::new();
-    let (t, f) = (Contract::Equals(i.boolean(true)), Contract::Equals(i.boolean(false)));
+    let (t, f) = (
+        Contract::Equals(i.boolean(true)),
+        Contract::Equals(i.boolean(false)),
+    );
     // Disjoint ranges settle the comparison — this is what lets a guard resolve.
     assert_eq!(
-        out(PrimOp::Lt, &[Contract::Range(r(0), r(5)), Contract::GreaterEq(r(10))], &mut i),
+        out(
+            PrimOp::Lt,
+            &[Contract::Range(r(0), r(5)), Contract::GreaterEq(r(10))],
+            &mut i
+        ),
         t
     );
     assert_eq!(
-        out(PrimOp::Ge, &[Contract::Range(r(0), r(5)), Contract::GreaterEq(r(10))], &mut i),
+        out(
+            PrimOp::Ge,
+            &[Contract::Range(r(0), r(5)), Contract::GreaterEq(r(10))],
+            &mut i
+        ),
         f
     );
     // Touching at an included point: `≤` holds everywhere, `<` does not.
     assert_eq!(
-        out(PrimOp::Le, &[Contract::LessEq(r(3)), Contract::GreaterEq(r(3))], &mut i),
+        out(
+            PrimOp::Le,
+            &[Contract::LessEq(r(3)), Contract::GreaterEq(r(3))],
+            &mut i
+        ),
         t
     );
     assert_eq!(
-        out(PrimOp::Lt, &[Contract::LessEq(r(3)), Contract::GreaterEq(r(3))], &mut i),
+        out(
+            PrimOp::Lt,
+            &[Contract::LessEq(r(3)), Contract::GreaterEq(r(3))],
+            &mut i
+        ),
         Contract::Kind(Kind::Boolean)
     );
     // Overlapping ranges stay honestly undecided.
     assert_eq!(
-        out(PrimOp::Lt, &[Contract::Range(r(0), r(10)), Contract::Range(r(5), r(20))], &mut i),
+        out(
+            PrimOp::Lt,
+            &[Contract::Range(r(0), r(10)), Contract::Range(r(5), r(20))],
+            &mut i
+        ),
         Contract::Kind(Kind::Boolean)
     );
 }
@@ -710,26 +788,55 @@ fn rulebook_comparisons_decide_when_bounds_decide() {
 fn rulebook_division_is_total_and_remainder_is_bounded() {
     let mut i = Interner::new();
     // Total division: a possibly-zero divisor widens the Number image to Numeric.
-    let res = analyze_operation(PrimOp::Div, &[Contract::Range(r(1), r(4)), Contract::Range(r(0), r(2))], &mut i);
-    assert!(matches!(res.safety, OpSafety::Proven), "division never traps");
+    let res = analyze_operation(
+        PrimOp::Div,
+        &[Contract::Range(r(1), r(4)), Contract::Range(r(0), r(2))],
+        &mut i,
+    );
+    assert!(
+        matches!(res.safety, OpSafety::Proven),
+        "division never traps"
+    );
     let div0 = div_zero(&mut i, 1);
-    assert!(res.output.contains(&div0), "the image must carry specific `1/0`");
-    assert!(!res.output.contains(&mod_zero(&mut i, 1)), "division has the DivZero form only");
+    assert!(
+        res.output.contains(&div0),
+        "the image must carry specific `1/0`"
+    );
+    assert!(
+        !res.output.contains(&mod_zero(&mut i, 1)),
+        "division has the DivZero form only"
+    );
     let rem_zero = analyze_operation(
         PrimOp::Rem,
         &[Contract::Range(r(1), r(4)), Contract::Range(r(0), r(2))],
         &mut i,
     );
-    assert!(rem_zero.output.contains(&mod_zero(&mut i, 1)), "the image must carry specific `1%0`");
-    assert!(!rem_zero.output.contains(&div_zero(&mut i, 1)), "remainder has the ModZero form only");
+    assert!(
+        rem_zero.output.contains(&mod_zero(&mut i, 1)),
+        "the image must carry specific `1%0`"
+    );
+    assert!(
+        !rem_zero.output.contains(&div_zero(&mut i, 1)),
+        "remainder has the ModZero form only"
+    );
     // `%` is bounded by the divisor's magnitude, with the sign following the dividend.
-    let rem = out(PrimOp::Rem, &[Contract::GreaterEq(r(0)), Contract::Range(r(3), r(5))], &mut i);
+    let rem = out(
+        PrimOp::Rem,
+        &[Contract::GreaterEq(r(0)), Contract::Range(r(3), r(5))],
+        &mut i,
+    );
     for v in [0, 1, 4] {
         let x = i.integer(v);
-        assert!(rem.contains(&x), "{v} is a possible non-negative remainder: {rem:?}");
+        assert!(
+            rem.contains(&x),
+            "{v} is a possible non-negative remainder: {rem:?}"
+        );
     }
     let neg = i.integer(-1);
-    assert!(!rem.contains(&neg), "a non-negative dividend cannot give a negative remainder: {rem:?}");
+    assert!(
+        !rem.contains(&neg),
+        "a non-negative dividend cannot give a negative remainder: {rem:?}"
+    );
 }
 
 #[test]
@@ -740,16 +847,32 @@ fn rulebook_requires_indeterminate_discharge_at_strict_number_seats() {
     // The consuming algebra is open, so arithmetic and ordering are strict
     // Number seats. A represented witness of either form must refute safety.
     for indet in [exact_div_zero(&mut i, 1), exact_mod_zero(&mut i, 1)] {
-        for op in [PrimOp::Add, PrimOp::Sub, PrimOp::Mul, PrimOp::Div, PrimOp::Rem, PrimOp::Pow] {
+        for op in [
+            PrimOp::Add,
+            PrimOp::Sub,
+            PrimOp::Mul,
+            PrimOp::Div,
+            PrimOp::Rem,
+            PrimOp::Pow,
+        ] {
             let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
-            assert!(matches!(res.safety, OpSafety::Refuted(_)), "{op:?} on Indeterminate must be Refuted");
+            assert!(
+                matches!(res.safety, OpSafety::Refuted(_)),
+                "{op:?} on Indeterminate must be Refuted"
+            );
         }
         let res = analyze_operation(PrimOp::Neg, std::slice::from_ref(&indet), &mut i);
-        assert!(matches!(res.safety, OpSafety::Refuted(_)), "unary `-` on Indeterminate must be Refuted");
+        assert!(
+            matches!(res.safety, OpSafety::Refuted(_)),
+            "unary `-` on Indeterminate must be Refuted"
+        );
 
         for op in [PrimOp::Lt, PrimOp::Le, PrimOp::Gt, PrimOp::Ge] {
             let res = analyze_operation(op, &[indet.clone(), num.clone()], &mut i);
-            assert!(matches!(res.safety, OpSafety::Refuted(_)), "{op:?} on Indeterminate must be Refuted");
+            assert!(
+                matches!(res.safety, OpSafety::Refuted(_)),
+                "{op:?} on Indeterminate must be Refuted"
+            );
         }
 
         // `==`/`!=` are total on every value, Indeterminate included.
@@ -770,7 +893,10 @@ fn operation_soundness_sweep() {
     // The **coverage matrix**: every numeric leaf form the rulebook claims to read,
     // with sign variants (a single all-positive representative hides sign bugs in
     // `*`, `/`, `%`), plus the composites and the non-numeric forms.
-    let ints = |n: i64, rr: i64| Contract::Mod { n: BigInt::from(n), r: BigInt::from(rr) };
+    let ints = |n: i64, rr: i64| Contract::Mod {
+        n: BigInt::from(n),
+        r: BigInt::from(rr),
+    };
     let inputs = vec![
         // non-numeric / catch-all
         Contract::Top,
@@ -1061,7 +1187,10 @@ mod rec {
         for name in ["A", "B"] {
             match &e[name] {
                 recursive::Emptiness::NonEmpty(w) => {
-                    assert!(recursive::contains(&g, &rec_ref(name), w), "{name} witness invalid");
+                    assert!(
+                        recursive::contains(&g, &rec_ref(name), w),
+                        "{name} witness invalid"
+                    );
                 }
                 other => panic!("{name} expected NonEmpty, got {other:?}"),
             }
@@ -1205,7 +1334,11 @@ mod rec {
         assert!(matches!(v, Verdict::Proven), "reflexive B ⊑ B, got {v:?}");
         // The group is inhabited (B via the empty tuple, then A via {seq: []}).
         let e = recursive::emptiness(&g, &mut i);
-        assert!(matches!(e["A"], recursive::Emptiness::NonEmpty(_)), "got {:?}", e["A"]);
+        assert!(
+            matches!(e["A"], recursive::Emptiness::NonEmpty(_)),
+            "got {:?}",
+            e["A"]
+        );
         assert!(matches!(e["B"], recursive::Emptiness::NonEmpty(_)));
     }
 
@@ -1637,7 +1770,8 @@ mod contract_expr {
             eval_contract(&cref("Indeterminate"), &env, &mut i),
             Some(Contract::indeterminate(&mut i))
         );
-        let numeric = eval_contract(&cref("Numeric"), &env, &mut i).expect("Numeric prelude contract");
+        let numeric =
+            eval_contract(&cref("Numeric"), &env, &mut i).expect("Numeric prelude contract");
         assert!(numeric.contains(&i.integer(3)));
         assert!(numeric.contains(&div_zero(&mut i, 1)));
         assert!(numeric.contains(&mod_zero(&mut i, 1)));
@@ -1812,10 +1946,7 @@ mod tl {
             name,
             union(
                 Contract::tuple(vec![], i),
-                Contract::concat(
-                    [Contract::tuple(vec![element], i), rec_ref(name)],
-                    i,
-                ),
+                Contract::concat([Contract::tuple(vec![element], i), rec_ref(name)], i),
                 i,
             ),
         )])
@@ -1967,7 +2098,10 @@ mod tl {
         }
         for odd in [1, 3, 5, 7, 11] {
             assert!(ls.contract.contains(&i.integer(odd)), "S admits {odd}");
-            assert!(!lr.contract.contains(&i.integer(odd)), "R rejects {odd} — parity preserved");
+            assert!(
+                !lr.contract.contains(&i.integer(odd)),
+                "R rejects {odd} — parity preserved"
+            );
         }
     }
 
@@ -2169,7 +2303,10 @@ mod tl {
         // legitimate. The discipline we assert: the witness genuinely inhabits R∖P.
         match recursive::subcontract(&g, &rec_ref("R"), &rec_ref("P"), &mut i) {
             Verdict::Refuted(w) => {
-                assert!(recursive::contains(&g, &rec_ref("R"), &w), "witness ∈ R (realizable)");
+                assert!(
+                    recursive::contains(&g, &rec_ref("R"), &w),
+                    "witness ∈ R (realizable)"
+                );
                 assert!(!recursive::contains(&g, &rec_ref("P"), &w), "witness ∉ P");
             }
             // Unproven is also acceptable — never a manufactured length refutation.
@@ -2201,7 +2338,10 @@ mod tl {
         assert!(recursive::contains(&g, &unrolled, &single));
 
         // A restriction that can't lower falls to the symbolic LengthRestricted.
-        let modular = Contract::Mod { n: BigInt::from(2), r: BigInt::from(0) }; // even lengths
+        let modular = Contract::Mod {
+            n: BigInt::from(2),
+            r: BigInt::from(0),
+        }; // even lengths
         let symbolic = restrict_len(&g, &rec_ref("R"), &modular, &mut i);
         assert!(matches!(symbolic, Contract::LengthRestricted(_, _)));
         // Membership still exact: even-length all-Number tuples only.
@@ -2458,7 +2598,9 @@ mod seams {
     }
     /// The exact composed grapheme count of two literals, through the summary.
     fn seam(a: &str, b: &str) -> usize {
-        Summary::of_literal(&u(a)).compose(&Summary::of_literal(&u(b))).count
+        Summary::of_literal(&u(a))
+            .compose(&Summary::of_literal(&u(b)))
+            .count
     }
     fn delta(a: &str, b: &str) -> isize {
         Summary::of_literal(&u(a)).seam_delta(&Summary::of_literal(&u(b)))
@@ -2482,9 +2624,21 @@ mod seams {
         let woman = WOMAN;
         let zwj_family = format!("{ZWJ}{WOMAN}{ZWJ}{GIRL}");
         assert_eq!(count(&u(woman)), 1, "👩 is one grapheme");
-        assert_eq!(count(&u(&zwj_family)), 2, "‍👩‍👧 (leading ZWJ) is two graphemes");
-        assert_eq!(seam(woman, &zwj_family), 1, "the whole join is one family cluster");
-        assert_eq!(delta(woman, &zwj_family), -2, "seam delta below −1 (the retired interval)");
+        assert_eq!(
+            count(&u(&zwj_family)),
+            2,
+            "‍👩‍👧 (leading ZWJ) is two graphemes"
+        );
+        assert_eq!(
+            seam(woman, &zwj_family),
+            1,
+            "the whole join is one family cluster"
+        );
+        assert_eq!(
+            delta(woman, &zwj_family),
+            -2,
+            "seam delta below −1 (the retired interval)"
+        );
         // The right operand is fully absorbed: count(a++b) = 1 < count(b) = 2. The
         // left count is a floor, the right count is not.
         assert!(seam(woman, &zwj_family) < count(&u(&zwj_family)));
@@ -2500,14 +2654,22 @@ mod seams {
         assert_eq!(delta(RI_A, RI_B), -1);
         let flag_ab = format!("{RI_A}{RI_B}");
         assert_eq!(count(&u(&flag_ab)), 1);
-        assert_eq!(seam(&flag_ab, RI_C), 2, "even run leaves the next RI unpaired");
+        assert_eq!(
+            seam(&flag_ab, RI_C),
+            2,
+            "even run leaves the next RI unpaired"
+        );
         assert_eq!(delta(&flag_ab, RI_C), 0);
     }
 
     #[test]
     fn tl09_combining_mark_and_hangul_merge() {
         // A base + a following combining mark is one cluster: e ++ ´ → é (1), delta −1.
-        assert_eq!(seam("e", ACUTE), 1, "base + combining acute is one grapheme");
+        assert_eq!(
+            seam("e", ACUTE),
+            1,
+            "base + combining acute is one grapheme"
+        );
         assert_eq!(delta("e", ACUTE), -1);
         // Hangul L + V compose one syllable block (GB6): delta −1.
         assert_eq!(seam(HANGUL_L, HANGUL_V), 1, "L + V is one syllable cluster");
@@ -2534,7 +2696,10 @@ mod seams {
         // cross-check on the segmenter-owned seam, never the proof.
         let flag = format!("{RI_A}{RI_B}");
         let family = format!("{ZWJ}{WOMAN}{ZWJ}{GIRL}");
-        let corpus = ["", "a", "ab", WOMAN, GIRL, ZWJ, RI_A, RI_B, RI_C, ACUTE, HANGUL_L, HANGUL_V, &flag, &family];
+        let corpus = [
+            "", "a", "ab", WOMAN, GIRL, ZWJ, RI_A, RI_B, RI_C, ACUTE, HANGUL_L, HANGUL_V, &flag,
+            &family,
+        ];
         for a in corpus {
             for b in corpus {
                 let sa = Summary::of_literal(&u(a));
@@ -2542,7 +2707,11 @@ mod seams {
                 let composed = sa.compose(&sb);
                 let joined = format!("{a}{b}");
                 // Exact for literal–literal.
-                assert_eq!(composed.count, count(&u(&joined)), "compose exact for {a:?}++{b:?}");
+                assert_eq!(
+                    composed.count,
+                    count(&u(&joined)),
+                    "compose exact for {a:?}++{b:?}"
+                );
                 // Merges-only, asymmetric floor: count(a) ≤ count(a++b) ≤ count(a)+count(b).
                 let (ca, cb, cj) = (sa.count, sb.count, composed.count);
                 assert!(cj <= ca + cb, "no split: {a:?}++{b:?}");
@@ -2550,7 +2719,10 @@ mod seams {
                 // Associativity: (a·b)·c == a·(b·c) on counts, spot-checked with `a`.
                 let via_left = sa.compose(&sb).compose(&Summary::of_literal(&u("a")));
                 let via_right = sa.compose(&sb.compose(&Summary::of_literal(&u("a"))));
-                assert_eq!(via_left.count, via_right.count, "associative on {a:?}++{b:?}++'a'");
+                assert_eq!(
+                    via_left.count, via_right.count,
+                    "associative on {a:?}++{b:?}++'a'"
+                );
             }
         }
     }
@@ -2567,7 +2739,10 @@ mod seams {
                 let (ca, cb) = (count(&u(a)), count(&u(b)));
                 let (lo, hi) = concat_len_bound((ca, Some(ca)), (cb, Some(cb)));
                 let actual = seam(a, b);
-                assert!(lo <= actual && actual <= hi.unwrap(), "{a:?}++{b:?} in bound");
+                assert!(
+                    lo <= actual && actual <= hi.unwrap(),
+                    "{a:?}++{b:?} in bound"
+                );
             }
         }
     }

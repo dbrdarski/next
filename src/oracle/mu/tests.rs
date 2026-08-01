@@ -45,13 +45,21 @@ fn codes(src: &str) -> Vec<String> {
 fn mu01_non_recursive_binding_has_no_mu() {
     // A binding that does not reference itself is plain code — no μ introduced.
     let k = keys("a = (n) => n + 1");
-    assert!(!k["a"].contains("mu["), "no μ for a non-recursive binding: {}", k["a"]);
+    assert!(
+        !k["a"].contains("mu["),
+        "no μ for a non-recursive binding: {}",
+        k["a"]
+    );
 }
 
 #[test]
 fn self_recursion_introduces_a_single_slot_mu() {
     let k = keys("f = (n) => n == 0 ? 0 : f(n - 1)");
-    assert!(k["f"].contains("mu[1]"), "self-recursion is a 1-slot μ: {}", k["f"]);
+    assert!(
+        k["f"].contains("mu[1]"),
+        "self-recursion is a 1-slot μ: {}",
+        k["f"]
+    );
     assert!(k["f"].contains("μ⟨0,0⟩"), "the self-reference is a μ-ref");
 }
 
@@ -60,19 +68,35 @@ fn mu03_minimal_group_splits_out_acyclic_neighbour() {
     // {a, b} mutually recurse (a 2-slot μ); c references a but a does not
     // reference c, so c is NOT bound into the μ (law 3 / law 1).
     let k = keys("a = () => b\nb = () => a\nc = () => a");
-    assert!(k["a"].starts_with("mu[2]"), "a is a 2-slot μ member: {}", k["a"]);
-    assert!(k["b"].starts_with("mu[2]"), "b is a 2-slot μ member: {}", k["b"]);
+    assert!(
+        k["a"].starts_with("mu[2]"),
+        "a is a 2-slot μ member: {}",
+        k["a"]
+    );
+    assert!(
+        k["b"].starts_with("mu[2]"),
+        "b is a 2-slot μ member: {}",
+        k["b"]
+    );
     // c is NOT itself a μ-group member — its key is plain code that *references*
     // the group by canonical key (law 3 / law 1: the acyclic neighbour splits out).
     assert!(!k["c"].starts_with("mu["), "c is not μ-bound: {}", k["c"]);
-    assert!(k["c"].contains("k[mu["), "c references the group by canonical key: {}", k["c"]);
+    assert!(
+        k["c"].contains("k[mu["),
+        "c references the group by canonical key: {}",
+        k["c"]
+    );
 }
 
 #[test]
 fn mu06_invariant_under_renaming() {
     // Renaming the group members must not change the canonical codes.
-    let a = codes("isEven = (n) => n == 0 ? true : isOdd(n - 1)\nisOdd = (n) => n == 0 ? false : isEven(n - 1)");
-    let b = codes("evenP = (n) => n == 0 ? true : oddP(n - 1)\noddP = (n) => n == 0 ? false : evenP(n - 1)");
+    let a = codes(
+        "isEven = (n) => n == 0 ? true : isOdd(n - 1)\nisOdd = (n) => n == 0 ? false : isEven(n - 1)",
+    );
+    let b = codes(
+        "evenP = (n) => n == 0 ? true : oddP(n - 1)\noddP = (n) => n == 0 ? false : evenP(n - 1)",
+    );
     assert_eq!(a, b, "canonical codes invariant under renaming");
 }
 

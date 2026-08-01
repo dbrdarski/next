@@ -79,7 +79,10 @@ impl InstanceMetadata {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum AnalysisContract {
     /// A scalar/opaque position: an ordinary contract with function-position metadata.
-    Leaf { contract: Contract, metadata: InstanceMetadata },
+    Leaf {
+        contract: Contract,
+        metadata: InstanceMetadata,
+    },
     /// A tuple with positional annotated elements — structure preserved.
     Tuple(Vec<AnalysisContract>),
     /// A record with annotated fields (static string keys).
@@ -180,7 +183,9 @@ impl AnalysisContract {
         if matches!(contract, Contract::Bottom) {
             return AnalysisContract::Bottom;
         }
-        if matches!(&metadata, InstanceMetadata::Known(s) if s.is_empty()) && is_function_only(&contract) {
+        if matches!(&metadata, InstanceMetadata::Known(s) if s.is_empty())
+            && is_function_only(&contract)
+        {
             return AnalysisContract::Bottom;
         }
         AnalysisContract::Leaf { contract, metadata }
@@ -205,7 +210,10 @@ impl AnalysisContract {
     /// A union of correlated alternatives, bottom branches dropped; an empty union is
     /// bottom, a singleton collapses.
     pub fn alt(alternatives: Vec<AnalysisContract>) -> AnalysisContract {
-        let mut live: Vec<AnalysisContract> = alternatives.into_iter().filter(|a| !a.is_bottom()).collect();
+        let mut live: Vec<AnalysisContract> = alternatives
+            .into_iter()
+            .filter(|a| !a.is_bottom())
+            .collect();
         match live.len() {
             0 => AnalysisContract::Bottom,
             1 => live.pop().unwrap(),
@@ -344,7 +352,9 @@ impl AnalysisContract {
                     .iter()
                     .map(|alternative| alternative.singleton_value(interner));
                 let first = values.next()??;
-                values.all(|value| value.is_some_and(|value| value == first)).then_some(first)
+                values
+                    .all(|value| value.is_some_and(|value| value == first))
+                    .then_some(first)
             }
         }
     }
@@ -355,7 +365,9 @@ impl AnalysisContract {
     fn metadata_free(&self) -> bool {
         match self {
             AnalysisContract::Bottom => true,
-            AnalysisContract::Leaf { metadata, .. } => matches!(metadata, InstanceMetadata::Unknown),
+            AnalysisContract::Leaf { metadata, .. } => {
+                matches!(metadata, InstanceMetadata::Unknown)
+            }
             AnalysisContract::Tuple(es) => es.iter().all(AnalysisContract::metadata_free),
             AnalysisContract::Record(fs) => fs.iter().all(|(_, v)| v.metadata_free()),
             AnalysisContract::Alt(alts) => alts.iter().all(AnalysisContract::metadata_free),
@@ -487,7 +499,11 @@ pub fn gamma_contains(ac: &AnalysisContract, v: &ValueRef, interner: &mut Intern
 /// distribute); leaf∩leaf uses the coverage-normalized metadata meet; a mixed
 /// structural/leaf pair falls back to a leaf over the erased intersection (sound,
 /// coarse). No lower-bound or idempotence reasoning may rest on the result.
-pub fn intersect_a(a: &AnalysisContract, b: &AnalysisContract, interner: &mut Interner) -> AnalysisContract {
+pub fn intersect_a(
+    a: &AnalysisContract,
+    b: &AnalysisContract,
+    interner: &mut Interner,
+) -> AnalysisContract {
     match (a, b) {
         (AnalysisContract::Bottom, _) | (_, AnalysisContract::Bottom) => AnalysisContract::Bottom,
         (AnalysisContract::Alt(alts), other) | (other, AnalysisContract::Alt(alts)) => {
@@ -543,7 +559,11 @@ fn same_keys(fa: &[(String, AnalysisContract)], fb: &[(String, AnalysisContract)
 /// The metadata meet (leaf level): `Unknown ∩ M = M`; `Known(S) ∩ Known(T)` is the
 /// coverage-normalized same-shape meet (`s ⊑ t ⇒ s`, else the [`meet_instance`] of
 /// overlapping environments).
-fn meet_metadata(a: &InstanceMetadata, b: &InstanceMetadata, interner: &mut Interner) -> InstanceMetadata {
+fn meet_metadata(
+    a: &InstanceMetadata,
+    b: &InstanceMetadata,
+    interner: &mut Interner,
+) -> InstanceMetadata {
     match (a, b) {
         (InstanceMetadata::Unknown, m) | (m, InstanceMetadata::Unknown) => m.clone(),
         (InstanceMetadata::Known(s), InstanceMetadata::Known(t)) => {
@@ -585,7 +605,10 @@ pub fn meet_instance(i: &Instance, j: &Instance, interner: &mut Interner) -> Opt
         }
         env.push(m);
     }
-    Some(Instance { shape: i.shape.clone(), env })
+    Some(Instance {
+        shape: i.shape.clone(),
+        env,
+    })
 }
 
 // ── proveSubcontractA — the annotated three-valued subcontract ────────────────
@@ -594,7 +617,11 @@ pub fn meet_instance(i: &Instance, j: &Instance, interner: &mut Interner) -> Opt
 /// deliberately incomplete, three-valued. Recurses through structure; a `Refuted`
 /// witness must be γ-representable; a proof needs erased inclusion **and** either a
 /// metadata-free target or leaf-level metadata coverage.
-pub fn prove_subcontract_a(a: &AnalysisContract, b: &AnalysisContract, interner: &mut Interner) -> Verdict {
+pub fn prove_subcontract_a(
+    a: &AnalysisContract,
+    b: &AnalysisContract,
+    interner: &mut Interner,
+) -> Verdict {
     match (a, b) {
         (AnalysisContract::Bottom, _) => Verdict::Proven, // ∅ ⊑ anything
         (AnalysisContract::Alt(alts), _) => {
@@ -683,7 +710,9 @@ fn covers(s: &InstanceMetadata, t: &InstanceMetadata, interner: &mut Interner) -
                 if si.is_empty() {
                     continue;
                 }
-                let covered = tgt.iter().any(|ti| matches!(instance_covers(si, ti, interner), Verdict::Proven));
+                let covered = tgt
+                    .iter()
+                    .any(|ti| matches!(instance_covers(si, ti, interner), Verdict::Proven));
                 if !covered {
                     return Verdict::Unproven;
                 }

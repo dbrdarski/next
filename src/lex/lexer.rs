@@ -47,7 +47,12 @@ struct Lexer {
 
 impl Lexer {
     fn new(src: &str) -> Lexer {
-        Lexer { src: src.chars().collect(), pos: 0, line: 1, prev: None }
+        Lexer {
+            src: src.chars().collect(),
+            pos: 0,
+            line: 1,
+            prev: None,
+        }
     }
 
     // ── Character cursor ─────────────────────────────────────────────────────
@@ -85,7 +90,10 @@ impl Lexer {
     }
 
     fn err<T>(&self, message: impl Into<String>) -> Result<T, LexError> {
-        Err(LexError { message: message.into(), line: self.line })
+        Err(LexError {
+            message: message.into(),
+            line: self.line,
+        })
     }
 
     // ── Driver ───────────────────────────────────────────────────────────────
@@ -305,7 +313,10 @@ impl Lexer {
             '@' => At,
             '^' => Caret,
             '|' => Pipe,
-            '&' => return self.err("`&` is not an operator (bitwise family discarded); did you mean `&&`?"),
+            '&' => {
+                return self
+                    .err("`&` is not an operator (bitwise family discarded); did you mean `&&`?");
+            }
             '$' => return self.err("`$` is only valid inside template interpolation"),
             other => return self.err(format!("unexpected character `{other}`")),
         };
@@ -369,11 +380,10 @@ impl Lexer {
                     if digits.is_empty() {
                         return self.err("missing digits after base prefix");
                     }
-                    let n = BigInt::from_str_radix(&digits, radix)
-                        .map_err(|_| LexError {
-                            message: format!("invalid base-{radix} literal"),
-                            line: start_line,
-                        })?;
+                    let n = BigInt::from_str_radix(&digits, radix).map_err(|_| LexError {
+                        message: format!("invalid base-{radix} literal"),
+                        line: start_line,
+                    })?;
                     self.reject_bigint_suffix()?;
                     return Ok(Rational::from_integer(n));
                 }
@@ -586,10 +596,14 @@ impl Lexer {
                         return self.err("unterminated `\\u{...}` escape");
                     }
                     self.bump(); // `}`
-                    let cp = u32::from_str_radix(&hex, 16)
-                        .map_err(|_| LexError { message: "invalid `\\u{...}` escape".into(), line: self.line })?;
-                    let ch = char::from_u32(cp)
-                        .ok_or(LexError { message: "invalid Unicode scalar in escape".into(), line: self.line })?;
+                    let cp = u32::from_str_radix(&hex, 16).map_err(|_| LexError {
+                        message: "invalid `\\u{...}` escape".into(),
+                        line: self.line,
+                    })?;
+                    let ch = char::from_u32(cp).ok_or(LexError {
+                        message: "invalid Unicode scalar in escape".into(),
+                        line: self.line,
+                    })?;
                     push_utf16(out, ch); // astral → surrogate pair
                 } else {
                     // \uXXXX — a single UTF-16 code unit (may be a surrogate half).
