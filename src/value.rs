@@ -142,8 +142,16 @@ pub struct FnValue {
 }
 
 impl FnValue {
-    pub fn new(shape: Lambda, free_vars: Vec<String>, closure: Closure) -> FnValue {
-        FnValue { shape: Rc::new(shape), free_vars: Rc::new(free_vars), closure: Rc::new(closure) }
+    /// `shape` must come from [`crate::interner::Interner::intern_code`] — the interned
+    /// canonical code, so that identical shapes share one allocation and compare by pointer.
+    pub fn new(shape: Rc<Lambda>, free_vars: Vec<String>, closure: Closure) -> FnValue {
+        FnValue { shape, free_vars: Rc::new(free_vars), closure: Rc::new(closure) }
+    }
+
+    /// The interned canonical code, as a pointer. Identical shapes share it, so
+    /// `Rc::ptr_eq` on this is exact shape identity — no structural walk.
+    pub fn shape_rc(&self) -> Rc<Lambda> {
+        Rc::clone(&self.shape)
     }
 
     /// The canonical code (shape) — the function's node label for equality.

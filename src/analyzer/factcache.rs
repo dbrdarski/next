@@ -20,6 +20,12 @@
 //! would be a closure allocation, and closures are plain allocations rather than hash-consed
 //! values, so two spellings of one function would miss each other.
 //!
+//! The shape is **interned** (`Interner::intern_code`) and the key compares it by pointer,
+//! per "every key interned pointers". Structural hashing happens once per distinct shape at
+//! closure construction, never per lookup. The capture and input contracts are still compared
+//! structurally — contracts are not interned anywhere in this implementation, which is a
+//! separate and larger gap against the same rule, recorded here rather than fixed.
+//!
 //! **KNOWN GAP — this is the layer-1 shape, and C§13.4 specifies the layer-2 shape.**
 //! `oracle::canon` implements algorithm A (α-renaming, capture slots, polynomial NF).
 //! The μ-binder minimization — SCC grouping, positional μ-refs, canonical slot order — lives
@@ -45,6 +51,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::analyzer::induction::Claim;
@@ -59,10 +66,31 @@ use crate::value::ValueRef;
 /// contract for a return fact and is the discriminator for safety/completion facts.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct FactKey {
-    shape: Rc<Lambda>,
+    shape: CodePtr,
     captures: Vec<Contract>,
     input: Vec<Contract>,
     claim: Claim,
+}
+
+/// Interned canonical code, compared and hashed **by pointer**.
+///
+/// `Rc<Lambda>`'s derived `PartialEq`/`Hash` walk the whole syntax tree; since
+/// `Interner::intern_code` guarantees identical shapes share one allocation, the pointer
+/// already decides it. This is the "same value = same pointer" rule applied to code, and it
+/// turns a per-lookup tree walk into one word of comparison.
+#[derive(Clone, Debug)]
+struct CodePtr(Rc<Lambda>);
+
+impl PartialEq for CodePtr {
+    fn eq(&self, other: &CodePtr) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for CodePtr {}
+impl Hash for CodePtr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.0).hash(state);
+    }
 }
 
 /// What the cache knows about a node.
@@ -96,12 +124,7 @@ pub(crate) fn key(callee: &ValueRef, args: &[Contract], claim: &Claim) -> Option
             _ => Contract::Top,
         })
         .collect();
-    Some(FactKey {
-        shape: Rc::new(f.shape().clone()),
-        captures,
-        input: args.to_vec(),
-        claim: claim.clone(),
-    })
+    Some(FactKey { shape: CodePtr(f.shape_rc()), captures, input: args.to_vec(), claim: claim.clone() })
 }
 
 /// What is known about `key`, if anything.
@@ -151,4 +174,75 @@ pub(crate) fn finish(key: &FactKey, verdict: &BodySafety) {
 pub(crate) fn clear() {
     CACHE.with(|c| c.borrow_mut().clear());
     DEPTH.with(|d| *d.borrow_mut() = 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interner::Interner;
+    use crate::oracle::run_source_in;
+
+    fn f(src: &str, i: &mut Interner) -> ValueRef {
+        run_source_in(src, i).unwrap().0
+    }
+
+    /// The property the key rests on: identical canonical code is **one allocation**, so
+    /// shape identity is a pointer comparison. Without this the key would silently fall back
+    /// to walking a syntax tree on every lookup, which is what it did before 2026-08-01.
+    #[test]
+    fn identical_functions_share_one_interned_code_pointer() {
+        let mut i = Interner::new();
+        let a = f("g = (n) => n + 1\ng", &mut i);
+        let b = f("h = (n) => n + 1\nh", &mut i);
+        assert!(
+            Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            "same code must be one interned allocation"
+        );
+    }
+
+    /// And the reason canonicalization comes first: bound names are not part of a function's
+    /// identity, so α-variants must reach the *same* pointer. A key built on parsed code
+    /// (the interim your notes describe) would miss this pair.
+    #[test]
+    fn alpha_variants_share_one_interned_code_pointer() {
+        let mut i = Interner::new();
+        let a = f("g = (n) => n + 1\ng", &mut i);
+        let b = f("h = (x) => x + 1\nh", &mut i);
+        assert!(
+            Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            "alpha-variants are the same shape"
+        );
+    }
+
+    /// The complement — pointer equality must not over-collapse.
+    #[test]
+    fn different_functions_do_not_share_a_code_pointer() {
+        let mut i = Interner::new();
+        let a = f("g = (n) => n + 1\ng", &mut i);
+        let b = f("h = (n) => n + 2\nh", &mut i);
+        assert!(
+            !Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            "different code is different shapes"
+        );
+    }
+
+    /// Two closures over the same code but different captures are the same *shape* and
+    /// different *instances* — which is exactly why the key carries capture contracts
+    /// alongside the code pointer.
+    #[test]
+    fn same_shape_different_captures_are_distinct_fact_nodes() {
+        let mut i = Interner::new();
+        let a = f("k = 1\ng = (n) => n + k\ng", &mut i);
+        let b = f("k = 2\nh = (n) => n + k\nh", &mut i);
+        assert!(
+            Rc::ptr_eq(&a.as_fn().unwrap().shape_rc(), &b.as_fn().unwrap().shape_rc()),
+            "same code, so one shape"
+        );
+        let args = [Contract::Top];
+        let (ka, kb) = (
+            key(&a, &args, &Claim::Safety).expect("keyed"),
+            key(&b, &args, &Claim::Safety).expect("keyed"),
+        );
+        assert_ne!(ka, kb, "different captures are different fact nodes");
+    }
 }

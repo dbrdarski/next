@@ -3818,3 +3818,35 @@ the joint vector pass, region tables, the F0 rulebook. Missing — the layer-2 i
 is corrected but still unwired, its only importer the quarantined `bodycheck`), and global
 discovery itself. §5 group canonicalization is also absent but is value/group identity, not
 fact-graph machinery, so it blocks other pinned rows rather than this restructure.
+
+## 2026-08-01 — Canonical code is now interned; the fact-cache key is pointers
+
+**The defect (mine).** `factcache`'s key held `Rc::new(f.shape().clone())` — a deep clone of a
+function's entire canonical syntax tree, hashed structurally on **every lookup**. The project's
+first rule is "same value = same pointer; `==` is pointer comparison, universally", and C§13.4
+says "every key interned pointers". I did the opposite, in a cache, on the hot path.
+
+**Why I did it, which is the part worth recording.** Canonical code was never interned:
+`canonicalize` returns a fresh `Lambda` and `FnValue` wrapped it in a fresh `Rc`, so identical
+shapes had different pointers and pointer comparison would have missed them. Rather than fix
+that, I reached for structural comparison because it worked — the same reflex the author
+flagged at the start of this session, in a new place.
+
+**The fix.** `Interner::intern_code` hash-conses canonical code, so identical shapes share one
+allocation. `FnValue::new` now takes the interned `Rc`; `make_closure_in` interns before
+constructing. `factcache` keys on a `CodePtr` newtype comparing and hashing by pointer.
+Structural hashing now happens **once per distinct shape at closure construction**, never per
+lookup.
+
+**Proven, not assumed** (`factcache::tests`): identical functions share one code pointer;
+**α-variants share it too** (which the interim "use the parsed-code object" scheme in CLAUDE.md
+would miss — this is strictly better than the sanctioned interim); different functions do not;
+and same-shape/different-capture closures are distinct fact nodes, which is why the key carries
+capture contracts beside the code pointer.
+
+**Still non-conformant, recorded in the module docs:** capture and input **contracts** are
+compared structurally, because contracts are not interned anywhere in this implementation.
+That is the same rule violated in a second place, larger than this fix, and not attempted here.
+The layer-1-vs-layer-2 shape gap from earlier today is unchanged.
+
+400 lib + 111 conformance + 4 gate green, clippy clean.

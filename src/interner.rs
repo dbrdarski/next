@@ -7,7 +7,9 @@
 //! canonical, this is exact structural deduplication.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
+use crate::ast::Lambda;
 use crate::rational::Rational;
 use crate::value::{FnValue, IndetForm, NativeRef, RecordEntry, ValueData, ValueRef};
 
@@ -16,6 +18,11 @@ use crate::value::{FnValue, IndetForm, NativeRef, RecordEntry, ValueData, ValueR
 #[derive(Default)]
 pub struct Interner {
     table: HashMap<ValueData, ValueRef>,
+    /// Canonical function **code**, hash-consed so that identical shapes share one
+    /// allocation. Code is not a value, so it cannot live in `table`; it needs the same
+    /// treatment for the same reason — a closure's identity is `(code pointer, capture
+    /// pointers)`, and that is only a pointer comparison if the code is interned.
+    codes: HashMap<Lambda, Rc<Lambda>>,
 }
 
 impl Interner {
@@ -32,6 +39,21 @@ impl Interner {
         let vref = ValueRef::from_data(data.clone());
         self.table.insert(data, vref.clone());
         vref
+    }
+
+    /// The canonical `Rc` for a function shape, creating it if absent.
+    ///
+    /// Structural hashing happens **once per distinct shape at closure construction**,
+    /// never again: from then on the shape is compared and hashed by pointer. That is the
+    /// whole point of the interning model, and the reason a cache key can be a small tuple
+    /// of pointers rather than a walk over a syntax tree.
+    pub fn intern_code(&mut self, code: Lambda) -> Rc<Lambda> {
+        if let Some(existing) = self.codes.get(&code) {
+            return Rc::clone(existing);
+        }
+        let rc = Rc::new(code.clone());
+        self.codes.insert(code, Rc::clone(&rc));
+        rc
     }
 
     // ── Leaf constructors ────────────────────────────────────────────────────

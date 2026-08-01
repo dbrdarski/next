@@ -906,5 +906,6 @@ fn push_escaped(out: &mut String, c: char) {
 pub(crate) fn make_closure_in(lambda: &Lambda, env: &Env, interner: &mut Interner) -> ValueRef {
     let shape = canon::canonicalize(lambda, interner);
     let closure = Closure { lambda: lambda.clone(), env: env.clone() };
-    interner.function(FnValue::new(shape.code, shape.free_vars, closure))
+    let code = interner.intern_code(shape.code);
+    interner.function(FnValue::new(code, shape.free_vars, closure))
 }
