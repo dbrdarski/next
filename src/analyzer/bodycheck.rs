@@ -28,7 +28,9 @@ use std::cell::RefCell;
 
 use crate::analyzer::grounding::collect_self_calls;
 use crate::analyzer::region::{Row, region_table};
-use crate::analyzer::{Completion, Finding, Severity, TypeEnv, analyze, bind_pattern};
+use crate::analyzer::{
+    Completion, Finding, Severity, TypeEnv, analyze_in_world, bind_pattern, world_for_act,
+};
 use crate::ast::{Pat, PatElem};
 use crate::contract::{Contract, ContractEnv, Verdict, disjoint, subcontract};
 use crate::env::Binding;
@@ -111,7 +113,13 @@ fn whole_body(
     let mut env = capture_env(callee);
     let arg_tuple = Contract::tuple(args.to_vec(), interner);
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
-    let a = analyze(&closure.lambda.body, &env, cenv, interner);
+    let a = analyze_in_world(
+        &closure.lambda.body,
+        &env,
+        cenv,
+        world_for_act(closure.lambda.act_kind),
+        interner,
+    );
     (a.contract, a.completion)
 }
 
@@ -130,7 +138,14 @@ pub fn body_check(
     let base = capture_env(callee);
 
     match param_name(&closure.lambda.params) {
-        Param::Zero => analyze(&closure.lambda.body, &base, cenv, interner).findings,
+        Param::Zero => analyze_in_world(
+            &closure.lambda.body,
+            &base,
+            cenv,
+            world_for_act(closure.lambda.act_kind),
+            interner,
+        )
+        .findings,
         // The summary-over-partition check: reachable rows × their reaching domains, with
         // recursion summarized by the §4a cutoff above.
         Param::One(name) => {
@@ -144,7 +159,14 @@ pub fn body_check(
             let mut env = base;
             let arg_tuple = Contract::tuple(args.to_vec(), interner);
             bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
-            analyze(&closure.lambda.body, &env, cenv, interner).findings
+            analyze_in_world(
+                &closure.lambda.body,
+                &env,
+                cenv,
+                world_for_act(closure.lambda.act_kind),
+                interner,
+            )
+            .findings
         }
     }
 }
@@ -189,7 +211,14 @@ fn reachable_rows(
             };
             let mut env = capture_env(callee);
             env.insert(param.to_string(), table[i].region.clone());
-            let dom = analyze(arg_expr, &env, cenv, interner).contract;
+            let dom = analyze_in_world(
+                arg_expr,
+                &env,
+                cenv,
+                world_for_act(closure.lambda.act_kind),
+                interner,
+            )
+            .contract;
             for j in selected_indices(&table, &dom, interner) {
                 if !seen.contains(&j) && !work.contains(&j) {
                     work.push(j);
@@ -253,7 +282,14 @@ fn check_recursive_body(
                 };
                 let mut env = capture_env(callee);
                 env.insert(param.to_string(), table[i].region.clone());
-                let target = analyze(arg_expr, &env, cenv, interner).contract;
+                let target = analyze_in_world(
+                    arg_expr,
+                    &env,
+                    cenv,
+                    world_for_act(closure.lambda.act_kind),
+                    interner,
+                )
+                .contract;
                 for j in selected_indices(&table, &target, interner) {
                     let add = intersect(target.clone(), table[j].region.clone(), interner);
                     changed |= grow(&mut reaching[j], add, interner);
@@ -274,7 +310,15 @@ fn check_recursive_body(
         let definite = table[i].exact && (0..i).all(|j| reaching[j].is_none() || table[j].exact);
         let mut env = base.clone();
         env.insert(param.to_string(), dom.clone());
-        for finding in analyze(&table[i].result, &env, cenv, interner).findings {
+        for finding in analyze_in_world(
+            &table[i].result,
+            &env,
+            cenv,
+            world_for_act(closure.lambda.act_kind),
+            interner,
+        )
+        .findings
+        {
             findings.push(if definite { finding } else { downgrade(finding) });
         }
     }

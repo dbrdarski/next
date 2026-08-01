@@ -6,9 +6,10 @@
 //! analyzer walks an [`Expr`], infers a [`Contract`] over-approximating the value
 //! it produces, and at each operation site discharges the operation's safety
 //! demand ([`analyze_operation`]) — emitting a [`Finding`] for anything that
-//! **will** trap (an *error*, from a refuted demand) or that it **cannot prove**
-//! safe (a *warning*, from an unproven demand). The soundness contract (§6): an
-//! expression the analyzer accepts with no error never traps in the oracle.
+//! **will** trap or that it **cannot prove** safe. Both reject; warnings are
+//! reserved for non-safety third voices such as completion that may fall through.
+//! The soundness contract (§6): an expression the analyzer accepts with no error
+//! never traps in the oracle.
 //!
 //! **Scope so far:** `Const`, `Ref`, `PrimOp`, `TupleCons`, `RecordCons`,
 //! `Template` (E11), `Access` (E6), `Match` (E9/E10), and `Apply` (C§7/B5/E10).
@@ -18,9 +19,10 @@
 //! non-recursive return come from the **summary-over-partition** body check
 //! (`bodycheck::body_summary`: the §4a shape cutoff + reachable region rows × reaching
 //! domains, GR-03 finite row-set lattice — no widening), so static analysis never runs a
-//! user function. Analysis runs in the **pure world** (matching the `eval_expr` truth
-//! source); world threading is a later increment. Index/slice bounds await C§17 (see
-//! `OwedItems.md`). `Write` and mutation are unanalyzed (type as `Top`).
+//! user function. The source seat supplies its actual world; a function body instead owns
+//! the world declared by its `ActKind` (B5/E14). Index/slice bounds await C§17 (see
+//! `OwedItems.md`). `Write` checks world admission and its right-hand expression; resolving
+//! and validating the target slot remains owed.
 //!
 //! Analysis carries a **named-contract environment** ([`ContractEnv`]) alongside the
 //! value-contract [`TypeEnv`]: user contracts (`Percent = Range(0, 100)`, C§12.2)
@@ -29,13 +31,16 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{AccessForm, ActKind, Arg, BindingRef, Element, Expr, Field, PrimOp, Ref, TemplatePart};
+use crate::ast::{
+    AccessForm, ActKind, Arg, BindingRef, Element, Expr, Field, PrimOp, Ref, SlotRef,
+    TemplatePart,
+};
 use crate::contract::{
     Contract, ContractEnv, Kind, OpSafety, Verdict, analyze_operation, disjoint, eval_contract,
     subcontract,
 };
 use crate::interner::Interner;
-use crate::oracle::{Outcome, TrapClass, eval_expr, eval_prim};
+use crate::oracle::{Outcome, TrapClass, World, eval_expr, eval_prim};
 use crate::value::ValueRef;
 
 pub mod demand;
@@ -139,6 +144,19 @@ pub type TypeEnv = HashMap<String, Contract>;
 
 /// Analyze a kernel expression against a contract environment.
 pub fn analyze(expr: &Expr, env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+    analyze_in_world(expr, env, cenv, World::Pure, interner)
+}
+
+/// Analyze a kernel expression in its actual evaluation world. World is a seat
+/// dependency: the expression/core contract can be reused, but call admission and
+/// writes must be judged where the expression occurs (B5 / application §1.7).
+pub(crate) fn analyze_in_world(
+    expr: &Expr,
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
     match expr {
         // A literal denotes exactly itself.
         Expr::Const(v) => exact(Contract::Equals(v.clone())),
@@ -159,17 +177,22 @@ pub fn analyze(expr: &Expr, env: &TypeEnv, cenv: &ContractEnv, interner: &mut In
         // Positional / Location / Mu references are out of scope for this increment.
         Expr::Ref(_) => exact(Contract::Top),
 
-        Expr::PrimOp { op, args } => analyze_primop(*op, args, env, cenv, interner),
+        Expr::PrimOp { op, args } => analyze_primop(*op, args, env, cenv, world, interner),
 
-        Expr::TupleCons(elems) => analyze_tuple(elems, env, cenv, interner),
-        Expr::RecordCons(fields) => analyze_record(fields, env, cenv, interner),
-        Expr::Template(parts) => analyze_template(parts, env, cenv, interner),
-        Expr::Access { target, form, total } => analyze_access(target, form, *total, env, cenv, interner),
-        Expr::Match(m) => analyze_match(m, env, cenv, interner),
-        Expr::Apply { callee, args } => analyze_apply(callee, args, env, cenv, interner),
+        Expr::TupleCons(elems) => analyze_tuple(elems, env, cenv, world, interner),
+        Expr::RecordCons(fields) => analyze_record(fields, env, cenv, world, interner),
+        Expr::Template(parts) => analyze_template(parts, env, cenv, world, interner),
+        Expr::Access { target, form, total } => {
+            analyze_access(target, form, *total, env, cenv, world, interner)
+        }
+        Expr::Match(m) => analyze_match(m, env, cenv, world, interner),
+        Expr::Apply { callee, args } => {
+            analyze_apply(callee, args, env, cenv, world, interner)
+        }
+        Expr::Write { slot, value } => analyze_write(slot, value, env, cenv, world, interner),
 
-        // Not yet analyzed: conservatively typed `Top`, unchecked.
-        _ => exact(Contract::Top),
+        // Function construction still lacks its universal interning/contract path.
+        Expr::Lambda(_) => exact(Contract::Top),
     }
 }
 
@@ -177,11 +200,28 @@ fn exact(contract: Contract) -> Analysis {
     Analysis::produced(contract, vec![])
 }
 
-fn analyze_primop(op: PrimOp, args: &[Expr], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+/// The world a function body owns, independent of the world where its closure was
+/// constructed or called (B5/E14).
+pub(crate) fn world_for_act(kind: ActKind) -> World {
+    match kind {
+        ActKind::Pure => World::Pure,
+        ActKind::Mutator => World::Mutator,
+        ActKind::Effect => World::Effect,
+    }
+}
+
+fn analyze_primop(
+    op: PrimOp,
+    args: &[Expr],
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
     let mut findings = Vec::new();
     let mut inputs = Vec::with_capacity(args.len());
     for a in args {
-        let mut r = analyze(a, env, cenv, interner);
+        let mut r = analyze_in_world(a, env, cenv, world, interner);
         demand(&r, &mut findings); // operands are expecting seats
         findings.append(&mut r.findings);
         inputs.push(r.contract);
@@ -238,14 +278,20 @@ fn analyze_primop(op: PrimOp, args: &[Expr], env: &TypeEnv, cenv: &ContractEnv, 
     Analysis::produced(contract, findings)
 }
 
-fn analyze_tuple(elems: &[Element], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+fn analyze_tuple(
+    elems: &[Element],
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
     let mut findings = Vec::new();
     let mut segments: Vec<Contract> = Vec::new();
     let mut run: Vec<Contract> = Vec::new(); // the current spread-free element run
     for el in elems {
         match el {
             Element::Expr(e) => {
-                let mut r = analyze(e, env, cenv, interner);
+                let mut r = analyze_in_world(e, env, cenv, world, interner);
                 demand(&r, &mut findings); // elements are expecting seats
                 findings.append(&mut r.findings);
                 run.push(r.contract);
@@ -254,7 +300,7 @@ fn analyze_tuple(elems: &[Element], env: &TypeEnv, cenv: &ContractEnv, interner:
             // result shape is a Concat with the spread's contract as a segment
             // (the tuple family's constructor, §1).
             Element::Spread(e) => {
-                let mut r = analyze(e, env, cenv, interner);
+                let mut r = analyze_in_world(e, env, cenv, world, interner);
                 demand(&r, &mut findings); // the spread operand is an expecting seat
                 check_spread_kind(
                     &r.contract,
@@ -289,14 +335,20 @@ fn tuple_shaped(c: &Contract) -> Contract {
     }
 }
 
-fn analyze_record(fields: &[Field], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+fn analyze_record(
+    fields: &[Field],
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
     let mut findings = Vec::new();
     let mut pairs = Vec::new();
     let mut exact_shape = true;
     for field in fields {
         match field {
             Field::Field { key, value } => {
-                let mut r = analyze(value, env, cenv, interner);
+                let mut r = analyze_in_world(value, env, cenv, world, interner);
                 demand(&r, &mut findings); // field values are expecting seats
                 findings.append(&mut r.findings);
                 pairs.push((key.clone(), r.contract));
@@ -305,18 +357,18 @@ fn analyze_record(fields: &[Field], env: &TypeEnv, cenv: &ContractEnv, interner:
             // and a **proven-finite string set** for the analyzer (E5, fork 12 = R;
             // A-VER: `Kind(String)` REJECTs). Both key and value are expecting seats.
             Field::Computed { key, value } => {
-                let mut ka = analyze(key, env, cenv, interner);
+                let mut ka = analyze_in_world(key, env, cenv, world, interner);
                 demand(&ka, &mut findings);
                 findings.append(&mut ka.findings);
                 check_computed_key(&ka.contract, &mut findings);
-                let mut va = analyze(value, env, cenv, interner);
+                let mut va = analyze_in_world(value, env, cenv, world, interner);
                 demand(&va, &mut findings);
                 findings.append(&mut va.findings);
                 exact_shape = false;
             }
             // A record spread must be a Record (else the spread-kind trap).
             Field::Spread(e) => {
-                let mut r = analyze(e, env, cenv, interner);
+                let mut r = analyze_in_world(e, env, cenv, world, interner);
                 demand(&r, &mut findings);
                 check_spread_kind(
                     &r.contract,
@@ -347,6 +399,7 @@ fn analyze_template(
     parts: &[TemplatePart],
     env: &TypeEnv,
     cenv: &ContractEnv,
+    world: World,
     interner: &mut Interner,
 ) -> Analysis {
     let mut findings = Vec::new();
@@ -354,7 +407,7 @@ fn analyze_template(
         let TemplatePart::Interp(e) = part else {
             continue;
         };
-        let mut r = analyze(e, env, cenv, interner);
+        let mut r = analyze_in_world(e, env, cenv, world, interner);
         demand(&r, &mut findings); // interpolations are expecting seats
         findings.append(&mut r.findings);
     }
@@ -370,16 +423,24 @@ fn analyze_template(
 /// exact verdict. Field access is fully reasoned on open receivers; index/slice
 /// *bounds* reasoning needs the tuple-length family (**C§17 owed**, see
 /// `OwedItems.md`), so open index/slice out-of-fold cases are warnings.
-fn analyze_access(target: &Expr, form: &AccessForm, total: bool, env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+fn analyze_access(
+    target: &Expr,
+    form: &AccessForm,
+    total: bool,
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
     let mut findings = Vec::new();
-    let ta = analyze(target, env, cenv, interner);
+    let ta = analyze_in_world(target, env, cenv, world, interner);
     demand(&ta, &mut findings); // the receiver is an expecting seat
     findings.extend(ta.findings);
     let tc = ta.contract;
 
     // Analyze the index/bound subexpressions for their findings and fold values.
     let mut child = |e: &Expr, findings: &mut Vec<Finding>| -> Contract {
-        let mut a = analyze(e, env, cenv, interner);
+        let mut a = analyze_in_world(e, env, cenv, world, interner);
         demand(&a, findings); // index / slice bounds are expecting seats
         findings.append(&mut a.findings);
         a.contract
@@ -570,6 +631,39 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
     Contract::Top
 }
 
+/// Analyze mutation without executing it. The oracle checks world admission before
+/// evaluating the RHS, so an illegal write reports that trap alone. A legal write
+/// evaluates its RHS at an expecting seat and completes without producing a value.
+fn analyze_write(
+    _slot: &SlotRef,
+    value: &Expr,
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
+    if world != World::Mutator {
+        return Analysis::produced(
+            Contract::Bottom,
+            vec![Finding {
+                class: TrapClass::WorldAdmission,
+                severity: Severity::Error,
+                message: "`:=` is legal only inside a mutator".into(),
+            }],
+        );
+    }
+
+    let mut findings = Vec::new();
+    let mut rhs = analyze_in_world(value, env, cenv, world, interner);
+    demand(&rhs, &mut findings);
+    findings.append(&mut rhs.findings);
+    Analysis {
+        contract: Contract::Bottom,
+        findings,
+        completion: Completion::FallsThrough,
+    }
+}
+
 // ── Apply (C§7 / B5 / E10) — application ──────────────────────────────────────
 
 /// Analyze an application — **without executing the callee** (Archive6 §8/§9). Each
@@ -581,12 +675,19 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
 /// (`call_return`), and its completion demanded (`callee_completion`). A closed call is
 /// no longer folded through the oracle — a diverging closed call is analyzed, never run.
 ///
-/// **World context.** This increment analyzes in the **pure world**; world threading
-/// arrives with fuller `Lambda`-body analysis.
-fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+/// World admission is applied at this seat from the caller-supplied world; it is
+/// deliberately absent from the reusable callee/body facts.
+fn analyze_apply(
+    callee: &Expr,
+    args: &[Arg],
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
     let mut findings = Vec::new();
 
-    let ca = analyze(callee, env, cenv, interner);
+    let ca = analyze_in_world(callee, env, cenv, world, interner);
     demand(&ca, &mut findings); // the callee is an expecting seat
     let cc = ca.contract.clone();
     findings.extend(ca.findings);
@@ -596,14 +697,14 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
     for a in args {
         match a {
             Arg::Expr(e) => {
-                let aa = analyze(e, env, cenv, interner);
+                let aa = analyze_in_world(e, env, cenv, world, interner);
                 demand(&aa, &mut findings);
                 arg_contracts.push(aa.contract.clone());
                 findings.extend(aa.findings);
             }
             Arg::Spread(e) => {
                 has_spread = true;
-                let aa = analyze(e, env, cenv, interner);
+                let aa = analyze_in_world(e, env, cenv, world, interner);
                 demand(&aa, &mut findings);
                 check_spread_kind(&aa.contract, Kind::Tuple, "argument spread of a non-Tuple", &mut findings, interner);
                 findings.extend(aa.findings);
@@ -650,7 +751,23 @@ fn analyze_apply(callee: &Expr, args: &[Arg], env: &TypeEnv, cenv: &ContractEnv,
                     completions.push(Completion::MayFallThrough);
                 }
                 CalleeAlt::Known(cv) => {
-                    analyze_known_callee(cv, &arg_contracts, has_spread, &mut findings, cenv, interner);
+                    analyze_known_callee(
+                        cv,
+                        &arg_contracts,
+                        has_spread,
+                        world,
+                        &mut findings,
+                        cenv,
+                        interner,
+                    );
+                    // Effect primitives are total-return by the B6 user ruling: host
+                    // failure is ordinary `Failure` data, never a trap. Their Rust body
+                    // is not analyzer input and must not enter the NEXT body graph.
+                    if cv.as_native().is_some() {
+                        produced.push(Contract::Top);
+                        completions.push(Completion::Produces);
+                        continue;
+                    }
                     // A recursive reference covered by an **assumed safety fact** resolves
                     // through that fact (C§13.2) — the body is not re-entered, so nothing
                     // accumulates across depths. Only the return still needs the induction.
@@ -763,7 +880,14 @@ fn callee_alternatives(cc: &Contract, interner: &mut Interner) -> Vec<CalleeAlt>
                 go(b, out, interner);
             }
             Contract::Bottom => {} // proven empty — no represented execution
-            Contract::Equals(v) if v.is_function() => out.push(CalleeAlt::Known(v.clone())),
+            Contract::Equals(v)
+                if v.is_function()
+                    || v
+                        .as_native()
+                        .is_some_and(|native| native.get().act_kind == ActKind::Effect) =>
+            {
+                out.push(CalleeAlt::Known(v.clone()))
+            }
             // Not callable. Refuting demands a *represented* inhabitant: an empty leaf
             // that is not syntactically `Bottom` (`Intersection(Number, String)`, which
             // narrowing can build) denotes no execution at all, so it must not refute.
@@ -816,17 +940,17 @@ fn analyze_known_callee(
     cv: &ValueRef,
     arg_contracts: &[Contract],
     has_spread: bool,
+    world: World,
     findings: &mut Vec<Finding>,
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) {
-    // Analysis world is pure (see `analyze_apply`); only pure callees are admitted.
     let admit = |kind: ActKind, findings: &mut Vec<Finding>| {
-        if !matches!(kind, ActKind::Pure) {
+        if !world.admits(kind) {
             findings.push(Finding {
                 class: TrapClass::WorldAdmission,
                 severity: Severity::Error,
-                message: format!("a {kind:?} call is not admitted in the pure world"),
+                message: format!("a {kind:?} call is not admitted in {world:?} world"),
             });
         }
     };
@@ -931,7 +1055,13 @@ fn finite_string_set(c: &Contract) -> bool {
 /// value-demanding sub-position is an expecting seat. The result contract is the
 /// union of the arm results; a `Match` whose remainder is not provably empty
 /// `may_complete` without a value.
-fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, interner: &mut Interner) -> Analysis {
+fn analyze_match(
+    m: &crate::ast::Match,
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
     use crate::ast::MatchItem;
 
     let mut findings = Vec::new();
@@ -939,7 +1069,7 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
     // The scrutinee is evaluated once, in an expecting seat.
     let scrut = match &m.scrutinee {
         Some(e) => {
-            let a = analyze(e, env, cenv, interner);
+            let a = analyze_in_world(e, env, cenv, world, interner);
             demand(&a, &mut findings);
             findings.extend(a.findings);
             a.contract
@@ -959,14 +1089,14 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
     for item in &m.items {
         match item {
             MatchItem::Bind(b) => {
-                let a = analyze(&b.value, &body_env, cenv, interner);
+                let a = analyze_in_world(&b.value, &body_env, cenv, world, interner);
                 demand(&a, &mut findings); // a bind RHS is an expecting seat
                 findings.extend(a.findings);
                 analyze_bind(&b.target, &a.contract, &mut body_env, &mut findings, cenv, interner);
             }
             MatchItem::Stmt(e) => {
                 // A statement's value is discarded — *not* an expecting seat.
-                let a = analyze(e, &body_env, cenv, interner);
+                let a = analyze_in_world(e, &body_env, cenv, world, interner);
                 findings.extend(a.findings);
             }
             MatchItem::Arm(arm) => {
@@ -1001,7 +1131,7 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
                 // *opaque* guard consumes nothing (uncertainty selects, E9).
                 let mut opaque_guard = false;
                 if let Some(g) = &arm.guard {
-                    let ga = analyze(g, &arm_env, cenv, interner);
+                    let ga = analyze_in_world(g, &arm_env, cenv, world, interner);
                     demand(&ga, &mut findings);
                     findings.extend(ga.findings);
                     check_tested_seat(&ga.contract, &mut findings, interner);
@@ -1015,7 +1145,7 @@ fn analyze_match(m: &crate::ast::Match, env: &TypeEnv, cenv: &ContractEnv, inter
                 }
 
                 // Arm result — an expecting seat.
-                let ra = analyze(&arm.result, &arm_env, cenv, interner);
+                let ra = analyze_in_world(&arm.result, &arm_env, cenv, world, interner);
                 demand(&ra, &mut findings);
                 findings.extend(ra.findings);
                 results.push(ra.contract);

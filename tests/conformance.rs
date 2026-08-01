@@ -14,7 +14,7 @@
 use next::desugar::Desugarer;
 use next::interner::Interner;
 use next::lex::lex;
-use next::oracle::harness::{prelude_env, run_with_io};
+use next::oracle::harness::{check_source, prelude_env, run_with_io};
 use next::oracle::{Oracle, TrapClass, run_program_commits, run_program_value};
 use next::parse::parse_program;
 use next::rational::Rational;
@@ -932,12 +932,24 @@ mod phase3 {
         assert_eq!(str_of(&v), "failed");
     }
 
-    // ── MOD: modules (staged — imports parse; linking/worlds not built) ──────
+    // ── MOD: modules (top-level world active; linking remains staged) ───────
 
     #[test]
-    #[ignore = "module-system semantics staged: top-level world distinction for module files"]
     fn mod01_act_call_at_module_top_level_rejected() {
-        unreachable!("module linking pending");
+        let (verdict, _) = check_source(
+            "module M\n\
+             export result = println(\"no\")\n",
+        )
+        .expect("the module parses and checks");
+        assert!(!verdict.accepted(), "an act call at module top level must reject");
+        assert!(
+            verdict
+                .findings
+                .iter()
+                .any(|f| f.class == TrapClass::WorldAdmission),
+            "MOD-01 rejects through the world-admission concordance: {:?}",
+            verdict.findings
+        );
     }
 
     #[test]

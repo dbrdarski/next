@@ -62,4 +62,23 @@ impl Scope {
         }
         self.parent.as_ref().and_then(|p| p.lookup(name))
     }
+
+    /// Snapshot the bindings visible from this scope, with child bindings
+    /// shadowing parents. The analyzer uses this at a program boundary so the
+    /// compile-time environment starts with the same prelude/import values as
+    /// evaluation, without evaluating any of them.
+    pub(crate) fn visible_bindings(&self) -> HashMap<String, Binding> {
+        let mut visible = self
+            .parent
+            .as_ref()
+            .map(|parent| parent.visible_bindings())
+            .unwrap_or_default();
+        visible.extend(
+            self.vars
+                .borrow()
+                .iter()
+                .map(|(name, binding)| (name.clone(), binding.clone())),
+        );
+        visible
+    }
 }

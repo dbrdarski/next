@@ -94,7 +94,7 @@ pub enum World {
 
 impl World {
     /// The admission matrix (B5, 1.0.3): which callee act-kinds are admitted.
-    fn admits(self, callee: ActKind) -> bool {
+    pub(crate) fn admits(self, callee: ActKind) -> bool {
         match self {
             World::Pure => matches!(callee, ActKind::Pure),
             World::Mutator => matches!(callee, ActKind::Pure | ActKind::Mutator),

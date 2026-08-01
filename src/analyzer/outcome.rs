@@ -24,7 +24,9 @@
 
 use crate::analyzer::application::{ApplicationOutcome, CompletionWithoutValue};
 use crate::analyzer::domain::AnalysisContract;
-use crate::analyzer::{Analysis, Completion, TypeEnv, analyze, bind_pattern};
+use crate::analyzer::{
+    Analysis, Completion, TypeEnv, analyze_in_world, bind_pattern, world_for_act,
+};
 use crate::contract::{Contract, ContractEnv};
 use crate::env::Binding;
 use crate::interner::Interner;
@@ -57,7 +59,13 @@ pub(crate) fn analyze_instance_body(
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut tenv);
 
     Some(crate::analyzer::induction::without_inference(|| {
-        analyze(&closure.lambda.body, &tenv, cenv, interner)
+        analyze_in_world(
+            &closure.lambda.body,
+            &tenv,
+            cenv,
+            world_for_act(closure.lambda.act_kind),
+            interner,
+        )
     }))
 }
 

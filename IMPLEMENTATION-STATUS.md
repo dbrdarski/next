@@ -34,27 +34,38 @@ undischarged until its algebra is ruled. Removing fake arithmetic propagation al
 closed a fact-graph leak: an unresolved cutoff dependency can no longer be recursively proved by the
 quarantined body summary or upgraded from graph-`Unproven` during diagnostic rechecking.
 
+The third repair closes the missing executable-program demand origin. `--check` now walks module
+items in source order and retains one typed record for every executable binding RHS, slot
+initializer, and statement. Each record keeps its origin, expecting-vs-statement seat, evaluation
+world, inferred contract, completion voice, and findings. Fixed operation-safety demands therefore
+fire even when a statement discards its result, while only expecting seats demand a produced value.
+Headerless entry items are checked in Effect world, named-module items in Pure world, slot
+initializers in Pure world, and function bodies in the world owned by their `ActKind`; writes are
+admitted only in Mutator bodies. This is symbolic analysis only: no executable expression or
+function body is run at compile time. Check mode starts with the same inert harness values as run
+mode (`String`, `println`, `exit`, `readFile`), so prelude use is resolved rather than falsely
+reported unbound.
+
 Remaining measured P0 implementation drift, to be recovered in authority order:
 
-1. `--check` asks only the demands created by `where`; executable top-level statements are not checked.
+1. Recursive application is still wired through the quarantined `bodycheck` path even though the fact
+   graph exists.
 2. Function construction is not universally interned, while equality uses a separate coinductive path;
    operation transfer also assumes an unsound singleton function instance.
-3. Recursive application is still wired through the quarantined `bodycheck` path even though the fact
-   graph exists.
-4. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
+3. Proven / Refuted / Unproven are collapsed into diagnostic severity at program boundaries rather than
    remaining typed verdicts until policy is applied.
-5. The repository-wide formatting gate is red (8,602 diff lines on 2026-08-01).
+4. The repository-wide formatting gate is red (8,602 diff lines on 2026-08-01).
 
-**Recovery order:** memo-key completeness and ruled Indeterminate-form/Numeric semantics are complete.
-Next, add typed program demands (including executable statements); then wire ordinary application to
-settled facts and retire the quarantined checker; only then advance Phase A. Normative files remain
-manifest-protected and are not edited by these implementation slices.
+**Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, and typed
+executable program demands are complete. Next, wire ordinary application to settled facts and retire
+the quarantined checker; only then advance Phase A. Normative files remain manifest-protected and are
+not edited by these implementation slices.
 
 ---
 
 ## 1. Normative specifications — CURRENT (design authority)
 
-All 19 manifest-verified files (`shasum -c MANIFEST.sha256.txt` → 19/19 OK, checked 2026-07-31).
+All 19 manifest-verified files (`shasum -c MANIFEST.sha256.txt` → 19/19 OK, checked 2026-08-01).
 **These are not to be edited as part of any implementation work.**
 
 `next-design-compendium-v1-0.md` (patch 1.0.18) · `next-grammar-specification-v0-1.md` ·
@@ -277,13 +288,14 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **413 passed, 0 failed, 10 ignored** (4 parked blockers + 6 pinned false positives) |
-| `cargo test --test conformance` | **111 passed, 0 failed, 13 ignored** |
+| `cargo test --lib` | **425 passed, 0 failed, 10 ignored** (4 parked blockers + 6 pinned false positives) |
+| `cargo test --test conformance` | **112 passed, 0 failed, 12 ignored** (MOD-01 activated) |
 | `cargo test --test machinery_gate` | **4 passed, 0 failed** |
 | `cargo clippy --all-targets` | **0 warnings** |
 | `cargo fmt --check` | **FAILED** — 8,602 formatting diff lines |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
-Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409) are
+Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
+417) are
 **HISTORICAL**; this table is current.
 **Green ≠ sound:** the suite does not cover the §4 gates, which is why they are pinned.

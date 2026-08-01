@@ -4025,3 +4025,52 @@ may recover `Refuted`/`Unproven` diagnostics but never promote an unsettled grap
 **Verification:** 417 lib passed / 10 ignored; 111 conformance passed / 13 ignored; 4 machinery gates
 passed; clippy clean; manifest 19/19 OK. The repository-wide formatting debt remains the separately
 recorded pre-existing gate and was not mixed into this semantic recovery slice.
+
+## 2026-08-01 — Recovery slice 3: typed executable program demands
+
+**Measured red before implementation:** `--check` accepted all eight deliberately exposed cases:
+an unsafe binding RHS, an unsafe discarded statement, expecting-vs-statement completion, eager
+forward reference, a called trapping body, named-module world admission, an unsafe slot initializer,
+and a direct top-level write. Every case reported `findings: []` because the program entry originated
+only `where` demands.
+
+**Built:** the program pass now walks runtime items in source order and retains an
+`ExecutableDemand` for every binding RHS, slot initializer, and statement. The typed record preserves
+the source origin, `Expecting`/`Statement` seat, evaluation `World`, inferred output contract,
+completion voice, and local findings before program acceptance policy is applied. Operation demands
+fire in both seat kinds; only an expecting seat adds the completion demand. Static named-contract
+bindings and inert function declarations are not mistaken for executable calls.
+
+World is now an explicit dependency of expression analysis. Headerless entry items use Effect,
+named-module items use Pure, and slot initializers use Pure. A function body's world comes from its
+own `ActKind`, independent of the construction or caller world. The analyzer uses the oracle's one
+admission matrix. `Write` checks admission before its RHS, matching oracle order, and a legal write
+has `Bottom` output with fall-through completion. Slot-target identity/content precision remains
+owed because `TypeEnv` does not yet carry slot identities; no target semantics were invented.
+
+**No compile-time execution:** ordinary executable expressions are analyzed symbolically. Top-level
+function declarations reuse inert constructed closures, and a body is inspected only when an
+application creates that demand. Exact earlier values are installed for later items; eager forward
+references still reject, while closure late binding remains available through the shared scope.
+Check mode now snapshots the same inert prelude/host values that run mode installs, so
+`println("hello")` resolves and is admitted at an entry rather than falsely rejecting as unbound.
+The native Rust body is never called by analysis; no native signature precision was added. The
+regression first exposed one more pre-existing omission: `analyze_known_callee` already handled
+natives, but the callee-alternative classifier admitted only NEXT closures, making that branch
+unreachable. Exact **Effect** natives are now classified as known callable alternatives and use the
+B6 total-return law; unsigned pure natives remain conservative until their argument/return contracts
+exist.
+
+**Still open:** program-level findings still collapse parts of the Proven / Refuted / Unproven voice
+into diagnostic policy; this slice retains typed executable outcomes but does not claim to finish
+that separate boundary. Function construction/interning and the quarantined ordinary-application
+path are unchanged.
+
+**Conformance release:** MOD-01 is no longer an ignored module-linking stub. Its independent rule is
+now exercised through the program checker: an Effect call at named-module top level rejects with the
+world-admission concordance. Import/linking rows MOD-03/04/05 remain staged.
+
+**Verification:** 425 lib passed / 10 ignored, including the eight red regressions and the nested
+Effect/Mutator body-world case; 112 conformance passed / 12 ignored; 4 machinery gates passed;
+clippy clean; normative manifest 19/19 OK. The repository-wide formatting debt remains the separate
+pre-existing gate and was not mixed into this semantic slice.

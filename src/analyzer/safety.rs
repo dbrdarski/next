@@ -40,7 +40,9 @@ use std::cell::Cell;
 use crate::analyzer::factcache;
 use crate::analyzer::induction::{self, Candidate, Claim};
 use crate::analyzer::region::{region_table, select};
-use crate::analyzer::{Finding, Severity, TypeEnv, analyze, bind_pattern};
+use crate::analyzer::{
+    Finding, Severity, TypeEnv, analyze_in_world, bind_pattern, world_for_act,
+};
 use crate::contract::{Contract, ContractEnv, Verdict, subcontract};
 use crate::env::Binding;
 use crate::interner::Interner;
@@ -195,7 +197,15 @@ fn verify_by_partition(
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
-        for f in analyze(&sel.result, &env, cenv, interner).findings {
+        for f in analyze_in_world(
+            &sel.result,
+            &env,
+            cenv,
+            world_for_act(closure.lambda.act_kind),
+            interner,
+        )
+        .findings
+        {
             out.push(if sel.exact { f } else { downgrade(f) });
         }
     }
@@ -529,7 +539,14 @@ pub(crate) fn verify_completes(
     let arg_tuple = Contract::tuple(args.to_vec(), interner);
     bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
     matches!(
-        analyze(&closure.lambda.body, &env, cenv, interner).completion,
+        analyze_in_world(
+            &closure.lambda.body,
+            &env,
+            cenv,
+            world_for_act(closure.lambda.act_kind),
+            interner,
+        )
+        .completion,
         crate::analyzer::Completion::Produces
     )
 }
@@ -552,7 +569,14 @@ pub(crate) fn verify(
             let mut env = capture_env(callee);
             let arg_tuple = Contract::tuple(args.to_vec(), interner);
             bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
-            analyze(&closure.lambda.body, &env, cenv, interner).findings
+            analyze_in_world(
+                &closure.lambda.body,
+                &env,
+                cenv,
+                world_for_act(closure.lambda.act_kind),
+                interner,
+            )
+            .findings
         }
     }
 }
@@ -588,7 +612,16 @@ pub(crate) fn produced_by_partition(
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
-        parts.push(analyze(&sel.result, &env, cenv, interner).contract);
+        parts.push(
+            analyze_in_world(
+                &sel.result,
+                &env,
+                cenv,
+                world_for_act(closure.lambda.act_kind),
+                interner,
+            )
+            .contract,
+        );
     }
     // No row selected means no path through the body over this domain produces anything.
     if parts.is_empty() {
@@ -619,7 +652,16 @@ fn collect_calls(
                 let mut clean = true;
                 for a in args {
                     match a {
-                        Arg::Expr(x) => domains.push(analyze(x, env, cenv, interner).contract),
+                        Arg::Expr(x) => domains.push(
+                            analyze_in_world(
+                                x,
+                                env,
+                                cenv,
+                                world_for_act(closure.lambda.act_kind),
+                                interner,
+                            )
+                            .contract,
+                        ),
                         Arg::Spread(_) => clean = false,
                     }
                 }
