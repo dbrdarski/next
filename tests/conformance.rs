@@ -1188,6 +1188,42 @@ mod phase_a {
         );
     }
 
+    /// A-VER subset: the Failure-overlap wrapper demand (B6 [1.0.2]). At a declared
+    /// fallible boundary `Union(T, Failure)`, a success alternative not proven disjoint
+    /// from `Failure` could inhabit the failure rail and be swallowed by its discharge
+    /// match — the explicit success wrapper is demanded where the union is formed.
+    #[test]
+    fn a_ver_failure_overlap_wrapper_demand() {
+        const ADAPTER_BODY: &str = "parse = (raw) => raw :: {\n\
+             Ok => raw\n\
+             _ => {path: \"adapter\", reason: \"malformed\"}\n\
+            }\n";
+
+        let overlapping = check_source(&format!(
+            "Ok = HasField(\"value\")\n\
+             parse where (Record) => Union(Ok, Failure)\n\
+             {ADAPTER_BODY}"
+        ))
+        .expect("the overlapping-boundary case parses and checks")
+        .0;
+        assert!(
+            !overlapping.accepted(),
+            "an open success shape is not proven disjoint from Failure: {overlapping:#?}"
+        );
+
+        let wrapped = check_source(&format!(
+            "Ok = {{value: Record}}\n\
+             parse where (Record) => Union(Ok, Failure)\n\
+             {ADAPTER_BODY}"
+        ))
+        .expect("the wrapped-boundary case parses and checks")
+        .0;
+        assert!(
+            wrapped.accepted(),
+            "the exact success wrapper is proven disjoint and accepts: {wrapped:#?}"
+        );
+    }
+
     #[test]
     #[ignore = "Phase A: program-level entry NOW EXISTS (analyzer::program::analyze_program, 2026-08-01) — this row is no longer blocked on it. Remaining: the battery body is an unreachable!() stub, and its verdicts need (a) a GRAY/third-voice verdict representation at program level, (b) drift for the recursion arc. Write it after the demand core (T1.2)."]
     fn a_neg_negative_battery() {
@@ -1231,7 +1267,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "Phase A: program-level analysis exists, and the union-at-boundary + Indeterminate-discharge subset is live. Remaining broad-row cases include the comparison-chain hint, full exhaustiveness diagnostics, Failure-wrapper propagation, and act-kind admission over source unions."]
+    #[ignore = "Phase A: program-level analysis exists; the union-at-boundary, Indeterminate-discharge, and Failure-overlap wrapper-demand subsets are live. Remaining broad-row cases include the comparison-chain hint, full exhaustiveness diagnostics, and act-kind admission over source unions."]
     fn a_ver_verdict_cases() {
         // a < b < c → REJECT with the chain hint · (a == b) == c legal iff c
         // Boolean · exhaustiveness over the E9 remainder · computed keys: finite

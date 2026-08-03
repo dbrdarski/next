@@ -30,7 +30,7 @@ use crate::analyzer::TrapClass;
 use crate::analyzer::domain::AnalysisContract;
 use crate::analyzer::refute::ClaimVerdict;
 use crate::ast::{Bind, BindTarget, Expr, Item, Lambda, Module, Pat};
-use crate::contract::{Contract, ContractEnv, eval_contract};
+use crate::contract::{Contract, ContractEnv, Verdict, disjoint, eval_contract, subcontract};
 use crate::env::{Binding, Env, Scope};
 use crate::interner::Interner;
 use crate::oracle::{World, make_closure_in};
@@ -313,6 +313,7 @@ fn analyze_where(
     // The declared **return** contract is a demand (C§13.1): the `where` asks whether
     // the body produces a value satisfying it, adjudicated here, at the ask site.
     if let Some(ret) = eval_contract(&w.return_contract, cenv, interner) {
+        failure_overlap_demand(&w.name, &ret, findings, interner);
         let asker = format!("where {}", w.name);
         let verdict = super::demand::returns(callee, &args, &ret, &asker, cenv, interner);
         match &verdict {
@@ -543,6 +544,53 @@ fn malformed(name: &str, why: &str) -> Finding {
     }
 }
 
+/// B6's Failure-overlap rule [1.0.2], at the one adapter boundary that exists today —
+/// a declared fallible return. Where a union alternative is provably on the `Failure`
+/// rail, every success alternative must be **proven** disjoint from `Failure`: a success
+/// value inhabiting the failure shape would be swallowed by the discharge match, so the
+/// explicit success wrapper is demanded where the union is formed. Ordinary emptiness
+/// checking, nothing new; `conform` inherits this same boundary rule when it lands.
+fn failure_overlap_demand(
+    name: &str,
+    declared: &Contract,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) {
+    let failure = Contract::failure(interner);
+    let alternatives = union_alternatives(declared);
+    let on_failure_rail: Vec<bool> = alternatives
+        .iter()
+        .map(|alt| matches!(subcontract(alt, &failure, interner), Verdict::Proven))
+        .collect();
+    if !on_failure_rail.iter().any(|&rail| rail) {
+        return;
+    }
+    for (alt, rail) in alternatives.iter().zip(on_failure_rail) {
+        if !rail && !disjoint(alt, &failure) {
+            findings.push(malformed(
+                name,
+                &format!(
+                    "declares a fallible return whose success alternative {alt:?} is not \
+                     proven disjoint from Failure — wrap successes explicitly (B6)"
+                ),
+            ));
+        }
+    }
+}
+
+/// The flattened alternatives of a (possibly nested) `Union`; a non-union contract is
+/// its own single alternative.
+fn union_alternatives(contract: &Contract) -> Vec<Contract> {
+    match contract {
+        Contract::Union(a, b) => {
+            let mut out = union_alternatives(a);
+            out.extend(union_alternatives(b));
+            out
+        }
+        _ => vec![contract.clone()],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,6 +817,45 @@ mod tests {
             narrowed.return_demands[0].verdict,
             ClaimVerdict::Proven
         ));
+    }
+
+    /// A-VER's Failure-overlap wrapper demand (B6 [1.0.2]): where a declared fallible
+    /// boundary's success alternative is not proven disjoint from `Failure`, a success
+    /// value could inhabit the failure rail and its discharge match would swallow it —
+    /// so the explicit success wrapper is demanded at the boundary that forms the union.
+    #[test]
+    fn a_fallible_boundary_demands_failure_disjoint_successes() {
+        // `Data` is open (`HasField`): a record carrying `value` *and* `path`/`reason`
+        // inhabits both rails, so the boundary must reject until successes are wrapped.
+        let (overlapping, _) = check(
+            "Data = HasField(\"value\")\n\
+             parse where (Record) => Union(Data, Failure)\n\
+             parse = (raw) => raw :: {\n\
+              Data => raw\n\
+              _ => {path: \"adapter\", reason: \"malformed\"}\n\
+             }\n",
+        );
+        assert!(
+            !overlapping.accepted(),
+            "an open success shape is not proven disjoint from Failure: {:#?}",
+            overlapping.findings
+        );
+
+        // The demanded fix: an exact success wrapper without `path`/`reason` is proven
+        // disjoint from Failure, and the same adapter body then passes the boundary.
+        let (wrapped, _) = check(
+            "Ok = {value: Record}\n\
+             parse where (Record) => Union(Ok, Failure)\n\
+             parse = (raw) => raw :: {\n\
+              Ok => raw\n\
+              _ => {path: \"adapter\", reason: \"malformed\"}\n\
+             }\n",
+        );
+        assert!(
+            wrapped.accepted(),
+            "the wrapped boundary is proven disjoint and accepts: {:#?}",
+            wrapped.findings
+        );
     }
 
     /// A fact depends on every named contract its function body reads. Reusing one pure

@@ -73,11 +73,7 @@ fn ref_contract(name: &str, env: &ContractEnv, i: &mut Interner) -> Option<Contr
         "Top" => Contract::Top,
         "Bottom" => Contract::Bottom,
         // The one prelude Failure shape (B6/E9): a record with `path` and `reason`.
-        "Failure" => Contract::intersection(
-            Contract::HasField("path".into()),
-            Contract::HasField("reason".into()),
-            i,
-        ),
+        "Failure" => Contract::failure(i),
         _ => return env.get(name).cloned(),
     })
 }

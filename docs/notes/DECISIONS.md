@@ -4451,3 +4451,37 @@ The broad A-VER row remains ignored for its remaining independent cases. **`// [
 **Verification:** 438 lib passed / 1 ignored; 114 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK (with the manifest's pre-existing malformed-line warning).
+
+## 2026-08-03 — Post-recovery Phase A slice 2: the Failure-overlap wrapper demand
+
+**Measured red before implementation:** a declared fallible boundary
+`parse where (Record) => Union(Data, Failure)` with `Data = HasField("value")` was accepted with
+`findings: []`. A success record carrying `value` alongside `path`/`reason` inhabits both rails, so
+the program's `Failure` discharge arm would swallow it — the B6 [1.0.2] mechanical rule ("where
+SuccessContract ∩ Failure is not proven empty, an explicit success wrapper is demanded") had no
+implementation at any boundary.
+
+**Built:** `analyze_where` applies the rule where the declared return contract is evaluated. The
+union's alternatives are flattened; an alternative provably `⊑ Failure` is the failure rail; when a
+rail exists, every other alternative must be **proven** disjoint from the prelude `Failure` shape,
+else an Error names the alternative and demands the explicit wrapper. Ordinary emptiness checking
+only — `subcontract` identifies the rail, `disjoint` adjudicates; no new algebra, no new machinery.
+Unproven disjointness blocks like every non-grounding demand. `Contract::failure` now spells the one
+prelude shape once, shared by the prelude name resolution and this rule.
+
+**Chosen (mine, scoping):** the adapter boundary implemented is the declared fallible return
+signature — the hand-written-validator idiom E11 names as the interim until `conform`, and the only
+adapter boundary that exists in the implementation today (analyzer-side effect natives still produce
+`Top`). `conform` inherits the same rule at its own boundary when it lands. Recorded as a scoping
+choice, not a semantic ruling; the rule text is B6's verbatim.
+
+**Proven, not assumed:** the program-level red/green pair (open `HasField` success shape rejects;
+the exact-record wrapper `Ok = {value: Record}` is proven disjoint and the same adapter body
+accepts) is live at both the analyzer and conformance boundaries
+(`a_ver_failure_overlap_wrapper_demand`). The broad A-VER row's remaining cases are now the
+comparison-chain hint, full exhaustiveness diagnostics, and act-kind admission over source unions.
+**`// [ask-author]`: none.**
+
+**Verification:** 439 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.

@@ -111,6 +111,16 @@ impl Contract {
         Contract::difference(Contract::Top, Contract::Equals(v), i)
     }
 
+    /// The one prelude `Failure` shape (B6): a record carrying `path` and `reason`.
+    /// Spelled once so the prelude name and the analyzer's boundary rules share it.
+    pub fn failure(i: &mut Interner) -> Contract {
+        Contract::intersection(
+            Contract::HasField("path".into()),
+            Contract::HasField("reason".into()),
+            i,
+        )
+    }
+
     pub fn tuple(elems: impl IntoIterator<Item = Contract>, i: &mut Interner) -> Contract {
         Contract::Tuple(elems.into_iter().map(|c| i.contract(c)).collect())
     }
