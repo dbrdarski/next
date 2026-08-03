@@ -4485,3 +4485,33 @@ comparison-chain hint, full exhaustiveness diagnostics, and act-kind admission o
 **Verification:** 439 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-03 — Finding: blocker 1b is outside grounding v1's chain license — paused, asked
+
+**Authorized start [user, 2026-08-03, in-session]:** "start the next step" — the completion plan's
+step 3, pulling grounding from the exact-singleton-chain pin (blocker 1b, the one library
+`#[ignore]`).
+
+**Found before any code:** the 1b chain `f(0) → f(1) → base` varies a **numeric** argument, and the
+manifest-governed grounding specification excludes that from the v1 exact-chain license **by user
+ruling**: GR-10(3) admits only flat-sequence varying arguments ("the finite-product extension …
+recorded, deferred — not v1 [user]"), §14 lists the deferral as covering "numeric finite-state
+walking (specimens 11, 22)", and specimen 22's expected v1 verdict is "unproven — numeric exact
+walking not admitted." Checked and eliminated the other admitted routes: GR-05 descent (the edge
+drifts +1 — termination is by landing, not measure), domain-indexed row facts (`Equals(1)` is not a
+row — the else-arm ternary nests per region-table v0.3), and generalized facts (the wide row
+contains trapping inputs). Measured current behavior: the pinned program rejects as **Unproven with
+no refutation minted** — the pin's adversarial half already holds; only its acceptance half awaits
+the deferred mechanism.
+
+**Action taken: none in code.** The maintainer record (the pin's reason, `IMPLEMENTATION-STATUS.md`
+§4, completion plan T3.2/step 3) attributes 1b to "§4 exact-singleton chains" without noting the v1
+scope ruling — the same class as the blocker-2b misattribution. Implementing acceptance would
+resurrect a deferred-by-ruling mechanism (grounding §14 forbids exactly that reading), so the slice
+stops at this finding. Full statement and the three options (stamp the extension into v1 · keep the
+deferral and re-expect the pin to the honest Unproven voice · a narrower author-formulated license)
+in `NEXT-implementation-finding-blocker-1b-v1-scope.md`. **`// [ask-author]`: which option?**
+
+**Verification (unchanged by this entry):** 439 lib passed / 1 ignored; 115 conformance passed /
+11 ignored; 10 machinery gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check`
+clean; normative manifest 19/19 OK.
