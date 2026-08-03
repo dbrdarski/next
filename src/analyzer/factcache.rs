@@ -167,6 +167,41 @@ pub(crate) fn lookup(key: &FactKey) -> Option<Cached> {
     })
 }
 
+/// Resolution by **coverage** [author, 2026-08-03]: a demanded fact is answered by any
+/// settled **Proven** fact of the same instance, named-contract environment, and claim
+/// whose input domain *contains* the demanded one — the subcontract test *is* the
+/// resolution, in the same step; the exact-pointer hit is merely its trivial case.
+/// Only `Proven` transfers down: a refutation's witness may lie outside the narrower
+/// domain, and unproven says nothing about it.
+pub(crate) fn covering(key: &FactKey, interner: &mut Interner) -> Option<BodySafety> {
+    let candidates: Vec<Vec<Interned<Contract>>> = CACHE.with(|c| {
+        c.borrow()
+            .iter()
+            .filter(|(k, v)| {
+                k.shape == key.shape
+                    && k.captures == key.captures
+                    && k.named_contracts == key.named_contracts
+                    && k.claim == key.claim
+                    && k.input.len() == key.input.len()
+                    && matches!(v, Some(BodySafety::Proven))
+            })
+            .map(|(k, _)| k.input.clone())
+            .collect()
+    });
+    for domain in candidates {
+        let contains = key.input.iter().zip(&domain).all(|(asked, held)| {
+            matches!(
+                crate::contract::subcontract(asked, held, interner),
+                crate::contract::Verdict::Proven
+            )
+        });
+        if contains {
+            return Some(BodySafety::Proven);
+        }
+    }
+    None
+}
+
 /// Mark a node as being settled, and enter a settlement. Always paired with [`finish`].
 pub(crate) fn begin(key: &FactKey) {
     CACHE.with(|c| c.borrow_mut().insert(key.clone(), None));

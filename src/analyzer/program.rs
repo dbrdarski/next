@@ -170,6 +170,25 @@ pub(crate) fn analyze_program_in(
     let mut body_safety_demands = Vec::new();
     let mut executable_demands = Vec::new();
     let mut grounding_demands = Vec::new();
+
+    // Declarations first [author, 2026-08-03]: a `where` is a fact, not a statement, so
+    // its position among the executable items is immaterial — every seat resolves
+    // against the same settled declarations regardless of source order.
+    for item in &module.items {
+        if let Item::Where(w) = item {
+            analyze_where(
+                w,
+                &values,
+                &cenv,
+                &mut findings,
+                &mut return_demands,
+                &mut body_safety_demands,
+                &mut grounding_demands,
+                interner,
+            );
+        }
+    }
+
     for (item_index, item) in module.items.iter().enumerate() {
         match item {
             Item::Bind(b) => {
@@ -281,18 +300,8 @@ pub(crate) fn analyze_program_in(
                     &mut executable_demands,
                 );
             }
-            Item::Where(w) => {
-                analyze_where(
-                    w,
-                    &values,
-                    &cenv,
-                    &mut findings,
-                    &mut return_demands,
-                    &mut body_safety_demands,
-                    &mut grounding_demands,
-                    interner,
-                );
-            }
+            // Handled in the declaration pre-pass above.
+            Item::Where(_) => {}
             Item::Import(_) => {}
         }
     }
@@ -947,6 +956,51 @@ mod tests {
             narrowed.return_demands[0].verdict,
             ClaimVerdict::Proven
         ));
+    }
+
+    /// [author, 2026-08-03] Resolution is subcontract-aware from the start — like
+    /// `instanceof` on semantics, without the chain walk: a demanded fact is answered
+    /// by any proven fact whose domain **contains** the asked one, in the same
+    /// resolution step. No fail-then-retry, no re-analysis. Two parameters here, so no
+    /// orbit derivation applies — coverage is the only route.
+    #[test]
+    fn a_declared_fact_answers_concrete_calls_by_coverage() {
+        let (covered, _) = check(
+            "f where (Number, Number) => Number\n\
+             f = (a, b) => 2 * a + b <= 0 ? 0 : f(a - 1, b + 1)\n\
+             x = f(5, 0)\n",
+        );
+        assert!(
+            covered.accepted(),
+            "(5, 0) is inside the proven (Number, Number) fact: {:#?}",
+            covered.findings
+        );
+
+        // A `where` is a fact, not a statement — declaring it after the call serves
+        // the call identically.
+        let (declared_last, _) = check(
+            "f = (a, b) => 2 * a + b <= 0 ? 0 : f(a - 1, b + 1)\n\
+             x = f(5, 0)\n\
+             f where (Number, Number) => Number\n",
+        );
+        assert!(
+            declared_last.accepted(),
+            "declaration order is immaterial to fact resolution: {:#?}",
+            declared_last.findings
+        );
+
+        // Outside the declared domain coverage does not apply, and the honest
+        // judgment remains.
+        let (outside, _) = check(
+            "f where (Number, Number) => Number\n\
+             f = (a, b) => 2 * a + b <= 0 ? 0 : f(a - 1, b + 1)\n\
+             y = f(\"x\", 0)\n",
+        );
+        assert!(
+            !outside.accepted(),
+            "a String argument is not covered by the Number fact: {:#?}",
+            outside.findings
+        );
     }
 
     /// [author, 2026-08-03] **The drift is what closes** — a concrete call to a

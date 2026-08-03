@@ -4675,3 +4675,41 @@ swap; the two tests renamed to the derived-orbit wording assert the same adversa
 **Verification:** 442 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-03 — [author direction] Coverage is resolution, not recovery
+
+**Directed [user, 2026-08-03, in-session]:** `Equals(5)` must not *fail* on a proven `Number` fact
+and then trigger a rerun — it is a subcontract of it, and resolution should behave like
+`instanceof` against a parent: subtype-aware from the start, one resolution step, no
+fail-then-retry. (One refinement to the analogy, agreed in-session: contracts form no ancestor
+chain to walk — the checker decides `Equals(5) ⊑ Number` directly, in one subcontract call,
+against the handful of proven facts the function has.)
+
+**Measured red before implementation:** with the proven declaration
+`f where (Number, Number) => Number` on `f = (a, b) => 2*a + b <= 0 ? 0 : f(a - 1, b + 1)`, the
+call `x = f(5, 0)` rejected — the seat's exact-key lookup missed, discovery hit the two-parameter
+stop (no orbit derivable), and the honest cutoff surfaced as safety-unproven at the seat, despite
+the notebook holding a proven fact whose domain contains (5, 0).
+
+**Built:** `factcache::covering` — a demanded fact is answered by any settled **Proven** fact of
+the same instance, named-contract environment, and claim whose input domain contains the demanded
+one, position by position, by ordinary subcontract. Consulted as part of the one resolution step in
+`prove_claim` (directly after the exact-pointer hit, which is now merely its trivial case) and in
+discovery (a settled covering fact discharges a dependency target without minting a node). Only
+`Proven` transfers down: a refutation's witness may lie outside the narrower domain, and unproven
+says nothing — the sound direction is one-way, downward.
+
+**Declarations are facts, so order is immaterial:** `analyze_program` now settles every `where` in
+a declaration pre-pass before walking executable items; a `where` written after the call serves it
+identically (pinned in the test). Eager forward references to *bindings* keep their B4 rejection —
+this is about declarations, not evaluation order.
+
+**Proven, not assumed** (`a_declared_fact_answers_concrete_calls_by_coverage`): the covered call
+accepts with zero body re-analysis; the declaration-last form accepts identically; `f("x", 0)`
+stays rejected — `Equals("x")` is not contained in `Number`, so coverage never applies and the
+honest judgment stands. Termination at the seat rides the existing measure certificate
+(`2a + b` drops by 1 toward its stop). Zero suite flips. **`// [ask-author]`: none.**
+
+**Verification:** 443 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.

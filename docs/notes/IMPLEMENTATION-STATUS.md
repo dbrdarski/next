@@ -183,6 +183,14 @@ its first consumer is the stamped law itself: the program checker adjudicates a 
 The compendium's Principle 9 text still carries the pre-stamp wording — the normative stamp record
 is an author-owned edit; `DECISIONS.md` (2026-08-03) is the provenance record until it lands.
 
+**Coverage is resolution [author, 2026-08-03]:** a demanded fact is answered by any settled
+proven fact of the same instance/environment/claim whose domain **contains** the demanded one —
+`factcache::covering`, consulted in the same resolution step as the exact-pointer hit (its trivial
+case) and during discovery (a covered dependency mints no node). Only Proven transfers down.
+`where` declarations settle in a pre-pass, so their source position is immaterial. A concrete call
+inside a declared, proven domain now resolves through that fact with zero re-analysis
+(`f(5, 0)` under `f where (Number, Number)` — the two-parameter case no orbit reaches).
+
 **Repeated shapes close through drift-derived orbits [author, 2026-08-03; corrected same day]:**
 the first cut of this slice proposed repeated-shape candidates over the Kind basis — **caught by
 the author as an imported widening reflex and replaced**. `grounding::derived_orbit_domain` now
@@ -413,7 +421,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **442 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **443 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **115 passed, 0 failed, 11 ignored** (Failure-overlap subset activated) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |

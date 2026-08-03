@@ -126,7 +126,7 @@ pub(crate) fn prove_claim(
     // genuinely settled. A global flag answers both from hypotheses and so drops the traps
     // of callees that hold none — measured as a false accept on 2026-08-01.
     let Some(key) = factcache::key(callee, args, &claim, cenv, interner) else {
-        let (nodes, edges) = discover(callee, args, cenv, interner);
+        let (nodes, edges) = discover(callee, args, &claim, cenv, interner);
         return settle(nodes, &edges, claim, cenv, interner).verdict;
     };
     match factcache::lookup(&key) {
@@ -134,9 +134,16 @@ pub(crate) fn prove_claim(
         Some(factcache::Cached::InProgress) => return assumed(callee, args, &claim, interner),
         None => {}
     }
+    // Resolution by coverage [author, 2026-08-03]: a proven fact whose domain contains
+    // the asked one answers in this same resolution step — `instanceof` on semantics,
+    // without a chain walk: the subcontract test *is* the resolution, never a recovery
+    // after a failure. The exact-pointer hit above is its trivial case.
+    if let Some(v) = factcache::covering(&key, interner) {
+        return v;
+    }
 
     factcache::begin(&key);
-    let (nodes, edges) = discover(callee, args, cenv, interner);
+    let (nodes, edges) = discover(callee, args, &claim, cenv, interner);
     let settlement = settle(nodes, &edges, claim, cenv, interner);
     let outer = factcache::finish(&key, &settlement.verdict);
     if outer {
@@ -552,6 +559,7 @@ struct Node {
 fn discover(
     callee: &ValueRef,
     args: &[Contract],
+    claim: &Claim,
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> (Vec<Node>, Vec<Vec<usize>>) {
@@ -570,6 +578,14 @@ fn discover(
             // rather than an unbounded chain of nodes.
             if let Some(j) = covering_node(&nodes, &target, &targs, interner) {
                 edges[i].push(j);
+                continue;
+            }
+            // A settled proven fact whose domain contains the target discharges the
+            // dependency in the same resolution step — coverage as resolution, for
+            // the claim this graph will be settled under.
+            if let Some(key) = factcache::key(&target, &targs, claim, cenv, interner)
+                && matches!(factcache::covering(&key, interner), Some(v) if v.is_proven())
+            {
                 continue;
             }
             let shape = shape_of(&target);
