@@ -27,12 +27,14 @@
 //! (That `n-1 ∈ D` step is decided by the operation rulebook's interval **and congruence**
 //! transfer — integrality surviving `−` is what keeps the recursive argument inside `D`.)
 //!
-//! **What is deliberately left unproven.** A recursive call whose argument domain is *not*
-//! contained in `I` is covered by no fact here, so the verdict is `Unproven`. Widening `I`
-//! until it closes, or accumulating the domains that reach each row, are the two forbidden
-//! shapes; the honest third voice is the correct outcome. Proving such a call needs a
-//! *legitimate* wider domain — a `where`, or grounding's derived input domain / §4
-//! exact-singleton chain — none of which this module invents.
+//! **What is deliberately left unproven.** A **seed's** `I` is never synthesized — it is
+//! the call's or the `where`'s own domain. For a **dependency** target that repeats an
+//! active shape, discovery applies the resolution ladder's basis rung (C§13.3(2);
+//! [author direction, 2026-08-03]): the candidate is proposed over the finite basis
+//! (`Equals(4)` → `Number`) and must then be **proven** by the same vector induction as
+//! every fact — the proposal never certifies, and a failed basis fact leaves the seed
+//! `Unproven`. Widening-to-converge over accumulated reaching domains remains the
+//! forbidden shape; termination remains grounding's separate judgment at the seat.
 
 use std::cell::Cell;
 
@@ -570,10 +572,29 @@ fn discover(
                 continue;
             }
             let shape = shape_of(&target);
-            let cutoff = path.contains(&shape);
+            let mut cutoff = path.contains(&shape);
+            let mut input = targs;
+            if cutoff {
+                // The resolution ladder's basis rung (C§13.3(2)) [author direction,
+                // 2026-08-03]: a repeated shape is not instantiated at yet another
+                // exact domain — the candidate is proposed over the finite basis
+                // instead (`Equals(4)` → `Number`) and must then be **proven** by the
+                // ordinary vector induction; the widening proposes, it never
+                // certifies, and termination is grounding's separate judgment. Only a
+                // domain already at the basis remains a dead-end cutoff node.
+                let widened: Vec<Contract> = input.iter().map(|c| c.kind_abstraction()).collect();
+                if widened != input {
+                    if let Some(j) = covering_node(&nodes, &target, &widened, interner) {
+                        edges[i].push(j);
+                        continue;
+                    }
+                    input = widened;
+                    cutoff = false;
+                }
+            }
             nodes.push(Node {
                 callee: target,
-                input: targs,
+                input,
                 cutoff,
             });
             edges.push(Vec::new());
@@ -1128,22 +1149,46 @@ mod graph_tests {
     }
 
     #[test]
-    fn an_uncovered_recursive_chain_is_cut_off_not_expanded() {
-        // A concrete chain (5 -> 4 -> ...) is never covered by its predecessor, so the
-        // shape-repeat cutoff (C§13.3(2)) stops discovery and the verdict is the ladder's
-        // (c) rung — unproven, never an invented covering domain.
+    fn a_concrete_chain_resolves_through_the_basis_not_expansion() {
+        // [author direction, 2026-08-03] A concrete chain (5 → 4 → …) is never expanded
+        // node by node. At the shape repeat the candidate is proposed over the finite
+        // basis (`Number`) and proven by the ordinary induction, so the safe chain
+        // proves with no contracts…
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
+        assert!(
+            prove(
+                &cd,
+                std::slice::from_ref(&five),
+                &ContractEnv::new(),
+                &mut i,
+            )
+            .is_proven(),
+            "the basis rung closes the safe concrete chain"
+        );
+
+        // …while a body whose wide row traps keeps the honest third voice: its basis
+        // fact fails, so the repeat stays unproven — never proven by expansion, and
+        // never refuted without a witness represented at the asked domain.
+        let tr = f(
+            "f = (x) => x == 0 ? f(1) : (x == 1 ? 1 : 1 + \"x\")\nf",
+            &mut i,
+        );
+        let zero = Contract::Equals(i.integer(0));
         let v = prove(
-            &cd,
-            std::slice::from_ref(&five),
+            &tr,
+            std::slice::from_ref(&zero),
             &ContractEnv::new(),
             &mut i,
         );
         assert!(
             !v.is_proven(),
-            "an uncovered chain must not be proven by expansion: {v:?}"
+            "the trapping wide row blocks the basis: {v:?}"
+        );
+        assert!(
+            !matches!(v, BodySafety::Refuted(_)),
+            "no refutation without a represented witness: {v:?}"
         );
     }
 }

@@ -4589,3 +4589,51 @@ three-voice `GroundingDemand` exists; the battery body itself remains the gap.
 **Verification:** 441 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-03 — [author direction] The stop resolves through the basis, and drift decides termination
+
+**Directed [user, 2026-08-03, in-session], correcting the prior explanation of the stop rule:**
+stopping at a repeated shape must not end in "no proof." The stopped call is where the recursive
+edge's drift is read; the drift logic decides termination; and the fact itself closes over a
+general domain rather than the unprovable exact chain. Contracts must not be required for this —
+inference alone carries `countDown(5)` (Principle 3).
+
+**Measured red before implementation:** the contract-free program
+`countDown = (n) => n == 0 ? 0 : countDown(n - 1)` with `x = countDown(5)` rejected
+(safety-unproven at the seat), and the `where`-declared form rejected identically — the discovery
+walk hit `Equals(4)`, found no covering node, and minted a dead-end cutoff.
+
+**Built — the resolution ladder's basis rung (C§13.3(2)) in `safety::discover`:** when a target
+repeats an active shape and no existing candidate covers it, the candidate is proposed over the
+finite basis instead (`Contract::kind_abstraction`: `Equals(4)` → `Number`; total, fixed point in
+one step) and must then be **proven by the ordinary vector induction** — the widening proposes,
+it never certifies. A domain already at the basis remains a genuine cutoff. Termination stays
+grounding's separate judgment at the seat (already wired): `ground(countDown, Equals(5))` was
+measured `Grounded` (drift −1 from 5 lands on 0) and `ground(up, Equals(5))` `Refuted` before this
+slice — the drift logic needed no change.
+
+**The line against the forbidden machinery, drawn explicitly:** §5.1's "no widening" bans the
+reverted engine's shape — accumulated reaching domains iterated to a fixpoint with Kind-collapse
+forcing convergence. This rung is the *specified* ladder: a one-step advance-bounded proposal
+whose fact is settled by the same induction as every other fact, with imprecision landing
+`Unproven`. `Contract::kind_abstraction` was listed in the completion plan's Tier-4 residual-delete
+set; that entry is superseded — it is the basis rung's implementation and now load-bearing.
+
+**Live behavior:** contract-free `countDown(5)` and the declared form both accept; `up(5)` (drift
++1) rejects with witness 5→ refutation; `collatz(27)` now splits correctly — safety **proven**
+(basis fact over Number has no trapping row), termination honestly **unproven** → error under the
+stamp; `loop(1)` and helper-hidden divergence still refute with witness. Blocker 1b's re-expected
+pin stays green: its wide row traps, so no basis fact covers the repeat and the honest Unproven
+voice survives (asserted in the rewritten
+`a_concrete_chain_resolves_through_the_basis_not_expansion`, which also pins
+no-refutation-without-represented-witness).
+
+**Two test re-expectations, adjudicated not silenced:** the uncovered-chain test now asserts the
+basis-rung law (safe chain proves; trapping-wide-row chain stays unproven-never-refuted); the
+three-voices Unproven specimen is the changed-domain mutual case (its former specimen — countDown
+over `GreaterEq(0)` — is genuinely Proven now: safety and termination are separate questions).
+**`// [ask-author]`: none.**
+
+**Verification:** 442 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.

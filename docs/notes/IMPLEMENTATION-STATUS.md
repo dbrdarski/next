@@ -183,6 +183,15 @@ its first consumer is the stamped law itself: the program checker adjudicates a 
 The compendium's Principle 9 text still carries the pre-stamp wording — the normative stamp record
 is an author-owned edit; `DECISIONS.md` (2026-08-03) is the provenance record until it lands.
 
+**The resolution ladder's basis rung landed the same day [author direction]:** at a repeated-shape
+dependency, discovery proposes the candidate over the finite basis (`Contract::kind_abstraction`,
+one-step total) and the ordinary vector induction must prove it — proposal never certifies.
+Contract-free concrete calls to terminating recursion now accept (`countDown(5)` with no `where`);
+`collatz(27)` splits correctly (safety proven, termination honestly unproven → error under the
+stamp); blocker 1b's honest-Unproven pin holds (its wide row traps, so no basis fact covers it).
+The completion plan's Tier-4 note listing `kind_abstraction` as residual-delete is superseded —
+it is the basis rung's implementation.
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -400,7 +409,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **441 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **442 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **115 passed, 0 failed, 11 ignored** (Failure-overlap subset activated) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |

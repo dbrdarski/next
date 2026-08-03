@@ -832,9 +832,16 @@ mod tests {
             "the retained witness must inhabit the declared operation inputs"
         );
 
+        // The changed-domain mutual case is the honest third voice: the String-domain
+        // dependency fails, but no witness is represented at the declared `Number`
+        // domain, so the graph reports Unproven — never a manufactured refutation.
+        // (The former specimen — countDown over `GreaterEq(0)` — is now genuinely
+        // Proven: the basis rung closes its recursion, and safety is a separate
+        // question from termination.)
         let (unproven, _) = check(
-            "countDown where (GreaterEq(0)) => Number\n\
-             countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n",
+            "g = (y) => f(y)\n\
+             f where (Number) => Number\n\
+             f = (x) => x == 0 ? g(\"x\") : x + 1\n",
         );
         assert!(matches!(
             unproven.body_safety_demands[0].verdict,
@@ -940,6 +947,43 @@ mod tests {
             narrowed.return_demands[0].verdict,
             ClaimVerdict::Proven
         ));
+    }
+
+    /// The resolution ladder's basis rung [author direction, 2026-08-03]: a concrete
+    /// call to a terminating recursion needs **no contracts**. At the shape-repeat stop
+    /// the checker does not give up — it proposes the fact over the finite basis
+    /// (`Equals(4)` → `Number`), proves *that* by ordinary induction, and the drift
+    /// logic separately proves termination (start 5, drift −1, lands on 0).
+    #[test]
+    fn a_concrete_call_to_a_terminating_recursion_needs_no_contracts() {
+        let (bare, _) =
+            check("countDown = (n) => n == 0 ? 0 : countDown(n - 1)\nx = countDown(5)\n");
+        assert!(
+            bare.accepted(),
+            "inference alone carries the call: {:#?}",
+            bare.findings
+        );
+
+        // The declared form accepts identically.
+        let (declared, _) = check(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\n\
+             countDown where (Nat) => Number\n\
+             countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n\
+             x = countDown(5)\n",
+        );
+        assert!(
+            declared.accepted(),
+            "the declared form accepts too: {:#?}",
+            declared.findings
+        );
+
+        // The ascending twin still rejects: drift +1 from 5 never lands on 0.
+        let (ascending, _) = check("up = (n) => n == 0 ? 0 : up(n + 1)\nx = up(5)\n");
+        assert!(
+            !ascending.accepted(),
+            "drift away from the finish is still an error: {:#?}",
+            ascending.findings
+        );
     }
 
     /// Principle 9 stamped [user, 2026-08-03]: the gray tier is gone. Recursion the
