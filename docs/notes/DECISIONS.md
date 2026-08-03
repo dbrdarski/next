@@ -4515,3 +4515,26 @@ in `NEXT-implementation-finding-blocker-1b-v1-scope.md`. **`// [ask-author]`: wh
 **Verification (unchanged by this entry):** 439 lib passed / 1 ignored; 115 conformance passed /
 11 ignored; 10 machinery gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check`
 clean; normative manifest 19/19 OK.
+
+## 2026-08-03 — [author ruling] Blocker 1b re-expected: the §14 deferral stands
+
+**Ruled [user, 2026-08-03]:** option 2 of the 1b finding — grounding §14's deferral of the
+finite-product exact-chain extension (numeric finite-state walking) **stands**; no design change.
+The pin is re-expected to the v1-honest verdict.
+
+**Built:** the former `#[ignore]`d acceptance pin is now the live test
+`the_narrow_exact_chain_rejects_unproven_and_the_widened_trap_does_not_refute`: `f(0)` over the
+numeric chain rejects with the typed body verdict **Unproven — and never Refuted**, preserving the
+pin's adversarial content (the `Number`-wide trap has no witness represented in `Equals(0)`; a
+refutation would be manufactured). Acceptance moved to the `#[ignore]`d twin
+`a_the_exact_numeric_chain_accepts_under_the_deferred_extension`, whose ignore reason names the
+deferred extension as its only activation gate and repeats the no-reaching-checker prohibition.
+`IMPLEMENTATION-STATUS.md` §4 and §7 are synchronized; the finding doc's banner records the ruling.
+The prior "grounding §4 chains" attribution was incomplete — §4's v1 license never covered a
+varying *numeric* argument (GR-10(3); specimens 11/22) — recorded so the next reader does not
+implement a deferred mechanism from the maintainer record alone. **`// [ask-author]`: none — the
+open question was asked and ruled this entry.**
+
+**Verification:** 440 lib passed / 1 ignored (the deferred-extension twin); 115 conformance passed /
+11 ignored; 10 machinery gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check`
+clean; normative manifest 19/19 OK.

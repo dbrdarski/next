@@ -1,7 +1,8 @@
-> ## 📌 STATUS: **CURRENT — finding, awaiting an author ruling**
-> Implementation work on blocker 1b is paused on this finding. Nothing here changes a
-> normative document; the conflict is between a *maintainer* expectation and a
-> *manifest-governed* ruling, and the ruling wins until the author says otherwise.
+> ## 📌 STATUS: **RULED [user, 2026-08-03] — option 2: the deferral stands; retained as record**
+> The author kept grounding §14's deferral. The pin is re-expected to the v1-honest
+> verdict (reject-as-Unproven, never Refuted, live and green), with an `#[ignore]`d
+> acceptance twin tagged to the deferred finite-product extension. Recorded in
+> `DECISIONS.md` (2026-08-03) and `IMPLEMENTATION-STATUS.md` §4.
 
 # Finding: blocker 1b's acceptance is outside grounding v1's chain license
 

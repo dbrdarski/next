@@ -160,6 +160,19 @@ Field output now follows `Union`, `Intersection`, and `Difference` with `Bottom`
 access cannot succeed. The direct-reject/narrowed-accept pair is live at both analyzer and conformance
 boundaries; the broad A-VER row remains ignored for its other cases.
 
+The second post-recovery Phase-A slice (2026-08-03) activates A-VER's **Failure-overlap wrapper
+demand** (B6 [1.0.2]) at the one adapter boundary that exists today — a declared fallible return.
+Where a `Union` alternative is provably on the `Failure` rail, every success alternative must be
+proven disjoint from the prelude `Failure` shape, else an Error demands the explicit success
+wrapper; ordinary emptiness checking only, and `conform` inherits the same rule at its own boundary
+when it lands. The red/green pair (open `HasField` success shape rejects; exact-record wrapper
+accepts) is live at both analyzer and conformance boundaries. A-VER's remaining broad cases are the
+comparison-chain hint, full exhaustiveness diagnostics, and act-kind admission over source unions.
+
+Blocker 1b was **re-expected the same day under an author ruling** (grounding §14's deferral
+stands): the honest reject-as-Unproven expectation is live, and acceptance is the `#[ignore]`d
+deferred-extension twin — detail in §4 and `NEXT-implementation-finding-blocker-1b-v1-scope.md`.
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -237,12 +250,12 @@ value/interner layer, and the contract algebra including `contract::numeric` + `
 
 ## 4. Known analyzer pins — 1 `#[ignore]`d in lib
 
-This precision gap blocks acceptance where proof is absent; it is not permission to reintroduce
-reaching domains, widening, or manufactured witnesses.
+The one ignore is a **deferred-by-ruling acceptance twin**, not a v1 proof gap; it is not
+permission to reintroduce reaching domains, widening, or manufactured witnesses.
 
 | Gate | Current behavior | Actual blocker |
 |---|---|---|
-| **1b** exact recursive singleton chain | `f(0) → f(1) → 1` is safe, but the second `f` repeats a shape and §4a admits no new node through that path; the seat rejects safety-unproven | grounding §4 exact-singleton fact chains. A row-wide fact is insufficient because the same row also contains trapping inputs |
+| **1b** exact recursive singleton chain — **RE-EXPECTED 2026-08-03 [user]: the deferral stands** | `f(0) → f(1) → 1` rejects as **Unproven, never Refuted** — live and green as the v1-honest expectation (`the_narrow_exact_chain_rejects_unproven_and_the_widened_trap_does_not_refute`). The earlier acceptance expectation was **outside grounding v1's chain license**: the chain varies a *numeric* argument, and GR-10(3) admits flat-sequence varying state only — numeric finite-state walking is the **finite-product extension, deferred by user ruling** (grounding §14; specimens 11/22). See `NEXT-implementation-finding-blocker-1b-v1-scope.md` | the deferred finite-product exact-chain extension. Acceptance activates only if the author stamps it into scope; the `#[ignore]`d twin (`a_the_exact_numeric_chain_accepts_under_the_deferred_extension`) is its gate. The prior "grounding §4 chains" attribution was incomplete — §4's *v1* license never covered this shape |
 
 Resolved by the 2026-08-01 wiring:
 
@@ -373,18 +386,19 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 ---
 
-## 7. Test baseline (measured 2026-08-01, not inherited)
+## 7. Test baseline (measured 2026-08-03, not inherited)
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **438 passed, 0 failed, 1 ignored** (exact-singleton chain) |
-| `cargo test --test conformance` | **114 passed, 0 failed, 11 ignored** (A-VER subset activated) |
+| `cargo test --lib` | **440 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **115 passed, 0 failed, 11 ignored** (Failure-overlap subset activated) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
-417 / 421 / 424 / 426) are
+417 / 421 / 424 / 426 / 438 / 439) are
 **HISTORICAL**; this table is current.
-**Green ≠ complete:** the §4 exact-singleton fact-chain gate remains pinned.
+**Green ≠ complete:** the deferred finite-product extension's acceptance twin remains ignored (§4),
+and the staged work recorded elsewhere in this file remains open.

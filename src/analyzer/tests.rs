@@ -2976,19 +2976,64 @@ mod alternatives {
 
 mod recursive_domains {
     use super::{analyze, apply, empty, konst, name, nc};
+    use crate::analyzer::SafetyDemand;
+    use crate::analyzer::safety::BodySafety;
     use crate::contract::Contract;
     use crate::interner::Interner;
     use crate::oracle::run_source_in;
     use crate::rational::Rational;
 
+    /// Blocker 1b, re-expected per the 2026-08-03 ruling [user]: grounding §14's
+    /// deferral of the finite-product exact-chain extension **stands**. The chain
+    /// `f(0) → f(1) → 1` varies a *numeric* argument, which the v1 license excludes
+    /// (GR-10(3) admits flat-sequence varying state only; specimen 22: "numeric exact
+    /// walking not admitted"), so the v1-honest verdict is reject-as-**Unproven** —
+    /// and never Refuted: the `Number`-wide trap `1 + "x"` has no witness represented
+    /// in `Equals(0)`, so no refutation may be minted. Acceptance is the ignored twin
+    /// below, tagged to the deferred extension.
     #[test]
-    #[ignore = "BLOCKER 1b: the safe exact chain f(0) -> f(1) crosses a repeated shape. Section 4a admits no new node through that path, so proving this call requires grounding section 4's exact-singleton fact-chain mechanism. The retired reaching checker accepted it by following domains forward; do not restore that mechanism."]
-    fn a_widened_domain_trap_does_not_refute_the_narrower_call() {
-        // §17.1: f(0) → f(1) → 1 is concretely safe. Widening `Equals(1)` to `Number`
-        // would make `1 + "x"` live, but that trap has no witness represented in
-        // `Equals(1)` — it must not refute the call. The exact edge is known, but §4a's
-        // shape-repeat cutoff cannot admit it as another ordinary fact node; grounding's
-        // exact-singleton chain is the separate proof license this test awaits.
+    fn the_narrow_exact_chain_rejects_unproven_and_the_widened_trap_does_not_refute() {
+        let mut i = Interner::new();
+        let f = run_source_in(
+            "f = (x) => x == 0 ? f(1) : (x == 1 ? 1 : 1 + \"x\")\nf",
+            &mut i,
+        )
+        .unwrap()
+        .0;
+        let mut env = empty();
+        env.insert("f".into(), Contract::Equals(f));
+        let zero = i.integer(0);
+        let a = analyze(&apply(name("f"), vec![konst(zero)]), &env, &nc(), &mut i);
+        assert!(
+            !a.accepted(),
+            "v1 admits no proof route for a varying numeric exact chain: {:?}",
+            a.findings
+        );
+        let body_verdicts: Vec<_> = a
+            .safety_demands
+            .iter()
+            .filter_map(|d| match d {
+                SafetyDemand::Body(b) => Some(&b.verdict),
+                SafetyDemand::Operation(_) => None,
+            })
+            .collect();
+        assert!(
+            body_verdicts
+                .iter()
+                .any(|v| matches!(v, BodySafety::Unproven(_))),
+            "the typed verdict is the honest third voice: {body_verdicts:?}"
+        );
+        assert!(
+            !body_verdicts
+                .iter()
+                .any(|v| matches!(v, BodySafety::Refuted(_))),
+            "no refutation may carry the unrepresented Number-wide witness: {body_verdicts:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "DEFERRED BY RULING (grounding §14; kept 2026-08-03 [user]): acceptance of the exact numeric chain f(0) → f(1) → 1 needs the finite-product exact-chain extension (numeric finite-state walking), which GR-10(3) records as not-v1. Activates only if the author stamps the extension into scope. Do not implement numeric exact walking without that ruling, and never restore the reaching checker that accepted this by forward domains."]
+    fn a_the_exact_numeric_chain_accepts_under_the_deferred_extension() {
         let mut i = Interner::new();
         let f = run_source_in(
             "f = (x) => x == 0 ? f(1) : (x == 1 ? 1 : 1 + \"x\")\nf",
@@ -3002,7 +3047,7 @@ mod recursive_domains {
         let a = analyze(&apply(name("f"), vec![konst(zero)]), &env, &nc(), &mut i);
         assert!(
             a.accepted(),
-            "f(0) → f(1) → 1 is safe; the Number-only trap must not refute it: {:?}",
+            "under the stamped extension the chain proves: {:?}",
             a.findings
         );
     }
