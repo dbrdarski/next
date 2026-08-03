@@ -4538,3 +4538,54 @@ open question was asked and ruled this entry.**
 **Verification:** 440 lib passed / 1 ignored (the deferred-extension twin); 115 conformance passed /
 11 ignored; 10 machinery gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check`
 clean; normative manifest 19/19 OK.
+
+## 2026-08-03 — [author ruling] Principle 9 stamped: the gray tier is dead
+
+**Ruled [user, 2026-08-03, in-session]:** "Principle 9 has been overridden — gray is no longer ok;
+warnings — it's an error." Unproven grounding joins every other unproven obligation: a compile
+**error**, at every seat, never a warning. This is the P-1 stamp the compendium recorded as
+"heavily leaning toward rejection" since 2026-07-27.
+
+**Reading applied (mine, stated so it is checkable):** "gray is no longer ok" is taken to resolve
+both former stamp-blockers — (2) the gray-acknowledgment mechanism does **not** survive as opt-in
+compilation, and (3) the [permanent] gray family is permanently rejected outside proven bases. The
+compendium's own Principle 9 text (and its J3 mirror) still carries the pre-stamp wording; updating
+the normative record is an **author design action** still owed, like the grounding-v0.5 stamp
+record. This DECISIONS entry is the provenance record until then.
+
+## 2026-08-03 — Grounding wired at program seats under the stamp
+
+**Measured red before implementation:** `loop = (n) => loop(n)` followed by `x = loop(1)` — and the
+bare statement `loop(1)` — compiled **silently** (`--check` said `ok`): a program that provably
+never finishes produced no diagnostic at all, because nothing ever asked `ground()` a question.
+Under the stamp that is a false accept, and it was observed failing before the wiring.
+
+**Built:** the program checker now adjudicates a termination demand for every distinct
+`(recursive callee, argument domain)` pair — at executable seats via the typed body-safety demands
+the application path already records, and at every `where` over its declared domain (the
+declaration asserts the whole domain, divergence included). `ProgramVerdict` retains each demand as
+a typed `GroundingDemand` with all three voices. Policy: `Grounded` passes; `Refuted` errors with
+its witness ("this recursion never finishes: starting from 1 …" — the written argument, never
+synthesized); `Unproven` errors honestly. Non-recursive callees carry no demand. This is the first
+consumer of `analyzer::grounding` — the wiring the completion plan reserved for "an actual
+consumer" now exists because the stamped law itself is that consumer.
+
+**Live behavior:** `loop(1)` → error with witness 1 (the period-1 closed orbit refutation);
+`countDown where (Nat) => Number` with `Nat = GE(0) ∧ Mod(1,0)` → still accepts (constant-drift
+descent + landing); `collatz(27)` → rejects (safety-unproven at the exact seat today; its grounding
+voice is Unproven → error under the stamp either way — specimen 6's verdict with the stamped
+consequence). Zero existing tests flipped: the suites' recursive acceptance tests run at
+expression level or over groundable declared domains.
+
+**Scoping (mine):** `ground()` judges one input domain; multi-parameter callees are judged by the
+domain-free certificates (shared-measure, lexicographic, structural, mutual) via a `Top` domain —
+imprecision lands `Unproven`, which now rejects; no new mechanism. The grounding finding reuses
+`TrapClass::ArgumentObligation` (the `malformed` precedent) because divergence is deliberately not
+one of the thirteen trap classes — a dedicated program-finding taxonomy is a small owed cleanup.
+The A-NEG ignore reason is updated: the gray verdict representation it awaited is dead; the typed
+three-voice `GroundingDemand` exists; the battery body itself remains the gap.
+**`// [ask-author]`: none beyond the stamp-reading recorded above.**
+
+**Verification:** 441 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.

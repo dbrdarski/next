@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     Analysis, Completion, Finding, SafetyDemand, Severity, TypeEnv, analyze_bind, analyze_in_world,
-    demand, safety,
+    demand, grounding, induction, safety,
 };
 use crate::analyzer::TrapClass;
 use crate::analyzer::domain::AnalysisContract;
@@ -87,6 +87,17 @@ pub struct ReturnDemand {
     pub verdict: ClaimVerdict,
 }
 
+/// A termination (grounding) demand adjudicated at a program seat, all three voices
+/// retained. Principle 9 as stamped [user, 2026-08-03]: the gray warn-and-compile tier
+/// is gone — `Unproven` and `Refuted` are both compile errors, like every other
+/// unproven obligation.
+#[derive(Debug, Clone)]
+pub struct GroundingDemand {
+    pub callee: ValueRef,
+    pub domain: Vec<Contract>,
+    pub verdict: grounding::Verdict,
+}
+
 /// The result of analyzing a whole module.
 #[derive(Debug, Clone)]
 pub struct ProgramVerdict {
@@ -102,6 +113,9 @@ pub struct ProgramVerdict {
     /// Every checked executable seat, in item order. Keeping this record makes a
     /// regression to “only `where` was checked” directly observable.
     pub executable_demands: Vec<ExecutableDemand>,
+    /// Every termination demand adjudicated on a recursive callee, deduplicated per
+    /// (callee, domain), with the verdict retained through policy.
+    pub grounding_demands: Vec<GroundingDemand>,
 }
 
 impl ProgramVerdict {
@@ -155,6 +169,7 @@ pub(crate) fn analyze_program_in(
     let mut return_demands = Vec::new();
     let mut body_safety_demands = Vec::new();
     let mut executable_demands = Vec::new();
+    let mut grounding_demands = Vec::new();
     for (item_index, item) in module.items.iter().enumerate() {
         match item {
             Item::Bind(b) => {
@@ -191,6 +206,13 @@ pub(crate) fn analyze_program_in(
                         }),
                     _ => analyze_in_world(&b.value, &tenv, &cenv, top_world, interner),
                 };
+                ground_executable(
+                    &analysis,
+                    &cenv,
+                    &mut findings,
+                    &mut grounding_demands,
+                    interner,
+                );
                 let annotated = record_executable(
                     ExecutableOrigin::Binding {
                         item: item_index,
@@ -216,6 +238,13 @@ pub(crate) fn analyze_program_in(
             }
             Item::SlotDecl(slot) => {
                 let analysis = analyze_in_world(&slot.init, &tenv, &cenv, World::Pure, interner);
+                ground_executable(
+                    &analysis,
+                    &cenv,
+                    &mut findings,
+                    &mut grounding_demands,
+                    interner,
+                );
                 let annotated = record_executable(
                     ExecutableOrigin::SlotInitializer {
                         item: item_index,
@@ -236,6 +265,13 @@ pub(crate) fn analyze_program_in(
             }
             Item::Stmt(expr) => {
                 let analysis = analyze_in_world(expr, &tenv, &cenv, top_world, interner);
+                ground_executable(
+                    &analysis,
+                    &cenv,
+                    &mut findings,
+                    &mut grounding_demands,
+                    interner,
+                );
                 record_executable(
                     ExecutableOrigin::Statement { item: item_index },
                     ExecutableSeat::Statement,
@@ -253,6 +289,7 @@ pub(crate) fn analyze_program_in(
                     &mut findings,
                     &mut return_demands,
                     &mut body_safety_demands,
+                    &mut grounding_demands,
                     interner,
                 );
             }
@@ -265,9 +302,11 @@ pub(crate) fn analyze_program_in(
         return_demands,
         body_safety_demands,
         executable_demands,
+        grounding_demands,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn analyze_where(
     w: &crate::ast::Where,
     values: &HashMap<String, ValueRef>,
@@ -275,6 +314,7 @@ fn analyze_where(
     findings: &mut Vec<Finding>,
     return_demands: &mut Vec<ReturnDemand>,
     body_safety_demands: &mut Vec<DeclaredBodySafetyDemand>,
+    grounding_demands: &mut Vec<GroundingDemand>,
     interner: &mut Interner,
 ) {
     let Some(callee) = values.get(&w.name) else {
@@ -309,6 +349,10 @@ fn analyze_where(
         domain: args.clone(),
         verdict: body_safety,
     });
+
+    // The declared domain also demands termination (Principle 9 as stamped): a `where`
+    // asserts the function over this whole domain, divergence included.
+    ground_demand(callee, &args, cenv, findings, grounding_demands, interner);
 
     // The declared **return** contract is a demand (C§13.1): the `where` asks whether
     // the body produces a value satisfying it, adjudicated here, at the ask site.
@@ -578,6 +622,85 @@ fn failure_overlap_demand(
     }
 }
 
+/// Adjudicate every recursive callee the analyzed expression applied: each distinct
+/// `(callee, argument domain)` pair from the typed body-safety demands also demands
+/// termination.
+fn ground_executable(
+    analysis: &Analysis,
+    cenv: &ContractEnv,
+    findings: &mut Vec<Finding>,
+    grounding_demands: &mut Vec<GroundingDemand>,
+    interner: &mut Interner,
+) {
+    for demand in &analysis.safety_demands {
+        if let SafetyDemand::Body(body) = demand {
+            ground_demand(
+                &body.callee,
+                &body.arguments,
+                cenv,
+                findings,
+                grounding_demands,
+                interner,
+            );
+        }
+    }
+}
+
+/// Principle 9 as stamped [user, 2026-08-03]: recursion must be proven to terminate.
+/// `Grounded` passes silently; `Refuted` errors with its witness (the program provably
+/// never finishes from that written start); `Unproven` errors honestly (termination is
+/// not shown — the gray warn-and-compile tier is gone). Non-recursive callees carry no
+/// demand, and each `(callee, domain)` is adjudicated once.
+fn ground_demand(
+    callee: &ValueRef,
+    arguments: &[Contract],
+    cenv: &ContractEnv,
+    findings: &mut Vec<Finding>,
+    grounding_demands: &mut Vec<GroundingDemand>,
+    interner: &mut Interner,
+) {
+    if !induction::is_recursive(callee) {
+        return;
+    }
+    if grounding_demands
+        .iter()
+        .any(|g| g.callee == *callee && g.domain == arguments)
+    {
+        return;
+    }
+    // `ground` judges a single input domain; a multi-parameter callee is judged by the
+    // domain-free certificates (shared-measure, lexicographic, structural, mutual).
+    let domain = match arguments {
+        [one] => one.clone(),
+        _ => Contract::Top,
+    };
+    let verdict = grounding::ground(callee, &domain, cenv, interner);
+    match &verdict {
+        grounding::Verdict::Grounded => {}
+        grounding::Verdict::Refuted(refutation) => findings.push(Finding {
+            class: TrapClass::ArgumentObligation,
+            severity: Severity::Error,
+            message: format!(
+                "this recursion never finishes: starting from {}, every step stays away \
+                 from a finishing case (Principle 9: divergence is an error)",
+                refutation.witness
+            ),
+        }),
+        grounding::Verdict::Unproven => findings.push(Finding {
+            class: TrapClass::ArgumentObligation,
+            severity: Severity::Error,
+            message: "this recursive call is not proven to finish (Principle 9: \
+                      unproven termination is an error, never a warning)"
+                .into(),
+        }),
+    }
+    grounding_demands.push(GroundingDemand {
+        callee: callee.clone(),
+        domain: arguments.to_vec(),
+        verdict,
+    });
+}
+
 /// The flattened alternatives of a (possibly nested) `Union`; a non-union contract is
 /// its own single alternative.
 fn union_alternatives(contract: &Contract) -> Vec<Contract> {
@@ -817,6 +940,41 @@ mod tests {
             narrowed.return_demands[0].verdict,
             ClaimVerdict::Proven
         ));
+    }
+
+    /// Principle 9 stamped [user, 2026-08-03]: the gray tier is gone. Recursion the
+    /// compiler cannot prove terminates is a compile **error** at every seat — never a
+    /// warning, never silent — joining every other unproven obligation.
+    #[test]
+    fn a_recursion_not_proven_to_terminate_is_an_error() {
+        // `loop(1)` never finishes. Before the stamp this compiled silently.
+        let (diverging, _) = check("loop = (n) => loop(n)\nx = loop(1)\n");
+        assert!(
+            !diverging.accepted(),
+            "a diverging call is an error now: {:#?}",
+            diverging.findings
+        );
+
+        // A statement seat softens nothing: discarding the result is still divergence.
+        let (statement, _) = check("loop = (n) => loop(n)\nloop(1)\n");
+        assert!(
+            !statement.accepted(),
+            "a diverging statement is an error too: {:#?}",
+            statement.findings
+        );
+
+        // Control: recursion the compiler proves terminating still accepts —
+        // `countDown` descends by 1 and lands on 0 over the naturals.
+        let (grounded, _) = check(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\n\
+             countDown where (Nat) => Number\n\
+             countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n",
+        );
+        assert!(
+            grounded.accepted(),
+            "proven-terminating recursion accepts: {:#?}",
+            grounded.findings
+        );
     }
 
     /// A-VER's Failure-overlap wrapper demand (B6 [1.0.2]): where a declared fallible

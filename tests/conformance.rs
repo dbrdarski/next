@@ -1225,7 +1225,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "Phase A: program-level entry NOW EXISTS (analyzer::program::analyze_program, 2026-08-01) — this row is no longer blocked on it. Remaining: the battery body is an unreachable!() stub, and its verdicts need (a) a GRAY/third-voice verdict representation at program level, (b) drift for the recursion arc. Write it after the demand core (T1.2)."]
+    #[ignore = "Phase A: grounding is WIRED at program seats (2026-08-03) and Principle 9 is stamped [user]: gray is dead — unproven termination is an error, and the typed three-voice GroundingDemand record exists. Remaining: the battery body is an unreachable!() stub; write it against the stamped verdicts (the former GRAY expectations are now rejections)."]
     fn a_neg_negative_battery() {
         // Recorded verdicts (Part D§6 — the anti-regression tripwire; these must
         // never change under any future families/analysis work):

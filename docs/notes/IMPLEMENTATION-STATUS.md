@@ -173,6 +173,16 @@ Blocker 1b was **re-expected the same day under an author ruling** (grounding §
 stands): the honest reject-as-Unproven expectation is live, and acceptance is the `#[ignore]`d
 deferred-extension twin — detail in §4 and `NEXT-implementation-finding-blocker-1b-v1-scope.md`.
 
+**Principle 9 was stamped the same day [user, 2026-08-03]: the gray tier is dead.** Unproven
+grounding is a compile error, never a warning, at every seat. Grounding is therefore **wired** —
+its first consumer is the stamped law itself: the program checker adjudicates a typed
+`GroundingDemand` for every distinct recursive-callee/domain pair at executable seats and for every
+`where` over its declared domain. A provably diverging call errors with its witness
+(`loop = (n) => loop(n); x = loop(1)` names the written start `1`); proven-terminating recursion
+(`countDown` over `GE(0) ∧ Mod(1,0)`) still accepts; collatz-class recursion rejects honestly.
+The compendium's Principle 9 text still carries the pre-stamp wording — the normative stamp record
+is an author-owned edit; `DECISIONS.md` (2026-08-03) is the provenance record until it lands.
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -235,7 +245,7 @@ noted so no one implements a phantom; correcting them is an author/design action
 |---|---|---|
 | `analyzer::bodycheck` and its reaching core | **DELETED 2026-08-01** | The known-unsound forward reaching-domain checker is no longer compiled or present. `machinery_gate` bans the file, module identifier, and `check_recursive_body` / `reachable_rows` / `grow` identifiers from `src/` |
 | Safety-unproven policy | **RESOLVED 2026-08-01 — RULED [user]: it blocks** | `BodySafety::Unproven` and `OpSafety::Unproven` remain typed through `Analysis` and program records. Their fact-layer diagnostics are advisory; executable/declared consumers add the unsuppressible Error after retaining the typed verdict. Completion (`MayFallThrough`) remains a different judgment class (application §1.6) |
-| `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **CORRECTED 2026-07-31; still UNWIRED** | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Its *coverage* gaps (GR-18 point-base, peel-k, oscillator, closed-orbit, §8 WorldDecided, multi-param mutual) remain owed — those are incompleteness (→ `Unproven`), not unsoundness. **Wiring still requires separate authorization** |
+| `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **WIRED AT PROGRAM SEATS 2026-08-03** under the stamped Principle 9 [user: gray is dead — unproven grounding is an error, never a warning]. Every distinct (recursive callee, argument domain) at an executable seat, and every `where` over its declared domain, adjudicates a typed `GroundingDemand`; `Refuted` errors with its witness, `Unproven` errors honestly | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Its *coverage* gaps (GR-18 point-base, peel-k, oscillator, closed-orbit, §8 WorldDecided, multi-param mutual) remain owed — incompleteness (→ `Unproven`), which under the stamp **rejects**; broadening coverage is now precision work with a live consumer |
 | `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT AND WIRED 2026-08-01** | Ordinary known-closure application consumes `BodySafe(instance, I)`. Discovery closure → SCC collapse → reverse-topological → one joint vector pass; dependencies proved by the outer pass are memoized under their own complete keys. `countDown` over a covering declared domain and a divergent self-loop prove; an uncovered repeated-shape chain remains **Unproven**, never a manufactured refutation. Mutual and multi-parameter changed-domain executable calls now reject at the seat because safety is unproven; finer classification remains separately owed |
 | `oracle::mu` — construction windows + **Algorithm A group templates** | **RUNTIME WINDOWS WIRED; SERIALIZED TEMPLATE PARTIAL/UNWIRED** | The reference-SCC walk supplies the runtime construction windows used by module/block evaluation. The separate serialized layer-2 artifact has positional μ-refs, genuine-SCC grouping, and canonical slot order, but is still test-only; law 2 (nested-binder merge) and law 4 (partition-refinement slot merging) remain deferred. Runtime MU-14/15/16 identity no longer depends on that artifact: value-graph close plus Algorithm B realizes those rows at construction. |
 | `oracle::canon` — per-lambda shape | **BUILT, wired** | α-renaming (`$0`), capture slots (`@cap0`), polynomial NF. This is what `make_closure` (`eval.rs:239`) actually calls |
@@ -390,7 +400,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **440 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **441 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **115 passed, 0 failed, 11 ignored** (Failure-overlap subset activated) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
