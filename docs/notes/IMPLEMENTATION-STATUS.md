@@ -183,14 +183,18 @@ its first consumer is the stamped law itself: the program checker adjudicates a 
 The compendium's Principle 9 text still carries the pre-stamp wording — the normative stamp record
 is an author-owned edit; `DECISIONS.md` (2026-08-03) is the provenance record until it lands.
 
-**The resolution ladder's basis rung landed the same day [author direction]:** at a repeated-shape
-dependency, discovery proposes the candidate over the finite basis (`Contract::kind_abstraction`,
-one-step total) and the ordinary vector induction must prove it — proposal never certifies.
-Contract-free concrete calls to terminating recursion now accept (`countDown(5)` with no `where`);
-`collatz(27)` splits correctly (safety proven, termination honestly unproven → error under the
-stamp); blocker 1b's honest-Unproven pin holds (its wide row traps, so no basis fact covers it).
-The completion plan's Tier-4 note listing `kind_abstraction` as residual-delete is superseded —
-it is the basis rung's implementation.
+**Repeated shapes close through drift-derived orbits [author, 2026-08-03; corrected same day]:**
+the first cut of this slice proposed repeated-shape candidates over the Kind basis — **caught by
+the author as an imported widening reflex and replaced**. `grounding::derived_orbit_domain` now
+composes the orbit envelope from GR-05's own certificate (exact integer start, constant negative
+drifts, landing base): `countDown(5)` derives `Range(0,5) ∧ Mod(1,0)`, discovery proposes the fact
+over it, and the ordinary vector induction proves it — C§13.3(1)'s "derived grounding contracts",
+strictly tighter than any Kind. Contract-free concrete calls to terminating recursion accept; no
+certificate (collatz, ascending drifts, non-numeric edges) means no envelope and the honest cutoff;
+blocker 1b's honest-Unproven pin holds (its 0 → 1 edge drifts up). `kind_abstraction` is residual
+again per the completion plan's Tier-4 note. The correction is logged in `DECISIONS.md` — the
+third author-caught import; the machinery-gate scope note ("a gate cannot catch a renamed
+reimplementation — that stays a review obligation") performed exactly as written.
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /

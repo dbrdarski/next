@@ -29,12 +29,13 @@
 //!
 //! **What is deliberately left unproven.** A **seed's** `I` is never synthesized — it is
 //! the call's or the `where`'s own domain. For a **dependency** target that repeats an
-//! active shape, discovery applies the resolution ladder's basis rung (C§13.3(2);
-//! [author direction, 2026-08-03]): the candidate is proposed over the finite basis
-//! (`Equals(4)` → `Number`) and must then be **proven** by the same vector induction as
-//! every fact — the proposal never certifies, and a failed basis fact leaves the seed
-//! `Unproven`. Widening-to-converge over accumulated reaching domains remains the
-//! forbidden shape; termination remains grounding's separate judgment at the seat.
+//! active shape, **the drift is what closes** ([author, 2026-08-03]): the descent
+//! certificate derives the orbit envelope the recursion actually visits from its exact
+//! start (`countDown(5)` → `Range(0,5) ∧ Mod(1,0)`), composed from the program's own
+//! drift arithmetic — C§13.3(1)'s "derived grounding contracts". The derivation
+//! **proposes** the fact domain; the same vector induction as every fact must prove it,
+//! and where no certificate applies the honest cutoff stays `Unproven`. Kind-menu
+//! widening and accumulated reaching domains remain the forbidden, imported shapes.
 
 use std::cell::Cell;
 
@@ -575,21 +576,29 @@ fn discover(
             let mut cutoff = path.contains(&shape);
             let mut input = targs;
             if cutoff {
-                // The resolution ladder's basis rung (C§13.3(2)) [author direction,
-                // 2026-08-03]: a repeated shape is not instantiated at yet another
-                // exact domain — the candidate is proposed over the finite basis
-                // instead (`Equals(4)` → `Number`) and must then be **proven** by the
-                // ordinary vector induction; the widening proposes, it never
-                // certifies, and termination is grounding's separate judgment. Only a
-                // domain already at the basis remains a dead-end cutoff node.
-                let widened: Vec<Contract> = input.iter().map(|c| c.kind_abstraction()).collect();
-                if widened != input {
-                    if let Some(j) = covering_node(&nodes, &target, &widened, interner) {
-                        edges[i].push(j);
-                        continue;
+                // [author correction, 2026-08-03] **The drift is what closes.** From an
+                // exact start, the descent certificate derives the orbit envelope the
+                // recursion actually visits — `Range(0,5) ∧ Mod(1,0)` for
+                // `countDown(5)` — composed from the program's own drift arithmetic
+                // (C§13.3(1) "derived grounding contracts"). A Kind-menu widening
+                // briefly stood here; it was the imported abstract-interpretation
+                // shape and is gone. The derivation **proposes** a fact domain — the
+                // ordinary vector induction must still prove the fact over it — and
+                // where no certificate applies, the honest cutoff remains.
+                if let [single] = &input[..]
+                    && let Some(envelope) = crate::analyzer::grounding::derived_orbit_domain(
+                        &target, single, cenv, interner,
+                    )
+                {
+                    let derived = vec![envelope];
+                    if derived != input {
+                        if let Some(j) = covering_node(&nodes, &target, &derived, interner) {
+                            edges[i].push(j);
+                            continue;
+                        }
+                        input = derived;
+                        cutoff = false;
                     }
-                    input = widened;
-                    cutoff = false;
                 }
             }
             nodes.push(Node {
@@ -1149,11 +1158,12 @@ mod graph_tests {
     }
 
     #[test]
-    fn a_concrete_chain_resolves_through_the_basis_not_expansion() {
-        // [author direction, 2026-08-03] A concrete chain (5 → 4 → …) is never expanded
-        // node by node. At the shape repeat the candidate is proposed over the finite
-        // basis (`Number`) and proven by the ordinary induction, so the safe chain
-        // proves with no contracts…
+    fn a_concrete_chain_closes_through_its_derived_orbit_not_expansion() {
+        // [author, 2026-08-03] A concrete chain (5 → 4 → …) is never expanded node by
+        // node — **the drift is what closes**. At the shape repeat the descent
+        // certificate derives the orbit envelope (`Range(0,5) ∧ Mod(1,0)`) from the
+        // program's own arithmetic, and the ordinary induction proves the fact over
+        // it, so the safe chain proves with no contracts…
         let mut i = Interner::new();
         let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
         let five = Contract::Equals(i.integer(5));
@@ -1165,11 +1175,11 @@ mod graph_tests {
                 &mut i,
             )
             .is_proven(),
-            "the basis rung closes the safe concrete chain"
+            "the derived orbit closes the safe concrete chain"
         );
 
-        // …while a body whose wide row traps keeps the honest third voice: its basis
-        // fact fails, so the repeat stays unproven — never proven by expansion, and
+        // …while an edge with no descent certificate (0 → 1 drifts **up**) derives no
+        // envelope: the honest cutoff stays unproven — never proven by expansion, and
         // never refuted without a witness represented at the asked domain.
         let tr = f(
             "f = (x) => x == 0 ? f(1) : (x == 1 ? 1 : 1 + \"x\")\nf",
@@ -1184,7 +1194,7 @@ mod graph_tests {
         );
         assert!(
             !v.is_proven(),
-            "the trapping wide row blocks the basis: {v:?}"
+            "no certificate, no envelope, no proof: {v:?}"
         );
         assert!(
             !matches!(v, BodySafety::Refuted(_)),

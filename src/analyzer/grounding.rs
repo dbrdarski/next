@@ -216,6 +216,98 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
     }
 }
 
+/// The **derived orbit envelope** [author, 2026-08-03]: for a self-recursion whose
+/// constant negative integer drifts land (exactly GR-05's own license — nothing beyond
+/// it), the domain the recursion visits from an exact start is composed from the
+/// program's own drift arithmetic: `Range(floor, start) ∧ Mod(g, start mod g)`, with `g`
+/// the gcd of the step sizes and `floor` read from the landing base. `countDown(5)`
+/// derives `Range(0, 5) ∧ Mod(1, 0)`. This is C§13.3(1)'s "derived grounding contracts":
+/// the derivation **proposes** a fact domain — the ordinary induction must still prove
+/// the fact over it — and it is never a Kind menu; where no certificate applies there is
+/// no envelope and the caller keeps its honest cutoff.
+pub(crate) fn derived_orbit_domain(
+    callee: &ValueRef,
+    start: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Contract> {
+    let s = point_value(start)?;
+    if !s.is_integer() {
+        return None;
+    }
+    let closure = callee.as_closure()?;
+    let param = single_param(&closure.lambda.params)?;
+    let rows = region_table(&closure.lambda.body, &param, cenv, interner);
+
+    let mut drifts: Vec<Rational> = Vec::new();
+    let mut bases: Vec<Contract> = Vec::new();
+    for row in &rows {
+        let mut calls = Vec::new();
+        collect_self_calls(&row.result, &closure, callee, &mut calls);
+        if calls.is_empty() {
+            bases.push(row.region.clone());
+        } else {
+            for arglist in &calls {
+                let arg = arglist.first()?;
+                drifts.push(constant_drift(arg, &param)?);
+            }
+        }
+    }
+    let zero = Rational::from(0);
+    if drifts.is_empty() || !drifts.iter().all(|d| *d < zero && d.is_integer()) {
+        return None;
+    }
+    let [base] = bases.as_slice() else {
+        return None;
+    };
+    if !lands(base, &drifts, start, interner) {
+        return None;
+    }
+
+    // Floor from the landing base; overshoot bounded by the largest step.
+    let max_step = drifts
+        .iter()
+        .map(|d| -d.clone())
+        .max()
+        .expect("at least one drift");
+    let floor = match point_value(base) {
+        // `lands` admits a point base only for the single unit step: grid-exact.
+        Some(b) => b,
+        None => match base {
+            Contract::LessEq(c) | Contract::Less(c) => c.clone() - max_step,
+            _ => return None,
+        },
+    };
+    // A start already at or inside the base has the trivial orbit `{start}`.
+    let floor = if floor > s { s.clone() } else { floor };
+
+    // Every reachable value is `start − Σ kᵢ·|dᵢ| ≡ start (mod g)`, g = gcd of the steps.
+    let mut g = BigInt::from(0);
+    for d in &drifts {
+        let step = (-d.clone()).as_ratio().numer().clone();
+        g = gcd_bigint(g, step);
+    }
+    let r = {
+        let n = s.as_ratio().numer().clone();
+        ((n % &g) + &g) % &g
+    };
+    Some(Contract::intersection(
+        Contract::Range(floor, s),
+        Contract::Mod { n: g, r },
+        interner,
+    ))
+}
+
+fn gcd_bigint(a: BigInt, b: BigInt) -> BigInt {
+    let (mut a, mut b) = (a.max(BigInt::from(0)), b.max(BigInt::from(0)));
+    while b != BigInt::from(0) {
+        let r = &a % &b;
+        a = b;
+        b = r;
+    }
+    a
+}
+
 /// The **constant-drift refutation** from a represented-exact start `start` (GR-20/23): a
 /// single forced *linear* recursion (one recursive row, one self-call, **any** constant
 /// drift) whose forward orbit `{ start + drift·k : k ≥ 0 }` provably misses **every** base

@@ -949,11 +949,11 @@ mod tests {
         ));
     }
 
-    /// The resolution ladder's basis rung [author direction, 2026-08-03]: a concrete
-    /// call to a terminating recursion needs **no contracts**. At the shape-repeat stop
-    /// the checker does not give up — it proposes the fact over the finite basis
-    /// (`Equals(4)` → `Number`), proves *that* by ordinary induction, and the drift
-    /// logic separately proves termination (start 5, drift −1, lands on 0).
+    /// [author, 2026-08-03] **The drift is what closes** — a concrete call to a
+    /// terminating recursion needs no contracts. At the shape-repeat stop the checker
+    /// reads the drift (5 → 4 = −1), the certificate derives the orbit envelope
+    /// (`Range(0,5) ∧ Mod(1,0)`), and the fact is proven by ordinary induction over
+    /// that envelope; the same drift logic proves termination at the seat.
     #[test]
     fn a_concrete_call_to_a_terminating_recursion_needs_no_contracts() {
         let (bare, _) =

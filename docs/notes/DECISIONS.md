@@ -4637,3 +4637,41 @@ over `GreaterEq(0)` — is genuinely Proven now: safety and termination are sepa
 **Verification:** 442 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-03 — [author catch] The Kind-menu rung was an import; replaced by drift-derived orbits
+
+**Caught [user, 2026-08-03, in-session]:** the previous entry's mechanism — proposing repeated-shape
+candidates over the Kind basis (`Equals(4)` → `Number`) — was challenged: *"The drift from
+Equals(5) to Equals(4), 4 − 5 = −1, is what closes. You don't need Number. This whole reasoning is
+a red flag that you're importing machinery from theorem provers."* The challenge is correct, and
+the previous entry's paragraph defending the Kind rung as "the specified ladder" is retracted — it
+was a rationalized import of the abstract-interpretation widening reflex, the project's #1 named
+failure mode, caught by the author for the third time.
+
+**Replaced the same day.** `grounding::derived_orbit_domain` composes, from GR-05's own certificate
+pieces and nothing more (exact integer start, constant negative integer drifts, landing base), the
+**orbit envelope** the recursion actually visits: `Range(floor, start) ∧ Mod(g, start mod g)` with
+`g` the gcd of the step sizes and the floor read from the landing base (point base grid-exact;
+half-line base padded by the largest step). `countDown(5)` derives `Range(0,5) ∧ Mod(1,0)`.
+Discovery proposes the repeated-shape fact over that envelope — C§13.3(1)'s "derived grounding
+contracts", the native rung — and the ordinary vector induction must still prove it. No certificate
+⇒ no envelope ⇒ the honest cutoff stays. `Contract::kind_abstraction` has no live caller again;
+the completion plan's Tier-4 residual note stands after all, and the previous entry's
+"load-bearing" claim is withdrawn.
+
+**Why the native form is also stronger, on record:** the envelope is *tighter* than the Kind — a
+body safe only on the orbit (e.g. a bounded tuple index) proves over `Range(0,5) ∧ Mod(1,0)` where
+the `Number` question would have failed. The import was not just foreign; it was worse.
+
+**Corrected claims from the previous entry:** collatz does **not** split safety-proven /
+termination-unproven — with no constant drift it derives no envelope, so both judgments are
+honestly unproven and `collatz(27)` rejects on both voices. The ascending `up(5)` likewise rejects
+with no envelope (drift +1 admits no descent certificate) alongside its drift-away refutation.
+`countDown(5)` bare and declared both accept through the envelope; blocker 1b's honest-Unproven pin
+holds (its 0 → 1 edge drifts *up* — no certificate, no envelope). All 442/115/10 green after the
+swap; the two tests renamed to the derived-orbit wording assert the same adversarial content.
+**`// [ask-author]`: none.**
+
+**Verification:** 442 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.
