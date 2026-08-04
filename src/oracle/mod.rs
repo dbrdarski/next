@@ -41,6 +41,16 @@ pub use eval::{
     run_program_commits, run_program_value,
 };
 pub(crate) use eval::{lambda_free_vars, make_closure_in};
+
+/// The μ package's serialized group canonicalization (Algorithm A's layer-2
+/// artifact): each binding name → its canonical member key, with intra-group
+/// cycles μ-bound positionally under the canonical slot order. Pure over the
+/// source expressions — interner-free, so keys are stable across interners.
+pub(crate) fn canonical_group_keys(
+    bindings: &[(String, crate::ast::Expr)],
+) -> std::collections::BTreeMap<String, String> {
+    mu::canonicalize_group(bindings)
+}
 pub use harness::{HostIo, RunError, run_source, run_source_in, run_with_io};
 pub use harness::{check_source, check_source_in};
 

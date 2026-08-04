@@ -343,6 +343,13 @@ may-region; sibling params stay case (c)); `instance_table_multi` joins the RT-0
 three multi consumers share one derivation per instance. Detail in `DECISIONS.md`
 (2026-08-04).
 
+**The C§13.4 layer-2 join landed (2026-08-04):** fact and instance keys carry `ShapeKey` —
+SCC members key by their canonical member key within the serialized group template
+(`canonical_group_keys`, the μ package's Algorithm A artifact, now analyzer-consumable);
+spelling- and interner-independent, pinned by α-variant groups in separate interners; sibling
+captures excluded; ambiguous naming falls back soundly to the per-lambda shape. Law 2/4 and
+symbolic-instance keys stay deferred. Detail in `DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -409,7 +416,7 @@ noted so no one implements a phantom; correcting them is an author/design action
 | `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT AND WIRED 2026-08-01** | Ordinary known-closure application consumes `BodySafe(instance, I)`. Discovery closure → SCC collapse → reverse-topological → one joint vector pass; dependencies proved by the outer pass are memoized under their own complete keys. `countDown` over a covering declared domain and a divergent self-loop prove; an uncovered repeated-shape chain remains **Unproven**, never a manufactured refutation. Mutual and multi-parameter changed-domain executable calls now reject at the seat because safety is unproven; finer classification remains separately owed |
 | `oracle::mu` — construction windows + **Algorithm A group templates** | **RUNTIME WINDOWS WIRED; SERIALIZED TEMPLATE PARTIAL/UNWIRED** | The reference-SCC walk supplies the runtime construction windows used by module/block evaluation. The separate serialized layer-2 artifact has positional μ-refs, genuine-SCC grouping, and canonical slot order, but is still test-only; law 2 (nested-binder merge) and law 4 (partition-refinement slot merging) remain deferred. Runtime MU-14/15/16 identity no longer depends on that artifact: value-graph close plus Algorithm B realizes those rows at construction. |
 | `oracle::canon` — per-lambda shape | **BUILT, wired** | α-renaming (`$0`), capture slots (`@cap0`), polynomial NF. This is what `make_closure` (`eval.rs:239`) actually calls |
-| **Layer-2 template → analyzer-key join** | **MISSING — CACHE CONFORMANCE/PRECISION GAP** | Runtime function identity is complete through construction interning. The remaining join is analyzer-facing: `mu::canonicalize_group` still does not supply the serialized group shape required by C§13.4 fact/template keys. Current keys use canonical per-lambda shape plus capture contracts, so equivalent recursive groups can miss a memo hit. The failure direction is recomputation/Unproven, never reuse of the wrong fact. |
+| **Layer-2 template → analyzer-key join** | **LANDED 2026-08-04** | `factcache::ShapeKey`: SCC members key by their canonical member key within `mu`'s serialized group template (spelling- and interner-independent; siblings excluded from capture tuples); lone functions stay per-lambda. Ambiguous member naming falls back to `Solo` (sound, misses only). Law 2/4 refinements and symbolic-instance keys remain deferred. |
 | `analyzer::induction` pipeline — candidate discovery, domain derivation (`obligation::accepted_domain`, a **dissolved** concept), `summarize_instance` consumption, same-arity domain propagation (marked interim), candidate-to-candidate-only edges | **NON-AUTHORITATIVE** | Not a ready foundation. **Its independently valid SCC utilities (e.g. `scc_reverse_topo`, the reverse-topological order) may be reused.** There is **no** authorized broad replace-and-rebuild project |
 
 **Not quarantined** (trusted): the lexer, parser, desugar, oracle interpreter, normalization harness,
@@ -560,7 +567,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **465 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **466 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **156 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |

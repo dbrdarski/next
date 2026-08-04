@@ -27,18 +27,16 @@
 //! and demanded-return contracts are interned too, so every semantic component compares by
 //! pointer.
 //!
-//! **KNOWN GAP — this is the layer-1 shape, and C§13.4 specifies the layer-2 shape.**
-//! `oracle::canon` supplies α-renaming, capture slots, and polynomial NF. The separate
-//! μ-binder template — SCC grouping, positional μ-refs, and canonical slot order — lives in
-//! `oracle::mu`, but its serialized result is not yet an input to this key. Runtime value
-//! identity does not depend on that join: recursive construction closes value graphs through
-//! the interner and uses Algorithm B as the exact bucket verifier. The missing artifact here is
-//! specifically the analyzer-facing layer-2 key; law 2 and law 4 refinements are also deferred.
-//!
-//! Consequence: equivalent mutually recursive groups need not share keys the way C§13.4
-//! intends. The failure direction is **false negatives** — a missed hit, never a wrong verdict —
-//! so this is a precision and completeness gap, not a runtime-identity or soundness one. It must
-//! be closed before the cache can be claimed conformant.
+//! **The layer-2 join (2026-08-04):** the shape half of the key is [`ShapeKey`] — a lone
+//! acyclic function keys by its canonical per-lambda shape, and a member of a recursive
+//! reference SCC keys by its **canonical member key within the serialized group template**
+//! (`oracle::mu`'s Algorithm A — positional μ-refs, canonical slot order), which is
+//! spelling- and interner-independent; sibling references route inside the serialization
+//! and are excluded from the capture tuple. Where the member names cannot be derived
+//! unambiguously from the sibling environments, the key falls back to the per-lambda
+//! `Solo` shape — sound, at worst a missed shared hit. Still deferred: the μ package's
+//! law 2 (nested-binder merge) and law 4 (partition-refinement slot merging), and fact
+//! keys for **symbolic** (non-concrete) instances, which are not yet constructed at all.
 //!
 //! **Pure memoization.** A settled entry is a deterministic fact of the complete semantic key.
 //! Reusing the table across compilations is therefore sound. In particular, the complete
@@ -63,17 +61,132 @@ use crate::value::ValueRef;
 
 /// A fact node: (analysis instance, row-set `I`, demanded `C`).
 ///
-/// The instance is `(canonical shape, value-capture contracts)`. The complete named-contract
+/// The instance is `(layer-2 shape, value-capture contracts)`. The complete named-contract
 /// environment is a further analyzer input until named contracts become ordinary annotated
 /// captures. The claim carries the demanded contract for a return fact and is the discriminator
 /// for safety/completion facts.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct FactKey {
-    shape: Interned<Lambda>,
+    shape: ShapeKey,
     captures: Vec<Interned<Contract>>,
     named_contracts: Interned<NamedContractEnvironment>,
     input: Vec<Interned<Contract>>,
     claim: MemoClaim,
+}
+
+/// The **layer-2 shape** (C§12.3 layer 2 / C§13.4): a lone acyclic function keys by
+/// its canonical per-lambda shape; a member of a recursive reference SCC keys by its
+/// **canonical member key within the serialized group template** (Algorithm A —
+/// positional μ-refs, canonical slot order), which is spelling- and
+/// interner-independent. Sibling references live inside the group serialization, so
+/// they are excluded from the instance's capture tuple.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ShapeKey {
+    Solo(Interned<Lambda>),
+    Group(String),
+}
+
+/// A closure's layer-2 identity plus the free-variable names that resolve to its
+/// own SCC siblings (excluded from capture tuples — the template routes them).
+#[derive(Clone)]
+pub(crate) struct Layer2 {
+    pub(crate) shape: ShapeKey,
+    pub(crate) siblings: std::collections::HashSet<String>,
+}
+
+thread_local! {
+    /// Memo: closure value → its layer-2 identity. The group canonicalization
+    /// enumerates slot permutations, so it runs once per closure, never per key.
+    static LAYER2: RefCell<HashMap<ValueRef, Layer2>> = RefCell::new(HashMap::new());
+}
+
+/// The layer-2 identity of a closure (memoized). Falls back to the per-lambda
+/// `Solo` shape — always sound, only ever costing a shared hit — when the group's
+/// member names cannot be derived unambiguously from the sibling environments.
+pub(crate) fn layer2(callee: &ValueRef) -> Option<Layer2> {
+    callee.as_fn()?;
+    if let Some(hit) = LAYER2.with(|m| m.borrow().get(callee).cloned()) {
+        return Some(hit);
+    }
+    let computed = compute_layer2(callee)?;
+    LAYER2.with(|m| m.borrow_mut().insert(callee.clone(), computed.clone()));
+    Some(computed)
+}
+
+fn compute_layer2(callee: &ValueRef) -> Option<Layer2> {
+    use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
+    let function = callee.as_fn()?;
+    let solo = |f: &crate::value::FnValue| Layer2 {
+        shape: ShapeKey::Solo(f.shape_rc()),
+        siblings: std::collections::HashSet::new(),
+    };
+
+    let group = reachable_closures(callee.clone());
+    let adj: Vec<Vec<usize>> = group
+        .iter()
+        .map(|g| {
+            let targets = callee_targets(g);
+            (0..group.len())
+                .filter(|&j| targets.contains(&group[j]))
+                .collect()
+        })
+        .collect();
+    let me = group.iter().position(|g| g == callee)?;
+    let components = crate::analyzer::induction::scc_reverse_topo(&adj);
+    let component = components.iter().find(|c| c.contains(&me))?;
+    let cyclic = component.len() > 1 || adj[me].contains(&me);
+    if !cyclic {
+        return Some(solo(function));
+    }
+
+    // Derive each member's binding name: the free-variable name under which any
+    // member's environment (its own included — late-bound self-reference) resolves
+    // to it. Ambiguity or a nameless member falls back to the per-lambda shape.
+    let members: Vec<&ValueRef> = component.iter().map(|&i| &group[i]).collect();
+    let mut names: Vec<Option<String>> = vec![None; members.len()];
+    for holder in &members {
+        let (Some(hf), Some(hc)) = (holder.as_fn(), holder.as_closure()) else {
+            continue;
+        };
+        for free in hf.free_vars() {
+            if let Some(crate::env::Binding::Value(v)) = hc.env.lookup(free)
+                && let Some(k) = members.iter().position(|m| **m == v)
+            {
+                match &names[k] {
+                    None => names[k] = Some(free.clone()),
+                    Some(existing) if existing == free => {}
+                    Some(_) => return Some(solo(function)), // two names, one member
+                }
+            }
+        }
+    }
+    let names: Option<Vec<String>> = names.into_iter().collect();
+    let Some(names) = names else {
+        return Some(solo(function));
+    };
+    if names.iter().collect::<std::collections::HashSet<_>>().len() != names.len() {
+        return Some(solo(function)); // one name, two members
+    }
+
+    let bindings: Vec<(String, crate::ast::Expr)> = members
+        .iter()
+        .zip(&names)
+        .map(|(m, n)| {
+            let lambda = m
+                .as_closure()
+                .expect("a member is a closure")
+                .lambda
+                .clone();
+            (n.clone(), crate::ast::Expr::Lambda(lambda))
+        })
+        .collect();
+    let keys = crate::oracle::canonical_group_keys(&bindings);
+    let mine = component.iter().position(|&i| i == me)?;
+    let my_key = keys.get(&names[mine])?.clone();
+    Some(Layer2 {
+        shape: ShapeKey::Group(my_key),
+        siblings: names.into_iter().collect(),
+    })
 }
 
 /// A canonical snapshot of `ContractEnv`. Sorting removes `HashMap` iteration order; interning
@@ -119,11 +232,15 @@ pub(crate) fn key(
 ) -> Option<FactKey> {
     let f = callee.as_fn()?;
     let closure = callee.as_closure()?;
+    let layer2 = layer2(callee)?;
     // De-Bruijn order: `free_vars` is the ordered capture-slot list `shape`'s `@cap`i
     // refer to, so iterating it gives a positional tuple independent of name spelling.
+    // Sibling references of a recursive group are routed inside the group
+    // serialization and excluded here (the layer-2 discipline).
     let capture_terms: Vec<Contract> = f
         .free_vars()
         .iter()
+        .filter(|n| !layer2.siblings.contains(*n))
         .map(|n| match closure.env.lookup(n) {
             Some(crate::env::Binding::Value(v)) => Contract::Equals(v),
             _ => Contract::Top,
@@ -149,7 +266,7 @@ pub(crate) fn key(
         Claim::Completes => MemoClaim::Completes,
     };
     Some(FactKey {
-        shape: f.shape_rc(),
+        shape: layer2.shape,
         captures,
         named_contracts,
         input,
@@ -517,5 +634,66 @@ mod interning_tests {
             first_key, reversed_key,
             "map insertion order is not fact identity"
         );
+    }
+}
+
+#[cfg(test)]
+mod layer2_tests {
+    use super::*;
+    use crate::oracle::run_source_in;
+
+    /// The join's whole content: a mutual group's member keys come from the
+    /// serialized group canonicalization, so they are **spelling- and
+    /// interner-independent** — two α-variant spellings built in *separate*
+    /// interners (where value-pointer collapse cannot apply) produce the same
+    /// `ShapeKey::Group`; the two members of one group stay distinct; a lone
+    /// function stays `Solo`.
+    #[test]
+    fn group_member_keys_are_spelling_and_interner_independent() {
+        let mut a = Interner::new();
+        let even_a = run_source_in(
+            "isEven = (n) => n == 0 ? true : isOdd(n - 1)\n\
+             isOdd = (n) => n == 0 ? false : isEven(n - 1)\n\
+             isEven",
+            &mut a,
+        )
+        .unwrap()
+        .0;
+
+        let mut b = Interner::new();
+        let even_b = run_source_in(
+            "even = (k) => k == 0 ? true : odd(k - 1)\n\
+             odd = (k) => k == 0 ? false : even(k - 1)\n\
+             even",
+            &mut b,
+        )
+        .unwrap()
+        .0;
+
+        let la = layer2(&even_a).expect("a closure");
+        let lb = layer2(&even_b).expect("a closure");
+        assert!(matches!(la.shape, ShapeKey::Group(_)), "a mutual member");
+        assert_eq!(
+            la.shape, lb.shape,
+            "the group serialization sees through spelling and interner"
+        );
+
+        // The sibling is a *different* member of the same group.
+        let odd_a = {
+            let closure = even_a.as_closure().unwrap();
+            match closure.env.lookup("isOdd") {
+                Some(crate::env::Binding::Value(v)) => v,
+                other => panic!("isOdd must be captured: {other:?}"),
+            }
+        };
+        let lodd = layer2(&odd_a).expect("a closure");
+        assert!(matches!(lodd.shape, ShapeKey::Group(_)));
+        assert_ne!(la.shape, lodd.shape, "two members, two keys");
+
+        // A lone acyclic function keys by its per-lambda shape.
+        let mut c = Interner::new();
+        let solo = run_source_in("f = (n) => n + 1\nf", &mut c).unwrap().0;
+        let ls = layer2(&solo).expect("a closure");
+        assert!(matches!(ls.shape, ShapeKey::Solo(_)));
     }
 }

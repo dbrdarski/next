@@ -5611,3 +5611,31 @@ inventory.**
 
 **Verification:** 465 lib passed / 1 ignored; 156 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The C§13.4 layer-2 join: fact keys speak the group template's language
+
+**The recorded cache-conformance gap closes.** The analyzer's memo keys — the proven-fact
+cache and both RT-09 instance caches — now carry a **`ShapeKey`**: a lone acyclic function
+keys by its canonical per-lambda shape (`Solo`), and a member of a recursive reference SCC
+keys by its **canonical member key within the serialized group template** (`Group`) —
+`oracle::mu`'s Algorithm A artifact, promoted from test-only through one `pub(crate)` seam
+(`canonical_group_keys`): genuine-SCC grouping, positional μ-refs, canonical slot order by
+the lexicographically-least permutation. Because the serialization is pure over source
+expressions, the key is **spelling- and interner-independent** — the property value-pointer
+identity cannot give, and the pin proves it by building α-variant spellings of the even/odd
+pair in *separate interners* and getting equal `Group` keys, distinct per member, `Solo` for
+a lone function. Sibling references route inside the serialization and are excluded from the
+capture tuple (the layer-2 discipline: instances are parameterized by **external** captures).
+
+**The resolver is memoized and honest at its edges:** the SCC is computed over the closure's
+reachable reference graph; member binding names derive from the sibling environments
+(late-bound self-reference included), and any ambiguity — two names for one member, one name
+for two — falls back to the per-lambda `Solo` shape, which is always sound and at worst
+misses a shared hit. **Still deferred, named in the module note:** the μ package's law 2
+(nested-binder merge) and law 4 (partition-refinement slot merging), and fact keys for
+symbolic (non-concrete) instances, which the analyzer does not yet construct at all.
+Behavior across every suite is unchanged. **`// [ask-author]`: none — the join consumes the
+design-closed μ package's own serialization through its stated identity.**
+
+**Verification:** 466 lib passed / 1 ignored; 156 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

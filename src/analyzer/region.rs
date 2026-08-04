@@ -74,7 +74,7 @@ thread_local! {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct InstanceKey {
-    shape: crate::intern::Interned<crate::ast::Lambda>,
+    shape: crate::analyzer::factcache::ShapeKey,
     captures: Vec<crate::intern::Interned<Contract>>,
     named: Vec<(String, crate::intern::Interned<Contract>)>,
 }
@@ -93,10 +93,12 @@ pub(crate) fn instance_table(
     let closure = callee.as_closure()?;
     let function = callee.as_fn()?;
     let param = crate::analyzer::single_plain_param(&closure.lambda.params)?;
+    let layer2 = crate::analyzer::factcache::layer2(callee)?;
     let caps = crate::analyzer::safety::capture_env(callee);
     let captures: Vec<crate::intern::Interned<Contract>> = function
         .free_vars()
         .iter()
+        .filter(|name| !layer2.siblings.contains(*name))
         .map(|name| {
             let c = caps.get(name).map(|a| a.erase(i)).unwrap_or(Contract::Top);
             i.contract(c)
@@ -108,7 +110,7 @@ pub(crate) fn instance_table(
         .collect();
     named.sort_by(|a, b| a.0.cmp(&b.0));
     let key = InstanceKey {
-        shape: function.shape_rc(),
+        shape: layer2.shape,
         captures,
         named,
     };
@@ -146,10 +148,12 @@ pub(crate) fn instance_table_multi(
     if params.len() < 2 {
         return None;
     }
+    let layer2 = crate::analyzer::factcache::layer2(callee)?;
     let caps = crate::analyzer::safety::capture_env(callee);
     let captures: Vec<crate::intern::Interned<Contract>> = function
         .free_vars()
         .iter()
+        .filter(|name| !layer2.siblings.contains(*name))
         .map(|name| {
             let c = caps.get(name).map(|a| a.erase(i)).unwrap_or(Contract::Top);
             i.contract(c)
@@ -161,7 +165,7 @@ pub(crate) fn instance_table_multi(
         .collect();
     named.sort_by(|a, b| a.0.cmp(&b.0));
     let key = InstanceKey {
-        shape: function.shape_rc(),
+        shape: layer2.shape,
         captures,
         named,
     };
