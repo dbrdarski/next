@@ -177,6 +177,29 @@ pub(crate) fn analyze_program_in(
     let mut executable_demands = Vec::new();
     let mut grounding_demands = Vec::new();
 
+    // E12's self-prefix lint: naming a sibling under this module's own first dotted
+    // segment is legal — inside the project the bare name suffices. (No manifest
+    // exists yet; the shared first segment is the v1 project proxy.)
+    if let Some(name) = &module.name
+        && let Some(prefix) = name.split('.').next()
+    {
+        for item in &module.items {
+            if let Item::Import(imp) = item
+                && imp.module.split('.').next() == Some(prefix)
+            {
+                findings.push(Finding {
+                    class: TrapClass::ArgumentObligation,
+                    severity: Severity::Warning,
+                    message: format!(
+                        "self-prefix module reference `{}` — inside this project the bare \
+                         name suffices",
+                        imp.module
+                    ),
+                });
+            }
+        }
+    }
+
     // Declarations first [author, 2026-08-03]: a `where` is a fact, not a statement, so
     // its position among the executable items is immaterial — every seat resolves
     // against the same settled declarations regardless of source order.
@@ -290,6 +313,7 @@ pub(crate) fn analyze_program_in(
             }
             Item::Stmt(expr) => {
                 let analysis = analyze_in_world(expr, &tenv, &cenv, top_world, interner);
+                statement_lints(expr, &analysis, &values, scope, &mut findings, interner);
                 ground_executable(
                     &analysis,
                     &cenv,
@@ -635,6 +659,68 @@ fn failure_overlap_demand(
             ));
         }
     }
+}
+
+/// The statement-seat lints (E10/B6). A bare **pure** expression's result goes
+/// nowhere; a discarded **fallible-effect** result silently drops its Failure rail
+/// (fires only when an alternative of the produced contract is provably on the
+/// Failure rail — absence of a lint is always sound).
+fn statement_lints(
+    expr: &Expr,
+    analysis: &Analysis,
+    values: &HashMap<String, ValueRef>,
+    scope: &Env,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) {
+    match act_statement(expr, values, scope) {
+        None => findings.push(Finding {
+            class: TrapClass::ArgumentObligation,
+            severity: Severity::Warning,
+            message: "this pure expression's result goes nowhere (bare-statement lint)".into(),
+        }),
+        Some(crate::ast::ActKind::Effect) => {
+            let failure = Contract::failure(interner);
+            let fallible = union_alternatives(&analysis.contract)
+                .iter()
+                .any(|alt| matches!(subcontract(alt, &failure, interner), Verdict::Proven));
+            if fallible {
+                findings.push(Finding {
+                    class: TrapClass::ArgumentObligation,
+                    severity: Severity::Warning,
+                    message: "a fallible effect result is discarded — its Failure rail is \
+                              silently dropped (discarded-effect lint)"
+                        .into(),
+                });
+            }
+        }
+        Some(_) => {}
+    }
+}
+
+/// The act kind of a statement-position application's callee, or `None` for a pure
+/// statement (including calls to pure functions — their results are discarded too).
+fn act_statement(
+    expr: &Expr,
+    values: &HashMap<String, ValueRef>,
+    scope: &Env,
+) -> Option<crate::ast::ActKind> {
+    let Expr::Apply { callee, .. } = expr else {
+        return None;
+    };
+    let Expr::Ref(crate::ast::Ref::Immutable(crate::ast::BindingRef::Name(n))) = &**callee else {
+        return None;
+    };
+    let v = values.get(n).cloned().or_else(|| match scope.lookup(n) {
+        Some(Binding::Value(v)) => Some(v),
+        _ => None,
+    })?;
+    if v.as_native().is_some() {
+        return Some(crate::ast::ActKind::Effect);
+    }
+    v.as_closure()
+        .map(|c| c.lambda.act_kind)
+        .filter(|k| *k != crate::ast::ActKind::Pure)
 }
 
 /// Adjudicate every recursive callee the analyzed expression applied: each distinct

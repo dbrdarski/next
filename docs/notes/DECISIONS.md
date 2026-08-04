@@ -4885,3 +4885,25 @@ Conformance ignores drop 7 → 6 (the six broad Phase A rows only). **`// [ask-a
 
 **Verification:** 447 lib passed / 1 ignored; 128 conformance passed / 6 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The lint tier: eight advisories, A-LNT released
+
+**Built (T3.6):** lints live where their information lives, all `Warning`, never rejecting.
+`src/lint.rs` owns the source-text pass (leading-`-` continuation — E1's stated hazard, textual)
+and the surface pass over the parse tree the kernel erases: redundant `~` (operand syntactically
+Boolean), non-Boolean literal right of an **unescaped** `||` (the `~a || b` escape exempt),
+identity slice `t[...]`, redundant `?.` (a record literal that spells the field). The program
+checker owns the analysis-adjacent three: goes-nowhere (a bare statement whose callee is not an
+act — pure results discarded), discarded fallible-effect result (an Effect statement whose produced
+contract provably carries a Failure-rail alternative — `Contract::failure` reused), and E12's
+self-prefix import (shared first dotted segment as the v1 project proxy; no manifest exists yet).
+`check_source` threads the source/surface advisories into the program findings.
+
+**Chosen (mine, scoping):** syntactic recognizers, one honest case each — the suite row's grain;
+contract-aware precision (proven-non-null receivers, proven-non-Boolean rights) rides the analyzer
+later, and a lint's absence is always sound. A-LNT is live with all eight cases; the conformance
+ignore register drops 6 → 5 (A-NEG · A-DRV · A-SND · the broad A-VER · A-WRK).
+**`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 129 conformance passed / 5 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

@@ -1340,9 +1340,33 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "Phase A: lint tier pending (goes-nowhere, discarded effect result, identity slice, redundant ?./~, ||-non-Boolean, leading-minus continuation, self-prefix)"]
     fn a_lnt_lint_tier() {
-        unreachable!("activates with the analyzer's lint pass");
+        use next::analyzer::Severity;
+        let warn = |src: &str, needle: &str| {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(v.accepted(), "a lint never rejects: {src}");
+            assert!(
+                v.findings
+                    .iter()
+                    .any(|f| f.severity == Severity::Warning && f.message.contains(needle)),
+                "missing the {needle:?} lint for {src:?}: {:#?}",
+                v.findings
+            );
+        };
+        warn("1 + 1\n", "goes nowhere");
+        warn(
+            "@effect fetch = () => {\n => {path: \"p\", reason: \"r\"}\n}\nfetch()\n",
+            "discarded",
+        );
+        warn("t = [1, 2]\nx = t[...]\n", "identity slice");
+        warn("x = {a: 1}?.a\n", "redundant `?.`");
+        warn("x = ~true ? 1 : 2\n", "redundant `~`");
+        warn("b = true\nx = b || 1\n", "||");
+        warn("x = 1\n - 2\n", "leading-minus");
+        warn(
+            "module A.Main\nimport A.Utils\nexport z = 1\n",
+            "self-prefix",
+        );
     }
 
     #[test]

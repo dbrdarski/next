@@ -233,7 +233,13 @@ pub fn check_source_in(src: &str, interner: &mut Interner) -> Result<ProgramVerd
     let io = Rc::new(RefCell::new(HostIo::default()));
     let env = prelude_env(interner);
     install_host_effects(interner, &env, &io);
-    Ok(analyze_program_in(&module, &env, interner))
+    let mut verdict = analyze_program_in(&module, &env, interner);
+    // The lint tier (A-LNT): source- and surface-level advisories join the program
+    // findings. Lints are warnings only — they never reject.
+    let mut lints = crate::lint::source_lints(src);
+    lints.extend(crate::lint::surface_lints(&sprogram));
+    verdict.findings.extend(lints);
+    Ok(verdict)
 }
 
 /// As [`run_source`], but into a **caller-supplied interner** — so the produced value
