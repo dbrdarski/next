@@ -4813,3 +4813,33 @@ today. Phase GR gains the specimen 13/14/16 rows. **`// [ask-author]`: none.**
 **Verification:** 446 lib passed / 1 ignored; 123 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-04 — The group orbit: bare mutual pairs close with no contracts
+
+**Measured red before implementation:** `isEven`/`isOdd` with no declarations rejected at
+`x = isEven(4)` — the orbit derivation read self-calls only, so the mutual stop derived nothing and
+the honest cutoff surfaced as safety-unproven. (Termination already grounded via the shared-measure
+certificate; only the safety envelope was missing.)
+
+**Built — `grounding::group_orbit_domain`, the mutual form of the derivation:**
+`derived_orbit_domain` detects a genuinely mutual group (another reachable member closes a cycle
+back) and derives one **shared envelope** instead: every member's group calls must drift by
+constant negative integer steps on its single parameter, every recursive member must stop on a
+descending half-line (`member_descends`' own reading, reused), and the start must be bounded above
+on the integer lattice — then every value the group visits lives in
+`Range(min_boundary − max_step, start_hi)` on the shared lattice. Non-point bounded starts join
+only at gcd 1; point starts carry their congruence class. Half-line stops only in v1 — a point
+base's grid alignment across members is the parity ping-pong, deferred. As everywhere on this
+ladder: the derivation proposes, the joint vector induction proves, and no certificate means the
+honest cutoff.
+
+**Discovery converges by shrinking upper bounds:** the widened mutual nodes' envelopes have strictly
+decreasing ceilings until an existing envelope covers, so the walk stays finite with a handful of
+nodes. The GR-07 conformance row flipped to its promised acceptance form
+(`gr07_mutual_pair_closes_through_the_group_orbit`); the bare pair now composes end-to-end —
+safety and returns jointly over the envelope, termination by the shared measure, the call by
+coverage. **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 123 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.

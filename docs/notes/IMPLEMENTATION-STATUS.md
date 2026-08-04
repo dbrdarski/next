@@ -183,6 +183,12 @@ its first consumer is the stamped law itself: the program checker adjudicates a 
 The compendium's Principle 9 text still carries the pre-stamp wording — the normative stamp record
 is an author-owned edit; `DECISIONS.md` (2026-08-03) is the provenance record until it lands.
 
+**The group orbit landed (2026-08-04):** bare mutual pairs close with no contracts —
+`grounding::group_orbit_domain` derives one shared envelope from the group's cross-call drifts and
+half-line stops (reusing the shared-measure certificate's own reading); the joint induction proves
+both members' facts over it. The GR-07 row flipped to acceptance. Remaining mutual precision: point
+bases across members (parity ping-pong) and non-unit shared lattices for non-point starts.
+
 **The WorldDecided classifier landed, v1 (2026-08-04):** `grounding::world_decided` is GR-24's
 sound recognizer for self-recursive Effect instances (fresh observation on every cycle by syntax +
 dataflow; completing arm as the seed; stale-carried, decorative, unguarded, and mutual shapes all
@@ -430,7 +436,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **446 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **447 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **123 passed, 0 failed, 11 ignored** (Failure-overlap subset + Phase GR incl. GR-24) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |

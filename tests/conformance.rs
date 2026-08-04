@@ -1426,12 +1426,13 @@ mod phase_gr {
         assert!(fact.accepted(), "the whole pipeline composes: {fact:#?}");
     }
 
-    /// GR-07 (mutual): honestly unproven today, so it rejects — the orbit derivation
-    /// reads self-calls only, and mutual return induction across the group (the owed
-    /// domain-indexed SCC induction across functions) is not yet implemented. Flip
-    /// this row's expectation when that lands.
+    /// GR-07 (mutual): the bare pair closes with no contracts — the **group orbit**
+    /// derives one shared envelope from the cross-call drifts and half-line stops,
+    /// the joint induction proves both facts over it, and the shared-measure
+    /// certificate grounds termination. (This row rejected until 2026-08-04; its
+    /// flip is the group-orbit landing.)
     #[test]
-    fn gr07_mutual_pair_is_honestly_unproven_today() {
+    fn gr07_mutual_pair_closes_through_the_group_orbit() {
         let mutual = check_source(
             "isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
              isOdd = (n) => n <= 0 ? false : isEven(n - 1)\n\
@@ -1440,8 +1441,8 @@ mod phase_gr {
         .expect("parses and checks")
         .0;
         assert!(
-            !mutual.accepted(),
-            "unproven rejects until mutual induction lands: {mutual:#?}"
+            mutual.accepted(),
+            "the group orbit closes the bare pair: {mutual:#?}"
         );
     }
 }

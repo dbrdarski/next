@@ -1018,6 +1018,26 @@ mod tests {
         );
     }
 
+    /// The **group orbit**: a bare mutual pair needs no contracts either. Every
+    /// cross-call drifts by a constant negative step on the shared parameter, every
+    /// recursive member stops on a descending half-line, so the group's visited
+    /// values from a bounded start live in one derived envelope — the joint
+    /// induction proves both facts over it, and the shared-measure certificate
+    /// already grounds termination.
+    #[test]
+    fn a_bare_mutual_pair_closes_through_the_group_orbit() {
+        let (mutual, _) = check(
+            "isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
+             isOdd = (n) => n <= 0 ? false : isEven(n - 1)\n\
+             x = isEven(4)\n",
+        );
+        assert!(
+            mutual.accepted(),
+            "the group orbit closes the bare pair: {:#?}",
+            mutual.findings
+        );
+    }
+
     /// GR-24's WorldDecided classifier, v1 (the D-α/D-β rulings): effect-world
     /// recursion whose every cycle observes the world afresh, with a completing arm
     /// for the observation to select, is the **world's** decision — not a

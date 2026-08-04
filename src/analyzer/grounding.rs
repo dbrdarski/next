@@ -253,6 +253,16 @@ pub(crate) fn derived_orbit_domain(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> Option<Contract> {
+    // A genuinely mutual group derives the **group orbit** instead: one shared
+    // envelope covering every member's visited values.
+    let group = reachable_closures(callee.clone());
+    if group
+        .iter()
+        .any(|g| g != callee && callee_targets(g).contains(callee))
+    {
+        return group_orbit_domain(&group, start, interner);
+    }
+
     let s = point_value(start)?;
     if !s.is_integer() {
         return None;
@@ -319,6 +329,125 @@ pub(crate) fn derived_orbit_domain(
         Contract::Mod { n: g, r },
         interner,
     ))
+}
+
+/// The **group orbit envelope** — the mutual form of the derivation. When every
+/// member's group calls drift by constant negative integer steps on its single
+/// parameter and every recursive member stops on a descending half-line
+/// (`member_descends`' own reading), the group's visited values from a bounded start
+/// all live in `Range(min_boundary − max_step, start_hi)` on the shared lattice.
+/// Half-line bases only in v1 — a point base's grid alignment across members is the
+/// parity ping-pong, deferred. The derivation proposes; the joint induction proves.
+fn group_orbit_domain(
+    group: &[ValueRef],
+    start: &Contract,
+    interner: &mut Interner,
+) -> Option<Contract> {
+    let hi = upper_bound(start)?;
+    if !hi.is_integer() {
+        return None;
+    }
+    let mut steps: Vec<Rational> = Vec::new();
+    let mut boundaries: Vec<Rational> = Vec::new();
+    for f in group {
+        let closure = f.as_closure()?;
+        let param = single_param(&closure.lambda.params)?;
+        let Expr::Match(m) = &*closure.lambda.body else {
+            return None; // a forwarder-shaped member — no stop to read (v1)
+        };
+        let mut member_calls: Vec<Vec<Expr>> = Vec::new();
+        let mut member_stops: Vec<Rational> = Vec::new();
+        let mut first_call = usize::MAX;
+        for (idx, item) in m.items.iter().enumerate() {
+            let MatchItem::Arm(arm) = item else { continue };
+            let mut gc = Vec::new();
+            walk(&arm.result, &closure, group, &[], &[], &mut gc);
+            if gc.is_empty() {
+                if let Some(g) = &arm.guard
+                    && idx < first_call
+                    && let Some(b) = stop_boundary(g, &param)
+                {
+                    member_stops.push(b);
+                }
+            } else {
+                member_calls.extend(gc.into_iter().map(|(args, _)| args));
+                first_call = first_call.min(idx);
+            }
+        }
+        if member_calls.is_empty() {
+            continue; // a non-recursive leaf — no cycle edge, no boundary owed
+        }
+        for call in &member_calls {
+            let d = call.first().and_then(|arg| constant_drift(arg, &param))?;
+            if d >= Rational::from(0) || !d.is_integer() {
+                return None;
+            }
+            steps.push(-d);
+        }
+        boundaries.push(member_stops.into_iter().min()?);
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    let max_step = steps.iter().cloned().max()?;
+    let floor = boundaries.into_iter().min()? - max_step;
+    let floor = if floor > hi { hi.clone() } else { floor };
+    let mut g = BigInt::from(0);
+    for s in &steps {
+        g = gcd_bigint(g, s.as_ratio().numer().clone());
+    }
+    let cong = if let Some(s) = point_value(start) {
+        let n = s.as_ratio().numer().clone();
+        Contract::Mod {
+            r: ((n % &g) + &g) % &g,
+            n: g,
+        }
+    } else if g == BigInt::from(1) {
+        Contract::Mod {
+            n: g,
+            r: BigInt::from(0),
+        }
+    } else {
+        return None; // a non-point start off a coarser lattice — no envelope (v1)
+    };
+    Some(Contract::intersection(
+        Contract::Range(floor, hi),
+        cong,
+        interner,
+    ))
+}
+
+/// The boundary of a **descending** half-line stop guard on `param` (`param <= c` /
+/// `param < c`, either operand order), or `None`.
+fn stop_boundary(g: &Expr, param: &str) -> Option<Rational> {
+    let Expr::PrimOp { op, args } = g else {
+        return None;
+    };
+    if args.len() != 2 {
+        return None;
+    }
+    let (op, c) = if is_param(&args[0], param) {
+        (*op, const_num(&args[1])?)
+    } else if is_param(&args[1], param) {
+        (flip(*op), const_num(&args[0])?)
+    } else {
+        return None;
+    };
+    matches!(op, PrimOp::Le | PrimOp::Lt).then_some(c)
+}
+
+/// The least upper bound a contract spells directly (`Equals`, `Range`, `LessEq`,
+/// intersections thereof), or `None` — the group orbit's bounded-start reader.
+fn upper_bound(c: &Contract) -> Option<Rational> {
+    match c {
+        Contract::Equals(v) => v.as_number().cloned(),
+        Contract::Range(_, h) | Contract::LessEq(h) => Some(h.clone()),
+        Contract::Intersection(a, b) => match (upper_bound(a), upper_bound(b)) {
+            (Some(x), Some(y)) => Some(if x < y { x } else { y }),
+            (x, y) => x.or(y),
+        },
+        _ => None,
+    }
 }
 
 fn gcd_bigint(a: BigInt, b: BigInt) -> BigInt {
