@@ -5112,3 +5112,27 @@ adoption gates (the author's). **`// [ask-author]`: none.**
 
 **Verification:** 447 lib passed / 1 ignored; 138 conformance passed / 5 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Collatz-Pow2 resolved by the spec; McCarthy's residue measured
+
+**Discrepancy logged, per the grid document's own rule** ("discrepancies against a spec are
+resolved by the spec, with the discrepancy logged"): the worked-examples grid §4 says
+"`collatz(64)` compiles" via the Pow2 sublanguage — but the later, manifest-governed grounding
+specification rules otherwise: specimen 6 expects `collatz(64)` / `collatz(27)` **both unproven**,
+because the automatic basin derivation is **deferred by the D-4 ruling** [user, 1.0.12; sketch and
+cost sheet preserved in the decisions document]. Under the stamp, unproven rejects. The A-NEG
+acceptance pin therefore expected the wrong verdict — it is converted to the live row
+`a_neg_collatz_64_honestly_unproven`, the same shape as blocker 1b's re-expectation. (Measured
+along the way: collatz declared over `Number` proves safety and returns — only the termination
+demand rejects, exactly the specimen's voice.)
+
+**McCarthy 91's pin re-tagged by measurement:** even declared over `Number`, safety, return, *and*
+termination all stay unproven — so the residue is not only the landing-zone termination but an
+interleave in the nested inner-outer call's return-fact path that needs its own instrumented
+session. GR specimen 7 still expects proven; the pin now names the measured two-layer gap.
+
+**Register: 139 passed / 4 ignored — 2 hard certificates (McCarthy 91 · Ackermann) + the 2 Part-D
+adoption gates.** **`// [ask-author]`: none — both moves apply recorded rulings.**
+
+**Verification:** 447 lib passed / 1 ignored; 139 conformance passed / 4 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

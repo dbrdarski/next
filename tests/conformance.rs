@@ -1327,20 +1327,28 @@ mod phase_a {
         rejects("q = (n) => n <= 2 ? 1 : q(n - q(n - 1)) + q(n - q(n - 2))\nx = q(5)\n");
     }
 
+    /// Specimen 6, resolved by the spec: `collatz(64)` and `collatz(27)` are **both
+    /// unproven** — the Pow2 basin derivation is deferred by the D-4 ruling
+    /// [user, 1.0.12], so no candidate source exists and unproven rejects under the
+    /// stamp. (The worked-examples grid's "collatz(64) compiles" predates the ruling;
+    /// the grid doc's own rule resolves the discrepancy toward the spec, logged in
+    /// DECISIONS 2026-08-04.)
     #[test]
-    #[ignore = "A-NEG pin: collatz(64) — acceptance awaits the Pow2 sublanguage derivation (the Mod-cycle analysis, grid §4); unproven correctly rejects today"]
-    fn a_neg_collatz_pow2_accepts() {
+    fn a_neg_collatz_64_honestly_unproven() {
         let v = check_source(
             "collatz = (n) => n == 1 ? 1 : (n % 2 == 0 ? collatz(n / 2) : collatz(3 * n + 1))\n\
              x = collatz(64)\n",
         )
         .expect("parses and checks")
         .0;
-        assert!(v.accepted(), "{:#?}", v.findings);
+        assert!(
+            !v.accepted(),
+            "no candidate source — unproven rejects: {v:#?}"
+        );
     }
 
     #[test]
-    #[ignore = "A-NEG pin: McCarthy 91 — proven-for-all-reals awaits landing zones over the nested recursion (grid §6; GR specimen 7); unproven correctly rejects today"]
+    #[ignore = "A-NEG pin: McCarthy 91 — measured 2026-08-04: even declared over Number, safety/return/termination all stay unproven — the nested inner-outer call needs the return-fact interleave debugged, then the landing-zone termination (grid §6; GR specimen 7 expects proven)"]
     fn a_neg_mccarthy_91_accepts() {
         let v = check_source("m = (n) => n > 100 ? n - 10 : m(m(n + 11))\nx = m(1)\n")
             .expect("parses and checks")
