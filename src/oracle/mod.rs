@@ -142,6 +142,10 @@ pub struct Oracle<'a> {
     call_depth: u32,
     max_call_depth: Option<u32>,
     pending_values: Vec<PendingValue>,
+    /// Named contracts defined by the running module (E11: static bindings, C§12.2).
+    /// Runtime semantics, not analysis: contract-as-pattern matching (E9) resolves
+    /// user contract names here.
+    cenv: crate::contract::ContractEnv,
 }
 
 struct PendingValue {
@@ -168,6 +172,7 @@ impl<'a> Oracle<'a> {
             call_depth: 0,
             max_call_depth: None,
             pending_values: Vec::new(),
+            cenv: crate::contract::ContractEnv::new(),
         }
     }
 
@@ -183,6 +188,7 @@ impl<'a> Oracle<'a> {
             call_depth: 0,
             max_call_depth: Some(FUELED_MAX_CALL_DEPTH),
             pending_values: Vec::new(),
+            cenv: crate::contract::ContractEnv::new(),
         }
     }
 

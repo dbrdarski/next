@@ -100,6 +100,18 @@ fn expr(e: &SExpr, out: &mut Vec<Finding>) {
             }
             expr(operand, out);
         }
+        SExpr::Binary { op, left, right }
+            if matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+                && (comparison(left) || comparison(right)) =>
+        {
+            // E2: comparison chains self-refute (a Boolean lands in a relational
+            // operand — the rejection is the operand demand's); this is the owed hint.
+            out.push(lint(
+                "a comparison chains into a comparison — did you mean `a < b && b < c`? (comparison-chain hint)",
+            ));
+            expr(left, out);
+            expr(right, out);
+        }
         SExpr::Binary {
             op: BinOp::Or,
             left,
@@ -247,6 +259,15 @@ fn boolean_shaped(e: &SExpr) -> bool {
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And
         ),
         SExpr::Grouping(x) => boolean_shaped(x),
+        _ => false,
+    }
+}
+
+/// A comparison node (through grouping) — the chain hint's operand test.
+fn comparison(e: &SExpr) -> bool {
+    match e {
+        SExpr::Binary { op, .. } => matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge),
+        SExpr::Grouping(x) => comparison(x),
         _ => false,
     }
 }

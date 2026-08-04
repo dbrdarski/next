@@ -175,6 +175,18 @@ impl<'a> Oracle<'a> {
     ) -> Result<Option<ValueRef>, Trap> {
         match item {
             Item::Bind(b) => {
+                // A non-lambda `Name = <contract expression>` is a **named contract**
+                // (E11) — a static binding, evaluated per C§12.2, never a runtime
+                // evaluation. Mirrors the checker's rule exactly; the name lives in
+                // the oracle's contract environment for contract-as-pattern matching.
+                if let crate::ast::BindTarget::Name(name) = &b.target
+                    && !matches!(b.value, Expr::Lambda(_))
+                    && let Some(c) =
+                        crate::contract::eval_contract(&b.value, &self.cenv, self.interner)
+                {
+                    self.cenv.insert(name.clone(), c);
+                    return Ok(None);
+                }
                 self.eval_bind(b, env, world)?;
                 Ok(None)
             }

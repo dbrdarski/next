@@ -4966,3 +4966,36 @@ three pins name their gates — compound-guard regionalization (T3.1), the per-e
 
 **Verification:** 447 lib passed / 1 ignored; 131 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The last three broad rows live — and the harness catches a real defect
+
+**A-VER's remaining cases:** the comparison-chain hint now rides the operand rejection (a surface
+lint: a comparison chaining into a comparison advises `a < b && b < c`); exhaustiveness was already
+correct — judged over the E9 remainder relative to the actual input (`f(0)` on a 0-only match is
+covered; `f(5)` falls through and the expecting seat rejects); act-kind admission over a union of
+callees already rejected a possibly-Effect callee in Mutator world through the admission matrix.
+The broad row is live.
+
+**A-ACC split per its own text:** the runtime-trace layer is live — the canonical family trace
+(`makeLinkedList`) runs in the oracle: `x.next.next.next.value == 4`, the null tail, and the
+NullReceiver trap on `.value` past it (with `rest == []` spelling the transcript's length test —
+no Tuple module exists yet). The contract-claim layer (Recursion/UniformFamily foresight) stays
+pinned on the Part-D families adoption gate.
+
+**A-SND v1 — and its first catch.** The executable soundness harness runs every analyzer-accepted
+corpus program in the bounded oracle and demands no trap (divergence is not a trap; the sampled
+operation-transfer layer is `operation_soundness_sweep`, brute-forced per rule). **Its very first
+run caught a genuine accepted-program trap:** the oracle evaluated a named-contract binding
+(`Nat = Intersection(GreaterEq(0), Mod(1, 0))`) as a runtime expression and trapped on unbound
+`Intersection` — checked programs with named contracts could not actually run. Fixed where the
+semantics says it belongs (E11/C§12.2): the oracle now recognizes a non-lambda name-binding that
+statically evaluates as a contract expression — mirroring the checker's rule exactly — records it
+in its own contract environment, and defines no runtime binding; contract-as-pattern matching (E9)
+resolves user-named contracts from that environment by the contract layer's denotation
+(`Percent => …` now works at runtime). The "needs the contract engine" trap remains only for
+genuinely unknown names. This is the harness doing exactly its job on day one.
+**`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 134 conformance passed / 9 ignored (2 broad-battery
+gates left: the Part-D families pins; plus the 7 certificate pins); 10 machinery gates passed;
+clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

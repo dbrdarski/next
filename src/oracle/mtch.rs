@@ -244,6 +244,9 @@ impl<'a> Oracle<'a> {
                 };
                 has("path") && has("reason")
             }),
+            // A user-named contract (E9: "a capitalized pattern name must resolve
+            // to a contract") — membership by the contract layer's denotation.
+            other if self.cenv.contains_key(other) => self.cenv[other].contains(value),
             other => {
                 return Self::trap(
                     TrapClass::OperationSafety,

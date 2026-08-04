@@ -1381,43 +1381,114 @@ mod phase_a {
         assert!(v.accepted(), "{:#?}", v.findings);
     }
 
+    /// A-ACC's **runtime-trace layer** (the doc's own split): the canonical family
+    /// trace runs in the oracle today. (`rest == []` spells the transcript's
+    /// `rest.length > 0` test — no Tuple module exists yet.)
     #[test]
-    #[ignore = "Phase A: program-level entry NOW EXISTS (2026-08-01). Remaining: body is an unreachable!() stub; the runtime-trace layer is runnable against the oracle today, but the contract-claim layer needs return-contract checking (demand core, T1.2) and the family machinery."]
-    fn a_acc_acceptance_battery() {
-        // Two layers per case: the runtime trace (oracle-checkable — e.g.
-        // makeLinkedList(1,2,3,4): x.next.next.next.value == 4; …next.next == null;
-        // .value on that null TRAPs) and the contract claim (analyzer-phase:
-        // builder, map incl. parametric, reverse incl. rev∘rev interning to input,
-        // zip, level-regular tree, fold BOUNDED, filter depth-Range, cyclic mutual
-        // builders incl. 3-cycles, cross-axis mutual, insert/delete, append,
-        // flatMap rectangular, merge/sort depth-exact, walkers, pairUp ×3,
-        // rotate (r.next⁷.top ⊑ Equals(\"y\")), UniformFamily guard arithmetic).
-        unreachable!("activates with the program-level analyzer");
+    fn a_acc_runtime_trace_layer() {
+        const LIST: &str = "nums = [1, 2, 3, 4]\n\
+            makeLinkedList = (value, ...rest) =>\n\
+             { value: value, next: rest == [] ? null : makeLinkedList(...rest) }\n\
+            x = makeLinkedList(...nums)\n";
+        vtrue(&format!("{LIST}x.next.next.next.value == 4"));
+        vtrue(&format!("{LIST}x.next.next.next.next == null"));
+        assert_eq!(
+            trap(&format!("{LIST}x.next.next.next.next.value")),
+            TrapClass::NullReceiver,
+            ".value on the null tail traps"
+        );
     }
 
     #[test]
-    #[ignore = "Phase A: program-level ACCEPT now exists (ProgramVerdict::accepted, 2026-08-01), so the stated precondition is met. Remaining: the C§16 harness body itself is unwritten, and a meaningful soundness claim needs the analyzer to cover more than where-safety."]
+    #[ignore = "A-ACC pin: the contract-claim layer (Recursion/UniformFamily foresight — builder, map, reverse, zip, rotate r.next⁷.top ⊑ Equals(\"y\"), …) is the Part-D families candidate's battery; expectation-only until that adoption gate opens"]
+    fn a_acc_contract_claim_layer() {
+        unreachable!("the families candidate is design-gated (Part D adoption)");
+    }
+
+    /// A-SND — the executable soundness harness, v1 (**evidence, not proof** — the
+    /// C§16 per-rule discharge is Tier-5 and stays owed): every analyzer-accepted
+    /// corpus program runs trap-free in the bounded oracle. Divergence is not a trap;
+    /// world-driven loops are excluded only because the bounded runner installs no
+    /// host effects yet. Layer (2) — sampled operation transfers within claimed
+    /// outputs — is discharged per rule by `contract::tests::operation_soundness_sweep`
+    /// (brute-forced against the oracle).
+    #[test]
     fn a_snd_soundness_harness() {
-        // (1) accepted programs → oracle runs → zero traps, per trap class;
-        // (2) sampled op inputs → results within claimed output contracts;
-        // (3) gray programs may diverge but must not trap.
-        unreachable!("activates with the program-level analyzer");
+        let corpus: &[&str] = &[
+            "countDown = (n) => n == 0 ? 0 : countDown(n - 1)\nx = countDown(5)\nx\n",
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\nfact where (Nat) => Number\n\
+             fact = (n) => n == 0 ? 1 : n * fact(n - 1)\nx = fact(5)\nx\n",
+            "f = (n) => n == 0 ? 0 : f(n - 2)\nx = f(6)\nx\n",
+            "isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
+             isOdd = (n) => n <= 0 ? false : isEven(n - 1)\nx = isEven(4)\nx\n",
+            "f where (Number, Number) => Number\n\
+             f = (a, b) => 2 * a + b <= 0 ? 0 : f(a - 1, b + 1)\nx = f(5, 0)\nx\n",
+            "g = (n) => n :: {\n 0 => 1\n _ => 2\n}\nx = g(5)\nx\n",
+        ];
+        for src in corpus {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(v.accepted(), "a corpus member must be accepted: {src}");
+            // Completed — or Diverged — is fine; only a trap refutes soundness.
+            if let next::oracle::BoundedRun::Trapped(t) =
+                next::oracle::run_program_bounded(src, 100_000)
+            {
+                panic!("an accepted program trapped: {src}\n{t:?}")
+            }
+        }
     }
 
+    /// A-VER's remaining broad cases, live: the comparison-chain hint rides the
+    /// operand rejection; exhaustiveness is judged over the E9 remainder relative to
+    /// the actual input; act-kind admission over a union of callees rejects a
+    /// possibly-Effect callee in Mutator world.
     #[test]
-    #[ignore = "Phase A: program-level analysis exists; the union-at-boundary, Indeterminate-discharge, and Failure-overlap wrapper-demand subsets are live. Remaining broad-row cases include the comparison-chain hint, full exhaustiveness diagnostics, and act-kind admission over source unions."]
-    fn a_ver_verdict_cases() {
-        // a < b < c → REJECT with the chain hint · (a == b) == c legal iff c
-        // Boolean · exhaustiveness over the E9 remainder · computed keys: finite
-        // union ACCEPT / Kind(String) REJECT (the expression-level half is
-        // implemented — analyzer::tests::computed_key_finiteness_demand) ·
-        // destructuring irrefutability (implemented at expression level) ·
-        // data.body on Union(Response, Failure) → REJECT until narrowed ·
-        // Failure-overlap wrapper demand · act-kind admission over a union of
-        // callees · the E5 discharge: the Indeterminate contract arm
-        // ACCEPTs the division
-        // consumer.
-        unreachable!("activates with the program-level analyzer");
+    fn a_ver_remaining_cases() {
+        use next::analyzer::Severity;
+        // `1 < 2 < 3` — REJECT (Boolean into a relational operand) with the hint.
+        let chain = check_source("x = 1 < 2 < 3\n")
+            .expect("parses and checks")
+            .0;
+        assert!(!chain.accepted(), "the chain self-refutes");
+        assert!(
+            chain
+                .findings
+                .iter()
+                .any(|f| f.severity == Severity::Warning && f.message.contains("did you mean")),
+            "the chain hint rides the rejection: {:#?}",
+            chain.findings
+        );
+
+        // Exhaustiveness over the remainder: `f(0)` is fully consumed by the exact
+        // arm; `f(5)` falls through and the expecting seat rejects.
+        let covered = check_source("f = (n) => n :: {\n 0 => 1\n}\nx = f(0)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(covered.accepted(), "{:#?}", covered.findings);
+        let uncovered = check_source("f = (n) => n :: {\n 0 => 1\n}\nx = f(5)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(!uncovered.accepted(), "the remainder is non-empty at 5");
+
+        // A union of callees with a possibly-Effect alternative, called in Mutator
+        // world — rejected through the world-admission concordance.
+        let union = check_source(
+            "@effect e = () => {\n => 0\n}\np = () => 0\n\
+             @mutate m = (c) => {\n g = c ? e : p\n g()\n}\nm(true)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !union.accepted(),
+            "possibly-Effect in Mutator world rejects"
+        );
+        assert!(
+            union
+                .findings
+                .iter()
+                .any(|f| f.class == TrapClass::WorldAdmission),
+            "the rejection is the admission matrix's: {:#?}",
+            union.findings
+        );
     }
 
     #[test]
