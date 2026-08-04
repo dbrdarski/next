@@ -59,6 +59,73 @@ pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv, i: &mut Intern
     region_table_in(body, param, &TypeEnv::new(), cenv, i)
 }
 
+thread_local! {
+    /// RT-09 / C§13.4's **instance cache**: `(shape, annotated captured-environment
+    /// contract tuple, named-contract environment) → instantiated region table`.
+    /// The key is annotated, not coarse — two closures of one shape whose captures
+    /// differ (`makeCounter(5)` vs `makeCounter(9)`) are different instances with
+    /// different tables. Entries are deterministic facts of their complete key, so
+    /// the table persists like the proven-fact cache. (The per-row grounding
+    /// certificates C§13.4 lists alongside remain in their own caches.)
+    static INSTANCE_TABLES: std::cell::RefCell<
+        std::collections::HashMap<InstanceKey, std::rc::Rc<Vec<Row>>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct InstanceKey {
+    shape: crate::intern::Interned<crate::ast::Lambda>,
+    captures: Vec<crate::intern::Interned<Contract>>,
+    named: Vec<(String, crate::intern::Interned<Contract>)>,
+}
+
+/// The **instantiated region table of a closure instance** (C§12.3 layer 3), through
+/// the RT-09 cache. Derives the single parameter, reads the capture environment, and
+/// keys on `(shape, capture contracts in canonical slot order, named contracts)`;
+/// a repeated query returns the same allocation. `None` when the closure does not
+/// have a single plain parameter (the multi-parameter table has its own path and
+/// joins the cache when its capture substitution lands).
+pub(crate) fn instance_table(
+    callee: &crate::value::ValueRef,
+    cenv: &ContractEnv,
+    i: &mut Interner,
+) -> Option<(String, std::rc::Rc<Vec<Row>>)> {
+    let closure = callee.as_closure()?;
+    let function = callee.as_fn()?;
+    let param = crate::analyzer::single_plain_param(&closure.lambda.params)?;
+    let caps = crate::analyzer::safety::capture_env(callee);
+    let captures: Vec<crate::intern::Interned<Contract>> = function
+        .free_vars()
+        .iter()
+        .map(|name| {
+            let c = caps.get(name).map(|a| a.erase(i)).unwrap_or(Contract::Top);
+            i.contract(c)
+        })
+        .collect();
+    let mut named: Vec<(String, crate::intern::Interned<Contract>)> = cenv
+        .iter()
+        .map(|(name, c)| (name.clone(), i.contract(c.clone())))
+        .collect();
+    named.sort_by(|a, b| a.0.cmp(&b.0));
+    let key = InstanceKey {
+        shape: function.shape_rc(),
+        captures,
+        named,
+    };
+    if let Some(hit) = INSTANCE_TABLES.with(|t| t.borrow().get(&key).cloned()) {
+        return Some((param, hit));
+    }
+    let table = std::rc::Rc::new(region_table_in(
+        &closure.lambda.body,
+        &param,
+        &caps,
+        cenv,
+        i,
+    ));
+    INSTANCE_TABLES.with(|t| t.borrow_mut().insert(key, table.clone()));
+    Some((param, table))
+}
+
 /// The **instantiated** region table (C§12.3 layer 3): guards are read after
 /// substituting the instance's capture contracts — `caps` — per the regionalization
 /// law. A singleton capture is case (a)'s constant (exact); a bounded non-singleton

@@ -41,7 +41,7 @@ use std::cell::Cell;
 
 use crate::analyzer::factcache;
 use crate::analyzer::induction::{self, Candidate, Claim};
-use crate::analyzer::region::{region_table_in, select};
+use crate::analyzer::region::select;
 use crate::analyzer::{
     Analysis, Finding, SafetyDemand, Severity, TypeEnv, analyze_in_world, bind_pattern,
     world_for_act,
@@ -281,7 +281,9 @@ fn verify_by_partition(
     interner: &mut Interner,
 ) -> SafetyReport {
     let base = capture_env(callee);
-    let table = region_table_in(&closure.lambda.body, param, &base, cenv, interner);
+    let Some((_, table)) = crate::analyzer::region::instance_table(callee, cenv, interner) else {
+        return SafetyReport::default();
+    };
     let mut out = SafetyReport::default();
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
@@ -808,9 +810,11 @@ fn calls_of(
     // Unproven result and is then discovered structurally by `collect_calls` itself.
     let saved = VERIFYING_SAFETY.with(|active| active.replace(true));
     // Per-row walk (single parameter), else one whole-body walk.
-    match (single_param(&closure.lambda.params), node.input.as_slice()) {
-        (Some(param), [domain]) => {
-            let table = region_table_in(&closure.lambda.body, &param, &base, cenv, interner);
+    match (
+        crate::analyzer::region::instance_table(&node.callee, cenv, interner),
+        node.input.as_slice(),
+    ) {
+        (Some((param, table)), [domain]) => {
             for sel in select(&table, domain, interner) {
                 let mut env = base.clone();
                 env.insert(param.clone(), sel.region.clone());
@@ -891,9 +895,11 @@ pub(crate) fn verify_completes(
     let Some(closure) = callee.as_closure() else {
         return false;
     };
-    if let (Some(param), [domain]) = (single_param(&closure.lambda.params), args) {
+    if let (Some((param, table)), [domain]) = (
+        crate::analyzer::region::instance_table(callee, cenv, interner),
+        args,
+    ) {
         let base = capture_env(callee);
-        let table = region_table_in(&closure.lambda.body, &param, &base, cenv, interner);
         for sel in select(&table, domain, interner) {
             let mut env = base.clone();
             env.insert(param.clone(), sel.region.clone());
@@ -913,7 +919,7 @@ pub(crate) fn verify_completes(
         }
 
         let mut remainder = domain.clone();
-        for row in &table {
+        for row in table.iter() {
             if row.exact {
                 remainder = if matches!(
                     subcontract(&remainder, &row.region, interner),
@@ -1125,7 +1131,7 @@ pub(crate) fn produced_by_partition(
         }
     };
     let base = capture_env(callee);
-    let table = region_table_in(&closure.lambda.body, &param, &base, cenv, interner);
+    let (_, table) = crate::analyzer::region::instance_table(callee, cenv, interner)?;
     let mut parts = Vec::new();
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();

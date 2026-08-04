@@ -5568,3 +5568,26 @@ already ruled and implemented; the checker side adds plumbing only.**
 
 **Verification:** 464 lib passed / 1 ignored; 155 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — RT-09: the annotated instance cache; one derivation per instance
+
+**C§13.4's instance cache lands for the single-parameter table.** `region::instance_table`
+keys on `(canonical shape, capture contracts in slot order, named-contract environment)` — the
+**annotated** identity the spec insists on: two closures of one shape whose captures differ
+(`makeCounter(5)` vs `makeCounter(9)`) are different instances with different tables, while an
+α-variant spelling of the same instance shares the cached allocation through canonical shape
+identity. Entries are deterministic facts of their complete key and persist like the
+proven-fact cache. The entry point also consolidates the `(single param, capture env,
+instantiated table)` triple that safety verification, completion, discovery, the produced
+contract, and grounding's three readers each rebuilt by hand — seven sites now share one
+derivation and one allocation. The multi-parameter table joins the cache when its capture
+substitution lands; the per-row grounding certificates C§13.4 lists alongside remain in their
+own caches.
+
+**Pinned:** `rt09_instance_cache_identity` — repeated query returns the same `Rc`; different
+captures are different instances (with the case-(a) row correctly showing each instance's own
+threshold); an α-variant shares the allocation. Behavior across every suite is unchanged — a
+cache slice's whole obligation. **`// [ask-author]`: none.**
+
+**Verification:** 465 lib passed / 1 ignored; 155 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

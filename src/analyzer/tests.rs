@@ -3372,6 +3372,45 @@ mod region_instantiation {
         );
     }
 
+    /// RT-09's identity law: the instance cache keys on `(shape, annotated capture
+    /// tuple, named contracts)` — a repeated query is the **same allocation**, a
+    /// different capture is a different instance with its own table, and an
+    /// α-variant spelling of the same instance shares the cached table through
+    /// canonical shape identity.
+    #[test]
+    fn rt09_instance_cache_identity() {
+        let mut i = Interner::new();
+        let cenv = ContractEnv::new();
+        let five = run_source_in("limit = 5\nf = (n) => n <= limit ? n : 0\nf", &mut i)
+            .unwrap()
+            .0;
+        let (_, first) = region::instance_table(&five, &cenv, &mut i).expect("single param");
+        let (_, again) = region::instance_table(&five, &cenv, &mut i).expect("single param");
+        assert!(
+            std::rc::Rc::ptr_eq(&first, &again),
+            "one allocation per instance"
+        );
+
+        let nine = run_source_in("limit = 9\nf = (n) => n <= limit ? n : 0\nf", &mut i)
+            .unwrap()
+            .0;
+        let (_, other) = region::instance_table(&nine, &cenv, &mut i).expect("single param");
+        assert!(
+            !std::rc::Rc::ptr_eq(&first, &other),
+            "annotated, not coarse: different captures are different instances"
+        );
+        assert_eq!(other[0].region, Contract::LessEq(9.into()));
+
+        let alpha = run_source_in("limit = 5\ng = (m) => m <= limit ? m : 0\ng", &mut i)
+            .unwrap()
+            .0;
+        let (_, shared) = region::instance_table(&alpha, &cenv, &mut i).expect("single param");
+        assert!(
+            std::rc::Rc::ptr_eq(&first, &shared),
+            "an alpha-variant of the same instance shares the cached table"
+        );
+    }
+
     /// Case (c): a sibling parameter stays opaque even with zero captures (W-3) —
     /// the relation is real but not a unary contract.
     #[test]

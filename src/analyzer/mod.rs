@@ -345,6 +345,19 @@ pub(crate) fn analyze_in_world(
     }
 }
 
+/// The single bound parameter name, when the pattern is one plain binding — the
+/// shape the single-parameter region table serves.
+pub(crate) fn single_plain_param(params: &crate::ast::Pat) -> Option<String> {
+    use crate::ast::{Pat, PatElem};
+    match params {
+        Pat::Tuple(elems) => match elems.as_slice() {
+            [PatElem::Pat(Pat::Bind(n))] => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn exact(contract: Contract) -> Analysis {
     Analysis::produced(contract, vec![])
 }
