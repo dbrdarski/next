@@ -104,13 +104,19 @@ pub enum ProjectError {
     Trap(Trap),
 }
 
-/// Link and run a project. The last source slot may be any position — the entry is
-/// found by its missing header. Returns the entry's final value and captured IO.
-pub fn run_project(sources: &[&str]) -> Result<(ValueRef, HostIo), ProjectError> {
-    let mut interner = Interner::new();
+/// A linked, resolved, ordered project — the shared front half of running and
+/// checking (E12/C§14: resolution is static and whole-program; what differs is
+/// only what walks the modules afterwards).
+struct Assembled {
+    modules: Vec<Module>,
+    order: Vec<usize>,
+    entry: usize,
+}
+
+fn assemble(sources: &[&str], interner: &mut Interner) -> Result<Assembled, ProjectError> {
     let mut modules: Vec<Module> = Vec::new();
     for (i, src) in sources.iter().enumerate() {
-        modules.push(front(src, i, &mut interner).map_err(ProjectError::Link)?);
+        modules.push(front(src, i, interner).map_err(ProjectError::Link)?);
     }
 
     // Index named modules; find the one entry (MOD-05, entry-count).
@@ -177,6 +183,23 @@ pub fn run_project(sources: &[&str]) -> Result<(ValueRef, HostIo), ProjectError>
     // Topological setup order over named-module imports.
     let order = topo_order(&modules, &by_name, entry).map_err(ProjectError::Link)?;
 
+    Ok(Assembled {
+        modules,
+        order,
+        entry,
+    })
+}
+
+/// Link and run a project. The last source slot may be any position — the entry is
+/// found by its missing header. Returns the entry's final value and captured IO.
+pub fn run_project(sources: &[&str]) -> Result<(ValueRef, HostIo), ProjectError> {
+    let mut interner = Interner::new();
+    let Assembled {
+        modules,
+        order,
+        entry,
+    } = assemble(sources, &mut interner)?;
+
     // One prelude, one io, one oracle, one store — then each module in order.
     let io = Rc::new(RefCell::new(HostIo::default()));
     let base = prelude_env(&mut interner);
@@ -209,6 +232,92 @@ pub fn run_project(sources: &[&str]) -> Result<(ValueRef, HostIo), ProjectError>
 
     let captured = std::mem::take(&mut *io.borrow_mut());
     Ok((value.expect("the entry ran"), captured))
+}
+
+/// One checked module of a project: its declared name (`None` for the entry) and
+/// its full program verdict.
+pub struct CheckedModule {
+    pub name: Option<String>,
+    pub verdict: crate::analyzer::program::ProgramVerdict,
+}
+
+/// The check-mode analogue of [`run_project`]'s result: every module's verdict, in
+/// setup order.
+pub struct ProjectVerdict {
+    pub modules: Vec<CheckedModule>,
+}
+
+impl ProjectVerdict {
+    /// The project is accepted when every module's program policy accepted.
+    pub fn accepted(&self) -> bool {
+        self.modules.iter().all(|m| m.verdict.accepted())
+    }
+}
+
+/// Link and **check** a project — E12/C§14's static whole-program resolution feeding
+/// the program checker instead of the oracle. The same assembly (front ends, module
+/// index, import validation, alias/namespace resolution, topological order) runs
+/// once; each module is then analyzed with its imports installed: value bindings
+/// harvested from the exporter's checked scope, and exported **named contracts**
+/// seeded into the importer's contract environment. Nothing is evaluated.
+///
+/// v1 residue, named: an exported `@state`/`@mutable` slot has no check-mode scope
+/// binding to harvest (the checker tracks slots in its expression environment, not
+/// the value scope), so a cross-module *state* import currently surfaces as unbound
+/// findings in the importer — the MOD-03 shape stays runtime-verified only.
+pub fn check_project(sources: &[&str]) -> Result<ProjectVerdict, ProjectError> {
+    let mut interner = Interner::new();
+    let Assembled { modules, order, .. } = assemble(sources, &mut interner)?;
+
+    // The same inert harness values check mode always starts with (String,
+    // println, exit, readFile) — installed once, shared by every module scope.
+    let io = Rc::new(RefCell::new(HostIo::default()));
+    let base = prelude_env(&mut interner);
+    install_host_effects(&mut interner, &base, &io);
+
+    let mut export_bindings: HashMap<String, Vec<(String, Binding)>> = HashMap::new();
+    let mut export_cenvs: HashMap<String, crate::contract::ContractEnv> = HashMap::new();
+    let mut out = Vec::new();
+    for idx in order {
+        let module = &modules[idx];
+        let scope = Scope::child(&base);
+        let mut seed = crate::contract::ContractEnv::new();
+        for item in &module.items {
+            if let Item::Import(imp) = item {
+                install_imports(imp, &export_bindings, &scope);
+                // Whole-module contract access (`M.Percent` in a contract seat)
+                // is not a named import; it stays unresolved in v1.
+                if let Some(exported) = export_cenvs.get(&imp.module)
+                    && let Some(names) = &imp.names
+                {
+                    for n in names {
+                        if let Some(c) = exported.get(n) {
+                            seed.insert(n.clone(), c.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let (verdict, cenv) =
+            crate::analyzer::program::analyze_program_project(module, &scope, &seed, &mut interner);
+        if let Some(name) = &module.name {
+            let harvested = exported_names(module)
+                .into_iter()
+                .filter_map(|n| scope.lookup(&n).map(|b| (n, b)))
+                .collect();
+            export_bindings.insert(name.clone(), harvested);
+            let exported: crate::contract::ContractEnv = exported_names(module)
+                .into_iter()
+                .filter_map(|n| cenv.get(&n).map(|c| (n, c.clone())))
+                .collect();
+            export_cenvs.insert(name.clone(), exported);
+        }
+        out.push(CheckedModule {
+            name: module.name.clone(),
+            verdict,
+        });
+    }
+    Ok(ProjectVerdict { modules: out })
 }
 
 fn front(src: &str, source: usize, interner: &mut Interner) -> Result<Module, LinkError> {

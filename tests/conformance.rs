@@ -1667,6 +1667,79 @@ mod region_instantiation {
     }
 }
 
+// Check-mode project analysis (E12/C§14): the same static whole-program
+// resolution as run_project, feeding the program checker — nothing evaluated.
+mod project_check {
+    use next::link::{ProjectError, check_project};
+
+    const MATH: &str = "module Math
+        export double = (n) => n * 2
+        export Nat = Intersection(GreaterEq(0), Mod(1, 0))
+";
+
+    /// Clean cross-module use checks; a cross-module trap is caught at the
+    /// importer's seat with the precise operand error.
+    #[test]
+    fn pc_cross_module_check_and_trap() {
+        let v = check_project(&[
+            MATH,
+            "import { double } from Math
+y = double(2)
+",
+        ])
+        .expect("links");
+        assert!(v.accepted());
+
+        let bad = check_project(&[
+            MATH,
+            "import { double } from Math
+y = double(\"s\")
+",
+        ])
+        .expect("links");
+        assert!(!bad.accepted(), "the String argument must reject");
+    }
+
+    /// An imported **named contract** seeds the importer's environment: the
+    /// declared-domain recursion proves through `Nat` exactly as it would with a
+    /// local definition, and the whole-module alias value path checks too.
+    #[test]
+    fn pc_contract_import_and_alias() {
+        let v = check_project(&[
+            MATH,
+            "import { Nat } from Math
+             f where (Nat) => Number
+             f = (n) => n == 0 ? 0 : f(n - 1)
+             x = 1
+",
+        ])
+        .expect("links");
+        assert!(v.accepted(), "the imported contract carries the domain");
+
+        let alias = check_project(&[
+            MATH,
+            "import Math
+m = Math
+y = m.double(2)
+",
+        ])
+        .expect("links");
+        assert!(alias.accepted());
+    }
+
+    /// Link errors stay hard project errors in check mode.
+    #[test]
+    fn pc_link_errors_hard_fail() {
+        let e = check_project(&[
+            MATH,
+            "import { nope } from Math
+x = 1
+",
+        ]);
+        assert!(matches!(e, Err(ProjectError::Link(_))));
+    }
+}
+
 // The factory instance flow (C§13.2, the exact-singleton cut): a body-nested
 // lambda whose free variables are all singletons constructs its closure during
 // analysis (construction evaluates nothing), so factory products are known

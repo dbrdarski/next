@@ -5539,3 +5539,32 @@ license, applied at the expression layer.**
 
 **Verification:** 464 lib passed / 1 ignored; 152 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Check-mode project analysis: imports reach the checker
+
+**The linking slice's recorded follow-up lands.** `link::check_project` reuses the runtime
+linker's whole front half verbatim — the assembly (front ends, module index and entry count,
+import validation, alias/namespace resolution, topological order) is now one shared
+`assemble`, so run and check cannot drift — and walks the ordered modules through the
+**program checker** instead of the oracle. Nothing is evaluated: each module is analyzed in a
+child scope with its imports installed — value bindings harvested from the exporter's checked
+scope (the same `install_imports` the runtime uses), and exported **named contracts** seeded
+into the importer's contract environment through the new `analyze_program_project` seam
+(collect starts from the seed; the module's final environment is returned so its exported
+contract names can be harvested downstream). Link errors stay hard project errors in either
+mode.
+
+**Measured:** clean cross-module use checks; a cross-module trap rejects at the importer's
+seat with the precise operand error; an **imported named contract carries a declared domain**
+(`import { Nat } from Math` + `f where (Nat) => Number` proves the recursion exactly as a
+local definition would); the whole-module alias value path (`m = Math; m.double(2)`) checks;
+`not-exported` hard-fails. Three `project_check` conformance rows. **v1 residue, named in the
+doc comment:** an exported `@state`/`@mutable` slot has no check-mode scope binding to harvest
+(the checker tracks slots in its expression environment, not the value scope), so cross-module
+*state* imports stay runtime-verified only (MOD-03's shape); and whole-module access to a
+contract name in a contract seat (`M.Percent` in a `where`) is not a named import and stays
+unresolved. **`// [ask-author]`: none — the driver consumes E12/C§14's static resolution as
+already ruled and implemented; the checker side adds plumbing only.**
+
+**Verification:** 464 lib passed / 1 ignored; 155 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

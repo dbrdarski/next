@@ -155,6 +155,19 @@ pub(crate) fn analyze_program_in(
     scope: &Env,
     interner: &mut Interner,
 ) -> ProgramVerdict {
+    analyze_program_project(module, scope, &ContractEnv::new(), interner).0
+}
+
+/// The project-check seam (E12/C§14 — static whole-program resolution): analyze one
+/// module with `seed_cenv` pre-installed (imported named contracts), returning the
+/// module's own contract environment so the project driver can harvest its exported
+/// contract names for downstream importers.
+pub(crate) fn analyze_program_project(
+    module: &Module,
+    scope: &Env,
+    seed_cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> (ProgramVerdict, ContractEnv) {
     // Snapshot before `collect`: that pass installs every lambda into the shared
     // late-binding scope, but eager item analysis must still see module bindings
     // only after their source-order declaration.
@@ -164,7 +177,8 @@ pub(crate) fn analyze_program_in(
             tenv.insert(name, AnalysisContract::of_value(value));
         }
     }
-    let (values, cenv, contract_names, collect_findings) = collect(module, scope, interner);
+    let (values, cenv, contract_names, collect_findings) =
+        collect(module, scope, seed_cenv, interner);
     // C§9's group-aware consumers: when the environment defines recursive named
     // contracts, install the ambient group for this analysis's whole extent, so
     // narrowing, dead arms, exhaustiveness, and the where demands resolve
@@ -347,13 +361,16 @@ pub(crate) fn analyze_program_in(
         }
     }
 
-    ProgramVerdict {
-        findings,
-        return_demands,
-        body_safety_demands,
-        executable_demands,
-        grounding_demands,
-    }
+    (
+        ProgramVerdict {
+            findings,
+            return_demands,
+            body_safety_demands,
+            executable_demands,
+            grounding_demands,
+        },
+        cenv,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -509,6 +526,7 @@ fn safety_policy_findings(demands: &[SafetyDemand]) -> Vec<Finding> {
 fn collect(
     module: &Module,
     scope: &Env,
+    seed_cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> (
     HashMap<String, ValueRef>,
@@ -517,7 +535,7 @@ fn collect(
     Vec<Finding>,
 ) {
     let mut values = HashMap::new();
-    let mut cenv = ContractEnv::new();
+    let mut cenv = seed_cenv.clone();
     let mut contract_names = HashSet::new();
     let mut findings = Vec::new();
     let mut deferred: Vec<(String, Expr)> = Vec::new();

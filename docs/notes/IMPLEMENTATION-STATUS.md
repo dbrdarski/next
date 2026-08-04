@@ -322,6 +322,15 @@ Non-singleton captures keep the sound coarse `Kind(Function)`; the annotated ins
 union stays owed. `where` on a product *binding* remains a named residue. Detail in
 `DECISIONS.md` (2026-08-04).
 
+**Check-mode project analysis landed (2026-08-04):** `link::check_project` — the shared
+`assemble` (front/index/validate/resolve/topo, one implementation for run and check) feeding
+`analyze_program_project` per module in order: imported value bindings installed from the
+exporter's checked scope, exported named contracts seeded into the importer's contract
+environment. Cross-module traps reject at the importing seat; imported contracts carry
+declared domains. Named residues: exported slots (no check-mode scope binding — MOD-03 stays
+runtime-verified) and whole-module contract access in contract seats. Detail in
+`DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -540,7 +549,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **464 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **152 passed, 0 failed, 2 ignored** (McCarthy + Ackermann + recursive contracts + region instantiation + factory instances live; only the 2 Part-D adoption gates remain) |
+| `cargo test --test conformance` | **155 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
