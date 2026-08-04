@@ -5136,3 +5136,34 @@ adoption gates.** **`// [ask-author]`: none — both moves apply recorded ruling
 
 **Verification:** 447 lib passed / 1 ignored; 139 conformance passed / 4 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — McCarthy's interleave, instrumented: the return zone derives; the residue named
+
+**Three produced-path sharpenings landed** (all voices unchanged — only the produced contract,
+which is a separate partial-correctness judgment, sharpens):
+
+1. The safety-context guarded branch no longer returns `Top` produced for a recursive callee — it
+   consults `call_return` (the return fact is its own induction and settles no safety facts), so a
+   nested `m(m(n + 11))` keeps a real outer-argument contract instead of minting an uncoverable
+   `(m, [Top])` node.
+2. The failed-safety early return in the general application path likewise: safety's failure
+   blocks the seat, but under the return inference's bottoms hypotheses the recursive callee must
+   contribute `Bottom`, not poison the proposal with `Top`.
+3. The return-fact **proposal** now uses the partition-aware produced
+   (`produced_by_partition`, falling back to the whole-body summary) exactly as verification
+   already did — the row narrowing (`n ≤ 100` making `n + 11 ⊑ LessEq(111)`) is what keeps the
+   nested recursive argument inside the pinned domain.
+
+**Measured result:** `infer_return_fact(m, [LessEq(111)])` now derives **`(90, 101]`** — grid §6's
+landing zone, computed by the machinery — and McCarthy's `where (Number) => Number` **return claim
+proves** (it failed before). Safety remains honestly unproven, and the instrumented session
+localized the residue to two named mechanisms: (a) `with_hypotheses` **replaces** rather than
+stacks, so settlements nested inside the return inference lose the ambient safety facts and
+generate unproven noise; (b) the inner call's **completion** demand at the outer call's expecting
+seat (`m(<inner>)` demands the inner produce a value) stays unproven without a completion fact
+over the zone. Both are design-shaped (hypothesis stacking discipline; completion at nested seats)
+— the pin now names them, and the landing-zone termination remains behind them.
+**`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 139 conformance passed / 4 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

@@ -413,11 +413,18 @@ fn infer_inner(
     let candidates: Vec<Candidate> = with_args
         .iter()
         .filter_map(|(f, args)| {
+            // Partition-aware where possible: the row narrowing is what keeps a
+            // nested recursive argument inside the pinned domain (`n ≤ 100` making
+            // `n + 11 ⊑ LessEq(111)` — McCarthy's proposal dies without it). The
+            // whole-body summary is the fallback, exactly as in verification.
             let produced = with_hypotheses(bottoms.clone(), || {
-                summarize_instance(f, args, cenv, interner)
-            })?
-            .produced
-            .erase(interner);
+                crate::analyzer::safety::produced_by_partition(f, args, cenv, interner).or_else(
+                    || {
+                        summarize_instance(f, args, cenv, interner)
+                            .map(|o| o.produced.erase(interner))
+                    },
+                )
+            })?;
             let claim = produced.generalize(interner);
             // Top proves trivially (no information); Bottom claims no value (a baseless
             // recursion) — neither is an informative fact.

@@ -1348,7 +1348,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "A-NEG pin: McCarthy 91 — measured 2026-08-04: even declared over Number, safety/return/termination all stay unproven — the nested inner-outer call needs the return-fact interleave debugged, then the landing-zone termination (grid §6; GR specimen 7 expects proven)"]
+    #[ignore = "A-NEG pin: McCarthy 91 — the return claim over Number now PROVES and the zone (90,101] derives (2026-08-04); safety's residue is named: hypothesis replacement (with_hypotheses swaps, so nested settlements lose ambient facts) and the inner call's completion demand at the outer expecting seat; then the landing-zone termination (GR specimen 7)"]
     fn a_neg_mccarthy_91_accepts() {
         let v = check_source("m = (n) => n > 100 ? n - 10 : m(m(n + 11))\nx = m(1)\n")
             .expect("parses and checks")
