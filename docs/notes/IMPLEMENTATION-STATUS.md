@@ -244,6 +244,20 @@ derives exactly the `(90, 101]` zone — and the program rejects on exactly one 
 Principle-9 termination demands. The remaining McCarthy gap is the landing-zone grounding
 certificate over the nested call (GR specimen 7).
 
+**The nested landing-zone certificate landed (2026-08-04): McCarthy 91 accepts, all reals.**
+`grounding::nested_zone_shape` reads grid §6's closed form off the written program (ascending
+half-line stop `n > T`/`n >= T` tested first, exit shift `n + s`, one shared climb drift
+`m(n + d)`, one-level feed-back `m(m(n + d))`); `nested_zone_descent` grounds it from the
+written constants — `d > 0`, lap net `d + s > 0`, and grid step 3's feed-back `F(C) ⊑ C`
+induction through the ordinary return-fact machinery (return over `LE(T+d)` inside the zone
+`(T+s, T+d+s]`). The ascending-stop envelope `LessEq(T+d+max(s,0))` joins
+`derived_orbit_domain` for safety-discovery cutoffs, and `call_return` retries a failed
+inference over the derived envelope (containment-guarded — coverage applied to the return
+question). More than one nesting level declines (Knuth's k-fold diverges for McCarthy's own
+constants) and is pinned as a rejecting twin. GR specimen 7 is live; conformance ignores are
+**3** (Ackermann + the 2 Part-D adoption gates). Detail and the honest review-provenance note
+in `DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -461,15 +475,15 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **452 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **139 passed, 0 failed, 4 ignored** (collatz resolved by the D-4 ruling; McCarthy + Ackermann + 2 Part-D gates remain) |
+| `cargo test --lib` | **455 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **141 passed, 0 failed, 3 ignored** (McCarthy live via the zone certificate; Ackermann + 2 Part-D gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
-417 / 421 / 424 / 426 / 438 / 439 / 447) are
+417 / 421 / 424 / 426 / 438 / 439 / 447 / 452) are
 **HISTORICAL**; this table is current.
 **Green ≠ complete:** the deferred finite-product extension's acceptance twin remains ignored (§4),
 and the staged work recorded elsewhere in this file remains open.

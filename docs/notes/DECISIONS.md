@@ -5246,3 +5246,62 @@ is by design, and the compile-time path rejects it normally.
 
 **Verification (final, incl. the new pin):** 452 lib passed / 1 ignored; 139 conformance passed /
 4 ignored; 10 machinery gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The nested landing-zone certificate: McCarthy 91 accepts, all reals
+
+**The grid's closed form is now the machinery.** `grounding::nested_zone_shape` reads the
+worked-examples grid §6 shape off the written program — one base arm with an ascending
+half-line stop (`n > T` / `n >= T`, tested before any recursion; GR-15a's admitted region
+base **above**, so landing is structural and no grid condition arises), an exit branch that
+is a pure shift `n + s`, and self-calls that are either climbs `m(n + d)` (one shared
+written drift) or one-level feed-backs `m(m(n + d))`. `nested_zone_descent` (a new `ground()`
+candidate) proves `Grounded` from the written constants alone: `d > 0` (climbs ascend),
+`d + s > 0` (the grid's "feed-back laps net +1 per lap" — laps progress), and grid step 3,
+the feed-back `F(C) ⊑ C` induction: the ordinary return-fact machinery must prove the
+return over `LE(T+d)` inside the return zone `(T+s, T+d+s]`. Candidate-locality throughout:
+any departure from the form — including **more than one nesting level**, because Knuth's
+k-fold generalization diverges for McCarthy's own constants (2·10 > 11) — contributes no
+conclusion.
+
+**Two supporting pieces, both coverage-shaped rather than new machinery:** (1)
+`derived_orbit_domain` gains the ascending-stop envelope — at a safety-discovery shape
+cutoff the visited domain `LessEq(T + d + max(s, 0))` is proposed from the same written
+constants (the vector induction must still prove the fact over it; a divergent-but-safe
+variant proving *safety* over the envelope is correct — safety is not termination). (2)
+`call_return` retries a failed inference over the derived orbit envelope, guarded by an
+explicit `args ⊑ envelope` subcontract — the return over a containing domain
+over-approximates the covered call (resolution-by-coverage applied to the return question);
+this is also what lets `countDown(5)`-class concrete starts resolve a real return contract.
+
+**Measured:** `ground(m, Number)` and `ground(m, Equals(1))` are `Grounded`; the **bare**
+`x = m(1)` and the declared `where (Number) => Number` program both **accept**, including a
+real-valued seat (`m(0.5)`) — the grid's "proven for all reals, unconditionally; no grid
+condition." GR specimen 7 goes live; conformance ignores drop 4 → 3 (Ackermann + the two
+Part-D adoption gates).
+
+**Review provenance, stated honestly:** the multi-agent adversarial review errored out on
+session limits (twice this session), so the review was performed inline: thirteen measured
+edge variants (multi-arm mixes, fractional constants, `>=` stops, big/small drifts,
+exit-up, capture boundaries, conjunct guards) plus numeric simulation of every
+accepted-fractional and every rejected-divergent variant — accepted ⇒ simulated
+terminating; rejected divergence candidates (`d+s = 0`, `d+s < 0`, k = 3) ⇒ simulated
+divergent; out-of-form terminating variants (constant exit, exit-up, capture boundary)
+decline to the honest third voice. The general-shape termination argument (nested
+induction on climb distance then lap distance, with the proven return fact bounding
+feed-back arguments) is recorded in the session transcript; its formal §16 discharge
+remains owed alongside GR-12/13's, per the spec's own §13 discipline. Re-entrancy audited:
+`ground()` is reached only from program seats; the retry inference is `INFERRING`-guarded,
+so at most two bounded inferences per call site and no cascade.
+
+**New pins:** `mccarthy_grounds_over_all_reals_by_the_zone_certificate`,
+`the_zone_certificate_requires_progressing_laps_and_one_nesting_level` (grounding.rs);
+`mccarthy_91_accepts_with_every_voice_proven` (rewritten from the previous slice's
+rejects-on-termination expectation), `the_zone_certificate_declines_its_divergent_twins`
+(program.rs); conformance `gr_specimen7_mccarthy_91_proven` + the now-live
+`a_neg_mccarthy_91_accepts`. **`// [ask-author]`: none — the certificate mechanizes grid
+§6's stated closed form; the one judgment call worth the author's eye is the k-fold
+restriction (one nesting level), argued from divergence of the k = 3 instance rather than
+from any spec sentence, and pinned as a rejecting twin.**
+
+**Verification:** 455 lib passed / 1 ignored; 141 conformance passed / 3 ignored; 10
+machinery gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

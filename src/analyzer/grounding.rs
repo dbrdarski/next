@@ -133,6 +133,7 @@ pub fn ground(
         || lex_descent(callee)
         || structural_descent(callee)
         || mutual_descent(callee)
+        || nested_zone_descent(callee, domain, cenv, interner)
     {
         return Verdict::Grounded;
     }
@@ -275,6 +276,31 @@ pub(crate) fn derived_orbit_domain(
         .any(|g| g != callee && callee_targets(g).contains(callee))
     {
         return group_orbit_domain(callee, &group, start, interner);
+    }
+
+    // The **ascending-stop zone envelope** — the derived domain of the grid-§6 closed
+    // form (and its simple non-nested ascent): from any numeric start below the stop,
+    // climbs stay within `T + d` and feed-back arguments within the return zone, so
+    // every visited argument lies in `LessEq(T + d + max(s, 0))`, composed from the
+    // written constants alone. The derivation proposes; the ordinary vector induction
+    // must still prove the fact over it — a divergent-but-safe variant proving *safety*
+    // over the envelope is correct (safety is not termination). Tried first because the
+    // descending reader below bails on any non-constant call argument (the feed-back
+    // call), which is exactly this shape.
+    {
+        let zero = Rational::from(0);
+        if let Some(shape) = nested_zone_shape(callee)
+            && shape.climb > zero
+        {
+            let mut hi = shape.boundary + shape.climb;
+            if shape.shift > zero {
+                hi = hi + shape.shift;
+            }
+            let env = Contract::LessEq(hi);
+            if matches!(subcontract(start, &env, interner), Sub::Proven) {
+                return Some(env);
+            }
+        }
     }
 
     // `lands` requires the start on the integer lattice; the envelope handles point
@@ -887,6 +913,215 @@ fn drift_on(e: &LinComb, call: &[Expr], params: &[String]) -> Option<Rational> {
     }
     let drift = substituted.sub(e);
     drift.is_constant().then_some(drift.constant)
+}
+
+/// The **nested landing-zone certificate** — the worked-examples grid §6 closed form
+/// ("McCarthy 91 — landing zones; point vs range bases"), the C§10-core landing-zone
+/// route GR specimen 7 consumes. The admitted shape, read from the written program:
+///
+/// ```text
+/// m = (n) => n > T ? n + s : … m(m(n + d)) …
+/// ```
+///
+/// — a single-parameter self-recursion with **one** base arm whose guard is an
+/// **ascending half-line stop** (`n > T` / `n >= T`; GR-15a's admitted region base
+/// **above**, so landing is structural and no grid condition arises — the grid's
+/// "derived input contract: none — all reals") and whose result is a **pure shift**
+/// `n + s`; every self-call is either a **climb** `m(n + d)` (one shared written drift
+/// `d > 0`) or a **feed-back** call whose argument is exactly one inner self-call of
+/// climb shape — one nesting level only: the k-fold generalization (`m(m(m(n+d)))`)
+/// is *not* this closed form and diverges for McCarthy's own constants, so a nested
+/// inner argument declines the candidate (GR-04 — no conclusion).
+///
+/// The closed form's three steps, mechanized from the written constants:
+/// 1. **Landing zone** `(T, T+d]` — every climb from below first lands there.
+/// 2. **Candidate return** = the exit shift applied to the zone: `(T+s, T+d+s]`.
+/// 3. **Feed-back check** — "one F(C) ⊑ C induction": the ordinary return-fact
+///    machinery must prove the return over `LE(T+d)` (every inner argument from the
+///    recursive region lies there) inside the candidate zone, which is what licenses
+///    every feed-back argument to land in it.
+///
+/// Termination then follows the grid's own count: climbs are finite (constant `+d`
+/// toward a half-line above — Archimedean, no grid), and feed-back laps net `d + s`
+/// per lap ("net +1 per lap" for McCarthy's 11 − 10), so `d + s > 0` is required —
+/// `d + s <= 0` is the exact-self-loop family (`n − 11` against `+11` laps forever)
+/// and proves nothing. Real-valued `T`, `d`, `s` are all admitted; the domain must
+/// only be numeric.
+fn nested_zone_descent(
+    callee: &ValueRef,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    if !matches!(
+        subcontract(
+            domain,
+            &Contract::Kind(crate::contract::Kind::Number),
+            interner
+        ),
+        Sub::Proven
+    ) {
+        return false;
+    }
+    let Some(shape) = nested_zone_shape(callee) else {
+        return false;
+    };
+    let zero = Rational::from(0);
+    if !shape.feedback || shape.climb <= zero || shape.climb.clone() + shape.shift.clone() <= zero {
+        return false; // no nested call, climbs not ascending, or laps not progressing
+    }
+
+    // Step 3 — the feed-back induction, through the ordinary return-fact machinery.
+    // Interval openness follows the stop: a strict stop (`n > T`) gives the closed-top
+    // zone `(T, T+d]`; a weak stop (`n >= T`) the half-open `[T, T+d)`.
+    let hi = shape.boundary.clone() + shape.climb.clone();
+    let (inner_domain, zone_lo, zone_hi) = match shape.op {
+        PrimOp::Gt => (
+            Contract::LessEq(hi.clone()),
+            Contract::Greater(shape.boundary + shape.shift.clone()),
+            Contract::LessEq(hi + shape.shift),
+        ),
+        PrimOp::Ge => (
+            Contract::Less(hi.clone()),
+            Contract::GreaterEq(shape.boundary + shape.shift.clone()),
+            Contract::Less(hi + shape.shift),
+        ),
+        _ => return false,
+    };
+    let Some(ret) = crate::analyzer::induction::infer_return_fact(
+        callee,
+        Some(std::slice::from_ref(&inner_domain)),
+        cenv,
+        interner,
+    ) else {
+        return false;
+    };
+    let zone_return = Contract::intersection(zone_lo, zone_hi, interner);
+    matches!(subcontract(&ret, &zone_return, interner), Sub::Proven)
+}
+
+/// The written constants of the ascending-stop shape, read off the body.
+struct ZoneShape {
+    /// The stop comparison — `Gt` (`n > T`) or `Ge` (`n >= T`).
+    op: PrimOp,
+    /// The stop boundary `T`.
+    boundary: Rational,
+    /// The exit branch's shift `s` (`n + s`).
+    shift: Rational,
+    /// The one shared climb drift `d` (`m(n + d)`).
+    climb: Rational,
+    /// Whether a feed-back call (`m(m(n + d))`) is present.
+    feedback: bool,
+}
+
+/// Read the ascending-stop closed-form shape: one base arm `n ⋈ T` (`>`/`>=`) tested
+/// before any recursion, exit result a pure shift `n + s`, and every self-call either a
+/// climb `m(n + d)` (one shared `d`) or a one-level feed-back `m(m(n + d))`. `None`
+/// wherever the written program departs from the form — candidate-locality (GR-04)
+/// turns every departure into "no conclusion", never a guess.
+fn nested_zone_shape(callee: &ValueRef) -> Option<ZoneShape> {
+    let closure = callee.as_closure()?;
+    let param = single_param(&closure.lambda.params)?;
+    let params = vec![param];
+    let Expr::Match(m) = &*closure.lambda.body else {
+        return None;
+    };
+
+    let one = Rational::from(1);
+    let zero = Rational::from(0);
+    let mut exit: Option<(PrimOp, Rational, Rational)> = None;
+    let mut climb: Option<Rational> = None;
+    let mut feedback = false;
+    let mut first_rec = usize::MAX;
+    for (idx, item) in m.items.iter().enumerate() {
+        let MatchItem::Arm(arm) = item else {
+            return None; // interleaved binds/statements — outside this closed form
+        };
+        let mut calls = Vec::new();
+        collect_self_calls(&arm.result, &closure, callee, &mut calls);
+        if calls.is_empty() {
+            // The one base arm, tested before any recursion can fire (§6 discipline).
+            if exit.is_some() || idx > first_rec {
+                return None;
+            }
+            let Some(Expr::PrimOp { op, args }) = arm.guard.as_ref() else {
+                return None;
+            };
+            if args.len() != 2 {
+                return None;
+            }
+            let (l, r) = (
+                linear_form(&args[0], &params)?,
+                linear_form(&args[1], &params)?,
+            );
+            let (e, c, op) = match (l.is_constant(), r.is_constant()) {
+                (false, true) => (l, r.constant, *op),
+                (true, false) => (r, l.constant, flip(*op)),
+                _ => return None,
+            };
+            // The varying side must be the bare parameter, the stop above it.
+            if e.coeffs != vec![one.clone()] || e.constant != zero {
+                return None;
+            }
+            if !matches!(op, PrimOp::Gt | PrimOp::Ge) {
+                return None;
+            }
+            // The exit branch must be the pure shift `n + s`.
+            let res = linear_form(&arm.result, &params)?;
+            if res.coeffs != vec![one.clone()] {
+                return None;
+            }
+            exit = Some((op, c, res.constant));
+        } else {
+            first_rec = first_rec.min(idx);
+            for arglist in &calls {
+                let [arg] = arglist.as_slice() else {
+                    return None;
+                };
+                if let Some(lin) = linear_form(arg, &params) {
+                    // A climb call `m(n + d)` — one shared written drift.
+                    if lin.coeffs != vec![one.clone()] {
+                        return None;
+                    }
+                    match &climb {
+                        None => climb = Some(lin.constant),
+                        Some(d) if *d == lin.constant => {}
+                        Some(_) => return None,
+                    }
+                } else if let Expr::Apply {
+                    callee: inner,
+                    args: inner_args,
+                } = arg
+                {
+                    // A feed-back call: exactly one inner self-call whose own argument
+                    // is linear — one nesting level only (the k-fold generalization
+                    // `m(m(m(n+d)))` diverges for McCarthy's own constants and is not
+                    // this closed form). The inner call is also collected separately
+                    // and validated as a climb there.
+                    if !resolves_to_target(inner, &closure, std::slice::from_ref(callee)) {
+                        return None;
+                    }
+                    let [Arg::Expr(a2)] = inner_args.as_slice() else {
+                        return None;
+                    };
+                    linear_form(a2, &params)?;
+                    feedback = true;
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    let (Some((op, boundary, shift)), Some(climb)) = (exit, climb) else {
+        return None;
+    };
+    Some(ZoneShape {
+        op,
+        boundary,
+        shift,
+        climb,
+        feedback,
+    })
 }
 
 /// A linear combination `Σ coeffs[i]·paramᵢ + constant` over the parameter list.
@@ -1873,6 +2108,45 @@ mod tests {
         assert_eq!(
             ground(&cd, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
             Verdict::Grounded
+        );
+    }
+
+    #[test]
+    fn mccarthy_grounds_over_all_reals_by_the_zone_certificate() {
+        // Grid §6's closed form (GR specimen 7): ascending half-line stop above,
+        // climbs +11, exit shift −10, one-level feed-back; laps net +1. The region
+        // base means no grid condition — the whole numeric Kind grounds, including
+        // non-integer starts.
+        let mut i = Interner::new();
+        let m = f("m = (n) => n > 100 ? n - 10 : m(m(n + 11))\nm", &mut i);
+        assert_eq!(
+            ground(
+                &m,
+                &Contract::Kind(crate::contract::Kind::Number),
+                &ContractEnv::new(),
+                &mut i
+            ),
+            Verdict::Grounded
+        );
+    }
+
+    #[test]
+    fn the_zone_certificate_requires_progressing_laps_and_one_nesting_level() {
+        // Lap net `d + s = 0` is the exact self-loop family (`m(100)` recurs on itself);
+        // triple nesting is Knuth's k-fold generalization, divergent for these constants.
+        // Neither may ground; neither has a represented witness here, so both are the
+        // honest third voice.
+        let mut i = Interner::new();
+        let num = Contract::Kind(crate::contract::Kind::Number);
+        let lap_zero = f("m = (n) => n > 100 ? n - 11 : m(m(n + 11))\nm", &mut i);
+        assert_eq!(
+            ground(&lap_zero, &num, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
+        let k3 = f("m = (n) => n > 100 ? n - 10 : m(m(m(n + 11)))\nm", &mut i);
+        assert_eq!(
+            ground(&k3, &num, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
         );
     }
 

@@ -1523,7 +1523,26 @@ fn call_return(
     if cv.as_fn().is_none() || has_spread || induction::currently_inferring() {
         return Contract::Top;
     }
-    induction::infer_return_fact(cv, Some(arg_contracts), cenv, interner).unwrap_or(Contract::Top)
+    if let Some(c) = induction::infer_return_fact(cv, Some(arg_contracts), cenv, interner) {
+        return c;
+    }
+    // Coverage through the derived domain (C§13.3(1) "derived grounding contracts",
+    // the resolution-by-coverage rule applied to the return question): a concrete
+    // start's own proposal often dies on the shape cutoff, but the recursion's derived
+    // orbit envelope contains the start, and the return over a containing domain
+    // contains the return over the covered one — so the envelope's fact answers,
+    // soundly over-approximate. `countDown(5)` and the grid-§6 zone calls resolve here.
+    if let [single] = arg_contracts
+        && let Some(envelope) = grounding::derived_orbit_domain(cv, single, cenv, interner)
+        && matches!(
+            crate::contract::subcontract(single, &envelope, interner),
+            crate::contract::Verdict::Proven
+        )
+        && let Some(c) = induction::infer_return_fact(cv, Some(&[envelope]), cenv, interner)
+    {
+        return c;
+    }
+    Contract::Top
 }
 
 /// Check a known callee's act-kind (world admission) and argument obligation, pushing

@@ -1347,8 +1347,11 @@ mod phase_a {
         );
     }
 
+    /// Released 2026-08-04: the nested landing-zone certificate (grid §6's closed
+    /// form) grounds the bare call — safety and completion close through the zone
+    /// envelope, the return through the (90, 101] induction, termination through the
+    /// climb/lap counts. GR specimen 7's "proven — the negative battery's baseline".
     #[test]
-    #[ignore = "A-NEG pin: McCarthy 91 — safety, return (the (90,101] zone), and completion all PROVE (2026-08-04: hypothesis stacking + nested-seat completion landed); the one remaining voice is termination — the landing-zone grounding certificate over the nested call (GR specimen 7 expects proven)"]
     fn a_neg_mccarthy_91_accepts() {
         let v = check_source("m = (n) => n > 100 ? n - 10 : m(m(n + 11))\nx = m(1)\n")
             .expect("parses and checks")
@@ -1699,6 +1702,34 @@ mod phase_gr {
         assert!(
             !transitive.accepted(),
             "a helper does not hide divergence: {transitive:#?}"
+        );
+    }
+
+    /// Specimen 7 (§3 + the C§10 core): McCarthy 91 — **proven, all reals** through
+    /// the nested landing-zone certificate (grid §6's closed form: zone (100, 111],
+    /// candidate return (90, 101], feed-back induction, laps net +1). Both the bare
+    /// call and the real-valued declared domain accept; the region base means no
+    /// grid condition.
+    #[test]
+    fn gr_specimen7_mccarthy_91_proven() {
+        let bare = check_source("m = (n) => n > 100 ? n - 10 : m(m(n + 11))\nx = m(1)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            bare.accepted(),
+            "the zone certificate grounds it: {bare:#?}"
+        );
+
+        let real = check_source(
+            "m where (Number) => Number\n\
+             m = (n) => n > 100 ? n - 10 : m(m(n + 11))\n\
+             x = m(0.5)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            real.accepted(),
+            "proven for all reals — no grid condition on a region base: {real:#?}"
         );
     }
 

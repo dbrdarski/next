@@ -857,16 +857,14 @@ mod tests {
         );
     }
 
-    /// McCarthy 91's measured end state (2026-08-04, after the produced-path
-    /// sharpenings, the hypothesis stacking discipline, and nested-seat completion):
-    /// the declared safety fact and the return claim over `Number` both **prove** —
-    /// the nested `m(m(n + 11))` resolves the inner call's return through its own
-    /// induction (the (90, 101] zone) and the outer expecting seat's completion
-    /// demand through the completion fact — and the program still honestly rejects
-    /// on exactly one voice: termination (Principle 9; the landing-zone grounding
-    /// certificate is the owed piece, GR specimen 7).
+    /// McCarthy 91's end state (2026-08-04): safety, the return claim over `Number`,
+    /// completion, **and termination** all prove — the nested `m(m(n + 11))` resolves
+    /// the inner return through the (90, 101] zone induction, the outer expecting
+    /// seat's completion through the completion fact, and grounding through the
+    /// nested landing-zone certificate (grid §6's closed form; GR specimen 7:
+    /// "proven — the negative battery's baseline"). The declared program accepts.
     #[test]
-    fn mccarthy_91_proves_safety_and_return_and_rejects_only_on_termination() {
+    fn mccarthy_91_accepts_with_every_voice_proven() {
         let (v, _) = check(
             "m where (Number) => Number\n\
              m = (n) => n > 100 ? n - 10 : m(m(n + 11))\n\
@@ -887,16 +885,29 @@ mod tests {
         assert!(
             v.grounding_demands
                 .iter()
-                .all(|d| matches!(d.verdict, grounding::Verdict::Unproven)),
-            "termination stays honestly unproven pending the landing-zone certificate: {:?}",
+                .all(|d| matches!(d.verdict, grounding::Verdict::Grounded)),
+            "the landing-zone certificate grounds every demand: {:?}",
             v.grounding_demands
         );
-        assert!(!v.accepted(), "Principle 9 still rejects");
+        assert!(v.accepted(), "McCarthy 91 accepts: {:?}", v.findings);
+    }
+
+    /// The certificate's negative twins, pinned so its conditions cannot silently
+    /// widen. Lap net `d + s = 0` (`n - 11` against `+11`) is the exact self-loop
+    /// family — `m(100)` recurs on itself forever; triple nesting is Knuth's k-fold
+    /// generalization, divergent for McCarthy's own constants (2·10 > 11). Both must
+    /// stay honestly rejected.
+    #[test]
+    fn the_zone_certificate_declines_its_divergent_twins() {
+        let (lap_zero, _) = check("m = (n) => n > 100 ? n - 11 : m(m(n + 11))\nx = m(1)\n");
         assert!(
-            v.errors()
-                .all(|e| e.message.contains("not proven to finish")),
-            "termination is the only rejecting voice: {:?}",
-            v.findings
+            !lap_zero.accepted(),
+            "a lap net of zero laps forever and must not ground"
+        );
+        let (k3, _) = check("m = (n) => n > 100 ? n - 10 : m(m(m(n + 11)))\nx = m(1)\n");
+        assert!(
+            !k3.accepted(),
+            "one nesting level only — the k-fold generalization diverges"
         );
     }
 
