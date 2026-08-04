@@ -283,6 +283,15 @@ all-contract "value groups". Analyzer-side Ref-bearing contracts stay conservati
 group-aware subcontract/emptiness consumers are the next increment. Four `recursive_contracts`
 conformance rows. Detail in `DECISIONS.md` (2026-08-04).
 
+**T2.5 string-length contracts landed (2026-08-04):** strings join the tuple-length family —
+`value_length`/`length::len` count grapheme clusters (literal counts exact; `Kind(String)` =
+`GE(0)`), and F0's `Add` string rail produces `LengthRestricted(Kind(String), D)` via
+`concat_image` with the sound seam envelope `[left.lo, hi_a + hi_b]` (floor from the left
+operand only — clustering merges rightward-in; the −2 ZWJ seam family is the pinned witness).
+`subcontract` gains the two sound `LengthRestricted` proof arms (`LR(T,D) ⊑ B` if `T ⊑ B`;
+`LR ⊑ LR` componentwise) so lifted produced contracts still discharge plain String demands.
+Detail in `DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -500,7 +509,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **457 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **461 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **147 passed, 0 failed, 2 ignored** (McCarthy + Ackermann + recursive contracts live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |

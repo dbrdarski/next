@@ -417,13 +417,16 @@ impl Contract {
     }
 }
 
-/// The length of a value for the tuple-length family: a tuple's arity or a
-/// record's field count (`None` for a non-aggregate — it has no length, so no
-/// length restriction admits it).
+/// The length of a value for the tuple-length family: a tuple's arity, a
+/// record's field count, or a string's **grapheme-cluster** count (E8: bare
+/// string length operates on clusters; the pinned segmenter version is a C§13.4
+/// namespace event). `None` for a non-aggregate — it has no length, so no
+/// length restriction admits it.
 pub(crate) fn value_length(v: &ValueRef) -> Option<usize> {
     v.as_tuple()
         .map(<[ValueRef]>::len)
         .or_else(|| v.as_record().map(|r| r.len()))
+        .or_else(|| v.as_str_units().map(grapheme::count))
 }
 
 /// Whether the natural number `n` inhabits a **Number** contract `d` (a length

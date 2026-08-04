@@ -146,16 +146,23 @@ pub fn len(group: &RecGroup, c: &Contract, interner: &mut Interner) -> Len {
             }
         }
 
-        // Any tuple/record shape at all.
-        Contract::Top | Contract::Kind(Kind::Tuple) | Contract::Kind(Kind::Record) => {
-            Len::exact(ge(0))
-        }
+        // Any tuple/record/string shape at all (strings join the family per E8:
+        // the derived length is the grapheme-cluster count).
+        Contract::Top
+        | Contract::Kind(Kind::Tuple)
+        | Contract::Kind(Kind::Record)
+        | Contract::Kind(Kind::String) => Len::exact(ge(0)),
 
         Contract::Equals(v) => match v.as_tuple() {
             Some(t) => Len::exact(eq_len(t.len() as u64)),
             None => match v.as_record() {
                 Some(r) => Len::exact(eq_len(r.len() as u64)),
-                None => Len::exact(Contract::Bottom), // not a length-bearing value
+                None => match v.as_str_units() {
+                    // A literal's grapheme count is exact at compile time (E8),
+                    // under the pinned segmenter version.
+                    Some(units) => Len::exact(eq_len(super::grapheme::count(units) as u64)),
+                    None => Len::exact(Contract::Bottom), // not a length-bearing value
+                },
             },
         },
 

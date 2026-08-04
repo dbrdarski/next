@@ -5410,3 +5410,36 @@ errors verbatim.**
 
 **Verification:** 457 lib passed / 1 ignored; 147 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — T2.5: strings join the length family; `+`'s string rail carries its derived length
+
+**The tuple-family §5 lift, exactly as E8 states it** — string lengths are the family's derived,
+stamped Number contracts over **grapheme clusters**. Three small pieces, all consumers of
+machinery that already existed: (1) `value_length` counts a string's clusters (the pinned
+segmenter version; a re-pin is the C§13.4 namespace event), so `LengthRestricted` membership and
+sampling admit strings; (2) `length::len` gains the two string arms — a literal's count is
+**exact at compile time** (`Equals("👩‍🚒")` has length 1; a combining mark joins its base), and
+`Kind(String)` is the exact `GE(0)`; (3) F0's `Add` string rail produces
+`LengthRestricted(Kind(String), D)` through the new `concat_image` — the previously documented
+"owed there, not here" incompleteness, now closed.
+
+**The seam law is the load-bearing part.** For abstract operands the derived count is
+`concat_len_bound`'s envelope `[left.lo, hi_a + hi_b]`: the **floor is the left operand's
+minimum only** — clustering merges rightward-in, so a leading joiner on the right can absorb
+into the left's trailing state and `count(b)` is not a lower bound — and the ceiling is the
+plain sum, since merges only reduce. The −2 seam family is the pinned witness: `"👩" +
+"\u{200D}🚒"` composes to **one** grapheme, which inhabits the envelope and would refute both
+the naive exact sum and the old `sum − 1` interval. Exact literal seams remain the constant-fold
+path's business (`Summary::compose`); `s + "ab"` deliberately promises nothing.
+
+**One adjacent rule was required, not optional:** `subcontract` had no `LengthRestricted`
+proof arms, so the lifted produced contract failed the plain `Kind(String)` demand — every
+downstream `+` chain would have regressed to Unproven. Two sound rules land: `LR(T, D) ⊑ B` if
+`T ⊑ B` (the restriction only narrows), and `LR ⊑ LR` componentwise. Four pins under
+`contract::tests::string_length`. **`// [ask-author]`: none — the lift consumes the
+design-closed tuple-family/E8 rules; the right-side `A ⊑ LR(T, D)` proof rule (needing the
+interner-free `provable` to read lengths) stays honestly absent beyond the `Equals`-membership
+case.**
+
+**Verification:** 461 lib passed / 1 ignored; 147 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

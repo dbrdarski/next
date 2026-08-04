@@ -54,8 +54,9 @@
 //!   unbounded even though it is bounded on one side.
 //! - **Strictness through `×` / `/`** — computed endpoints are emitted inclusive
 //!   (sound, at most one point wide).
-//! - **String *length* through `+`** — needs the tuple family's §5 lift to string
-//!   contracts, which does not exist yet; owed there, not here.
+//! - **String seam exactness through `+`** — abstract operands carry the sound
+//!   `[left.lo, hi_a + hi_b]` grapheme bound (`concat_image`; T2.5's §5 lift);
+//!   the exact seam remains literal-fold territory (`Summary::compose`).
 //! - **`Difference` with a non-singleton exclusion** — the exclusion is dropped.
 //! - **`Union` operands** — read as the interval/congruence hull rather than
 //!   distributed per alternative. Sound; the congruence join recovers much of the
@@ -348,7 +349,7 @@ fn string_or_mixed(a: &Contract, b: &Contract, interner: &mut Interner) -> Contr
     let string = Contract::Kind(Kind::String);
     let number = Contract::Kind(Kind::Number);
     match (is_str(a, interner), is_str(b, interner)) {
-        (true, true) => string,
+        (true, true) => concat_image(a, b, interner),
         // `+` completes only as Number+Number or String+String, and the image ranges
         // over completing evaluations — so one operand disjoint from String forces
         // the numeric rail, and dually. (`1 + x` can never concatenate.)
@@ -414,4 +415,65 @@ fn is_str(c: &Contract, interner: &mut Interner) -> bool {
         subcontract(c, &Contract::Kind(Kind::String), interner),
         Verdict::Proven
     )
+}
+
+/// The `String ++ String` image with its **derived length** (E8 / tuple-family §5,
+/// plan T2.5): the grapheme count of `a ++ b` lies in `[len(a).lo, len(a).hi +
+/// len(b).hi]` — `concat_len_bound`'s law. The floor is the **left** operand's
+/// minimum only: clustering merges rightward-in, so a leading joiner on the right
+/// can absorb into the left's trailing state and `count(b)` is not a lower bound;
+/// the ceiling is the plain sum, since merges only reduce. Exact literal seams fold
+/// upstream through the oracle (the analyzer's constant-fold path); this is the
+/// abstract-operand transfer, `Approx`-stamped by construction, and it degrades to
+/// the bare `Kind(String)` whenever the bounds say nothing.
+fn concat_image(a: &Contract, b: &Contract, interner: &mut Interner) -> Contract {
+    let group = super::recursive::RecGroup::new([]);
+    let la = super::length::len(&group, a, interner);
+    let lb = super::length::len(&group, b, interner);
+    let (alo, ahi) = nat_bounds(&la.contract);
+    let (_, bhi) = nat_bounds(&lb.contract);
+    let (lo, hi) = super::grapheme::concat_len_bound((alo, ahi), (0, bhi));
+    let string = Contract::Kind(Kind::String);
+    let length = match (lo, hi) {
+        (0, None) => return string,
+        (lo, None) => Contract::intersection(
+            Contract::GreaterEq(Rational::from(lo as i64)),
+            integers(),
+            interner,
+        ),
+        (lo, Some(hi)) => Contract::intersection(
+            Contract::Range(Rational::from(lo as i64), Rational::from(hi as i64)),
+            integers(),
+            interner,
+        ),
+    };
+    Contract::length_restricted(string, length, interner)
+}
+
+/// Sound natural-number bounds `[lo, hi]` read from a length contract (`hi = None`
+/// unbounded). Anything unreadable widens to `(0, None)` — never a wrong bound.
+fn nat_bounds(length: &Contract) -> (usize, Option<usize>) {
+    let Some(abs) = super::numeric::num_abs(length) else {
+        return (0, None);
+    };
+    let lo = match &abs.iv.low {
+        super::numeric::Bound::Incl(r) if r.is_integer() && *r >= Rational::from(0) => {
+            usize::try_from(r.as_ratio().numer().clone()).unwrap_or(0)
+        }
+        super::numeric::Bound::Excl(r) if r.is_integer() && *r >= Rational::from(0) => {
+            usize::try_from(r.as_ratio().numer().clone() + 1).unwrap_or(0)
+        }
+        _ => 0,
+    };
+    let hi = match &abs.iv.high {
+        super::numeric::Bound::Incl(r) if r.is_integer() && *r >= Rational::from(0) => {
+            usize::try_from(r.as_ratio().numer().clone()).ok()
+        }
+        super::numeric::Bound::Excl(r) if r.is_integer() && *r > Rational::from(0) => {
+            usize::try_from(r.as_ratio().numer().clone() - 1).ok()
+        }
+        super::numeric::Bound::Unbounded => None,
+        _ => None,
+    };
+    (lo, hi)
 }

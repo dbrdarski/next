@@ -2747,3 +2747,99 @@ mod seams {
         }
     }
 }
+
+/// The T2.5 string-length lift (E8 / tuple-family §5): strings join the length
+/// family with grapheme-cluster counts, and `+`'s string rail carries the derived
+/// length.
+mod string_length {
+    use super::super::{Contract, Kind, Verdict, analyze_operation, subcontract};
+    use crate::ast::PrimOp;
+    use crate::interner::Interner;
+
+    fn nat_eq(k: i64, i: &mut Interner) -> Contract {
+        Contract::intersection(
+            Contract::Range(k.into(), k.into()),
+            Contract::Mod {
+                n: 1.into(),
+                r: 0.into(),
+            },
+            i,
+        )
+    }
+
+    #[test]
+    fn literal_grapheme_counts_are_exact() {
+        // Composed clusters count once: the ZWJ family is one grapheme, and a
+        // combining mark joins its base (pinned segmenter version, E8/C§13.4).
+        let mut i = Interner::new();
+        let lr1 =
+            Contract::length_restricted(Contract::Kind(Kind::String), nat_eq(1, &mut i), &mut i);
+        let woman_fire = Contract::Equals(i.string("\u{1F469}\u{200D}\u{1F692}"));
+        assert!(matches!(
+            subcontract(&woman_fire, &lr1, &mut i),
+            Verdict::Proven
+        ));
+        let e_acute = Contract::Equals(i.string("e\u{0301}"));
+        assert!(matches!(
+            subcontract(&e_acute, &lr1, &mut i),
+            Verdict::Proven
+        ));
+    }
+
+    #[test]
+    fn concat_floor_is_the_left_operands_minimum_only() {
+        // `"ab" + s` is at least 2 graphemes — merges only reduce toward the left
+        // count. `s + "ab"` promises nothing: a leading joiner on the right can be
+        // absorbed into the left's trailing state, so count(b) is not a floor.
+        let mut i = Interner::new();
+        let ab = Contract::Equals(i.string("ab"));
+        let string = Contract::Kind(Kind::String);
+        let left = analyze_operation(PrimOp::Add, &[ab.clone(), string.clone()], &mut i).output;
+        let ge2 = Contract::intersection(
+            Contract::GreaterEq(2.into()),
+            Contract::Mod {
+                n: 1.into(),
+                r: 0.into(),
+            },
+            &mut i,
+        );
+        let lr_ge2 = Contract::length_restricted(string.clone(), ge2, &mut i);
+        assert!(
+            matches!(subcontract(&left, &lr_ge2, &mut i), Verdict::Proven),
+            "{left:?}"
+        );
+        // And the produced still proves the plain String demand (the left-side
+        // subcontract rule: the restriction only narrows).
+        assert!(matches!(
+            subcontract(&left, &string, &mut i),
+            Verdict::Proven
+        ));
+
+        let right = analyze_operation(PrimOp::Add, &[string.clone(), ab], &mut i).output;
+        assert_eq!(right, string, "no floor may be claimed from the right");
+    }
+
+    #[test]
+    fn the_seam_bound_admits_the_merged_literal() {
+        // The −2 seam family: `"👩" + "\u{200D}🚒"` composes to ONE grapheme. The
+        // abstract bound [left.lo, sum(hi)] must contain it — the old `sum − 1`
+        // interval and the naive exact sum both would not.
+        let mut i = Interner::new();
+        let woman = Contract::Equals(i.string("\u{1F469}"));
+        let zwj_fire = Contract::Equals(i.string("\u{200D}\u{1F692}"));
+        let out = analyze_operation(PrimOp::Add, &[woman, zwj_fire], &mut i).output;
+        let composed = i.string("\u{1F469}\u{200D}\u{1F692}");
+        assert!(out.contains(&composed), "{out:?}");
+    }
+
+    #[test]
+    fn length_restricted_membership_counts_graphemes() {
+        let mut i = Interner::new();
+        let two = nat_eq(2, &mut i);
+        let lr2 = Contract::length_restricted(Contract::Kind(Kind::String), two, &mut i);
+        let ab = i.string("ab");
+        let abc = i.string("abc");
+        assert!(lr2.contains(&ab));
+        assert!(!lr2.contains(&abc));
+    }
+}

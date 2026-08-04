@@ -66,6 +66,9 @@ fn provable(a: &Contract, b: &Contract) -> bool {
         Union(a1, a2) => return provable(a1, b) && provable(a2, b),
         // `A \ E ⊑ B` if `A ⊑ B` (sound, incomplete — E may remove the bad part).
         Difference(aa, _) if provable(aa, b) => return true,
+        // `LengthRestricted(T, D) ⊑ B` if `T ⊑ B` — the restriction only narrows
+        // (sound, incomplete: the length filter may remove the part outside `B`).
+        LengthRestricted(t, _) if provable(t, b) => return true,
         // `Equals(v) ⊑ B` is decidable: `v ∈ ⟦B⟧`.
         Equals(v) => return b.contains(v),
         _ => {}
@@ -107,6 +110,10 @@ fn atom_provable(a: &Contract, b: &Contract) -> bool {
         (Record(fa), Record(fb)) => record_subset(fa, fb),
         (Tuple(ea), Tuple(eb)) => {
             ea.len() == eb.len() && ea.iter().zip(eb).all(|(x, y)| provable(x, y))
+        }
+        // Componentwise: the bases and the length domains both narrow.
+        (LengthRestricted(ta, da), LengthRestricted(tb, db)) => {
+            provable(ta, tb) && provable(da, db)
         }
         _ => match (interval_exact(a), interval_exact(b)) {
             (Some(ia), Some(ib)) => interval_subset(&ia, &ib),
