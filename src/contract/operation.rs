@@ -345,13 +345,16 @@ fn geo_scaling(g: &Contract, factor: &Contract) -> Option<Contract> {
 /// either. (The *length* of the concatenation needs the tuple family's §5 lift to
 /// string contracts — owed there, not here.)
 fn string_or_mixed(a: &Contract, b: &Contract, interner: &mut Interner) -> Contract {
+    let string = Contract::Kind(Kind::String);
+    let number = Contract::Kind(Kind::Number);
     match (is_str(a, interner), is_str(b, interner)) {
-        (true, true) => Contract::Kind(Kind::String),
-        _ => Contract::union(
-            Contract::Kind(Kind::Number),
-            Contract::Kind(Kind::String),
-            interner,
-        ),
+        (true, true) => string,
+        // `+` completes only as Number+Number or String+String, and the image ranges
+        // over completing evaluations — so one operand disjoint from String forces
+        // the numeric rail, and dually. (`1 + x` can never concatenate.)
+        _ if super::disjoint(a, &string) || super::disjoint(b, &string) => number,
+        _ if super::disjoint(a, &number) || super::disjoint(b, &number) => string,
+        _ => Contract::union(number, string, interner),
     }
 }
 

@@ -1360,8 +1360,10 @@ mod phase_a {
         assert!(v.accepted(), "{:#?}", v.findings);
     }
 
+    /// Non-tail mutual (`1 + g(n − 1)`): released by the Add-image sharpening — the
+    /// return induction always closed; its proposal was poisoned by the mixed
+    /// `Number ∪ String` image for `1 + <pinned>`, which a Number operand rules out.
     #[test]
-    #[ignore = "A-NEG pin: non-tail mutual — terminates and is safe; acceptance awaits the completion/return cross-claim through the group envelope at consuming seats"]
     fn a_neg_non_tail_mutual_accepts() {
         let v = check_source(
             "f = (n) => n <= 0 ? 0 : 1 + g(n - 1)\ng = (n) => n <= 0 ? 0 : 1 + f(n - 1)\n\

@@ -5020,3 +5020,25 @@ pins. **`// [ask-author]`: none.**
 
 **Verification:** 447 lib passed / 1 ignored; 135 conformance passed / 8 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The non-tail mutual pin clears: one Add-image sharpening
+
+**Diagnosed by probe, not assumption:** the mutual return induction for
+`f = (n) => n <= 0 ? 0 : 1 + g(n − 1)` was working all along — its *proposal* was poisoned.
+`infer_return_fact` proposed `Number ∪ String` because the Add image's mixed fallback
+(`string_or_mixed`) ignored what the safety rule itself knows: `+` completes only as
+Number+Number or String+String, so `1 + <anything>` can never concatenate. The claim then failed
+its own verification (`1 + (Number ∪ String)` is not provably safe) and the produced contract
+stayed `Top`, failing the enclosing `Add` at the consuming seat.
+
+**Built:** the image over completing evaluations now uses rail exclusion — one operand disjoint
+from `String` forces the `Number` rail, and dually. One arm in `string_or_mixed`; the operation
+sweep re-verifies the sharpened image against the oracle. The A-NEG pin's own hypothesis
+("awaits the completion/return cross-claim through the group envelope") was wrong — recorded here
+so the correction is loud: the cross-claim machinery needed nothing; the contract layer did.
+
+**Released:** `a_neg_non_tail_mutual_accepts`. Register: 136 passed / 7 pins (4 A-NEG certs ·
+threading parity grids · 2 Part-D adoption gates). **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 136 conformance passed / 7 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
