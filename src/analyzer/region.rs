@@ -66,6 +66,13 @@ pub struct Selected {
     pub result: Expr,
     /// The row's parameter-alias binder, if any (see [`Row::binder`]).
     pub binder: Option<String>,
+    /// **Definite arrival** (RT-14's witness bridge): true only when every earlier
+    /// *selected* row was exact (the carried remainder is the true remainder — no
+    /// input that stopped earlier is still inside it) **and** this row's own region
+    /// is exact (membership in the region is membership in the arm). Refutations
+    /// and completion-present claims are licensed only through a definite arrival;
+    /// an indefinite one weakens them to the unproven voice.
+    pub definite: bool,
 }
 
 /// The region table of `body` over the single parameter `param`. An arm-only `Match`
@@ -289,6 +296,7 @@ fn region_rows(
 pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Selected> {
     if let Contract::Equals(v) = arg_domain {
         let mut out = Vec::new();
+        let mut definite = true;
         for row in table {
             if row.region.contains(v) {
                 out.push(Selected {
@@ -296,10 +304,14 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
                     region: Contract::Equals(v.clone()),
                     exact: row.exact,
                     result: row.result.clone(),
+                    definite: definite && row.exact,
                 });
                 if row.exact {
                     break; // an exact row containing the point consumes it
                 }
+                // A non-exact row may or may not capture the point at runtime —
+                // every later arrival is indefinite.
+                definite = false;
             }
         }
         return out;
@@ -307,6 +319,7 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
 
     let mut remaining = arg_domain.clone();
     let mut out = Vec::new();
+    let mut definite = true;
     for row in table {
         if !disjoint(&remaining, &row.region) {
             out.push(Selected {
@@ -314,7 +327,15 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
                 region: intersect(remaining.clone(), row.region.clone(), i),
                 exact: row.exact,
                 result: row.result.clone(),
+                definite: definite && row.exact,
             });
+            // A selected non-exact row consumes nothing yet may stop inputs at
+            // runtime, so the carried remainder is inflated from here on. An
+            // unselected row (proven-empty candidate) stops nothing: its region
+            // over-approximates its acceptance, so emptiness is decisive.
+            if !row.exact {
+                definite = false;
+            }
         }
         if row.exact {
             // Collapse a fully-consumed remainder outright (the same discipline the
@@ -591,6 +612,8 @@ pub struct SelectedN {
     pub regions: Vec<Contract>,
     pub exact: bool,
     pub result: Expr,
+    /// Definite arrival — see [`Selected::definite`]; same walk discipline.
+    pub definite: bool,
 }
 
 /// The flat parameter names of a plain tuple pattern (`(a, b)` → `["a", "b"]`), or
@@ -743,6 +766,7 @@ pub(crate) fn remaining_multi(
 pub fn select_multi(table: &[RowN], domains: &[Contract], i: &mut Interner) -> Vec<SelectedN> {
     let mut remaining: Vec<Contract> = domains.to_vec();
     let mut out = Vec::new();
+    let mut definite = true;
     for row in table {
         if remaining
             .iter()
@@ -760,7 +784,11 @@ pub fn select_multi(table: &[RowN], domains: &[Contract], i: &mut Interner) -> V
             regions: effective,
             exact: row.exact,
             result: row.result.clone(),
+            definite: definite && row.exact,
         });
+        if !row.exact {
+            definite = false;
+        }
         if row.exact && row.constrained == 0 {
             for rem in &mut remaining {
                 *rem = Contract::Bottom; // the unconditional arm takes everything left

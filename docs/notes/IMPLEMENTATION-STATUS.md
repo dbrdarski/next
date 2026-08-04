@@ -360,6 +360,22 @@ guards advise, never refute). Both false-accept programs now reject; all guard-b
 rows (countDown, McCarthy, Ackermann, gcd) unchanged. Conformance `guard_demands` pins both
 directions. Detail in `DECISIONS.md` (2026-08-04).
 
+**The RT-01…14 rows closed (2026-08-05) — with two measured honesty defects fixed.** All
+§10 suite obligations are pinned (conformance `region_rows` + existing lib/instantiation
+rows). New machinery, each at its spec-named seat: the §E9 unreachable-branch error at
+`analyze_where`, walking the instantiated table **from Top** (the recovered grid's `Strict`
+factorial refutes the declared-domain reading — internal recursion lawfully arrives outside
+the entry contract; `[ask-author]` markers on the reading and on the ExpectingSeat class
+reuse); **definite arrival** threaded through `Selected`/`SelectedN` (RT-14: refutations only
+through definitely-reached rows — a trap behind an opaque guard's else now rejects through
+Unproven, never Refuted); the **E10 produce claim** at the `where` (`Claim::Completes` over
+the declared domain, Pure bodies only) — closing a measured false accept (oracle traps
+ExpectingSeat on the uncovered input; the analyzer accepted). A first attempt seating
+coverage inside `safety::prove` was rejected by the statement-seat pin and reverted —
+fall-through belongs to the consumer, not body safety. Difference-aware `disjoint`/
+`is_empty`/`provable` rules carried the exhaustiveness proofs. Detail in `DECISIONS.md`
+(2026-08-05).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -578,7 +594,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **466 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **158 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
+| `cargo test --test conformance` | **168 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

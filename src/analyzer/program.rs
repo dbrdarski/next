@@ -408,6 +408,15 @@ fn analyze_where(
         return;
     };
 
+    // The §E9 unreachable-branch diagnostic at its RT §4 seat: an arm whose region
+    // is proven empty after first-match consumption **over the function's whole
+    // parameter domain** (`Top` per position — a property of the function, not of
+    // one caller *or of this declaration's entry contract*: internal recursive calls
+    // lawfully arrive outside the declared domain, so declared-domain emptiness is
+    // ordinary non-selection, not deadness). Only prior arms' certain consumption
+    // can raise this error.
+    source_unreachable_arms(&w.name, callee, args.len(), cenv, findings, interner);
+
     let body_safety = safety::prove(callee, &args, cenv, interner);
     findings.extend(verdict_findings(&w.name, &body_safety));
     body_safety_demands.push(DeclaredBodySafetyDemand {
@@ -420,6 +429,28 @@ fn analyze_where(
     // The declared domain also demands termination (Principle 9 as stamped): a `where`
     // asserts the function over this whole domain, divergence included.
     ground_demand(callee, &args, cenv, findings, grounding_demands, interner);
+
+    // The declared claim's **completion half** (E10 / Claim::Completes): a `where`
+    // asserts the body *produces a value* over the whole declared domain, so a body
+    // that cannot be proven to complete with a value on every path is not a claim
+    // this pass may stamp — the unproven voice rejects here, exactly as it does for
+    // safety and return (late-resolution §5). No witness is minted (RT-14): a
+    // fall-through at an ordinary call seat stays the application machinery's
+    // per-call judgment. Mutator/Effect bodies carry no coverage obligation.
+    if let Some(closure) = callee.as_closure()
+        && matches!(closure.lambda.act_kind, crate::ast::ActKind::Pure)
+        && !safety::completes(callee, &args, cenv, interner)
+    {
+        findings.push(Finding {
+            class: TrapClass::ExpectingSeat,
+            severity: Severity::Error,
+            message: format!(
+                "`where {}` declares a domain over which the body cannot be proven to \
+                 produce a value on every path (E10 completion)",
+                w.name
+            ),
+        });
+    }
 
     // The declared **return** contract is a demand (C§13.1): the `where` asks whether
     // the body produces a value satisfying it, adjudicated here, at the ask site.
@@ -704,6 +735,104 @@ fn verdict_findings(name: &str, v: &safety::BodySafety) -> Vec<Finding> {
 // statically un-evaluable contract expression) carry its own diagnostic class rather than
 // borrowing `ArgumentObligation`? These are authoring errors in the signature itself, not
 // trap-class rejections, and the concordance has no row for them.
+/// Walk the callee's instantiated region table over the function's **whole**
+/// parameter domain (`Top` per position), mirroring the selection walk's
+/// consumption (exact rows consume; the collapse discipline included), and report
+/// any arm whose candidate is proven empty.
+///
+/// // [ask-author] Two readings of RT §4's "over the function's whole parameter
+/// // domain" existed: the declared entry contract, or the function's own (Top).
+/// // The recovered grid's `f where (Strict)` factorial (guard `n == 0`, domain
+/// // ≥ 1, reached via the internal `f(n-1)`) refutes the declared-domain reading
+/// // — internal recursion lawfully arrives outside the entry contract — so this
+/// // walks from Top and only prior arms' consumption can kill an arm. Confirm.
+/// // [ask-author] The finding reuses `TrapClass::ExpectingSeat` (the E9/E10
+/// // match-coverage family) — the §6 trap catalog is closed, so no new class was
+/// // minted; the message carries the diagnostic identity, per the recursive-
+/// // contract definition-error precedent. Non-exact rows consume nothing, so
+/// only prior arms' certain consumption can kill a later arm — uncertainty never
+/// raises this error, and neither does any *domain* (declared or per-call).
+fn source_unreachable_arms(
+    name: &str,
+    callee: &ValueRef,
+    arity: usize,
+    cenv: &ContractEnv,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) {
+    fn empty(c: &Contract, i: &mut Interner) -> bool {
+        matches!(subcontract(c, &Contract::Bottom, i), Verdict::Proven)
+    }
+    fn report(name: &str, idx: usize, findings: &mut Vec<Finding>) {
+        findings.push(Finding {
+            class: TrapClass::ExpectingSeat,
+            severity: Severity::Error,
+            message: format!(
+                "`{name}` arm {n}: unreachable branch — its region is empty over the \
+                 declared domain after prior arms' consumption (E9)",
+                n = idx + 1
+            ),
+        });
+    }
+    if arity == 1 {
+        let Some((_, table)) = super::region::instance_table(callee, cenv, interner) else {
+            return;
+        };
+        let mut remaining = Contract::Top;
+        for (idx, row) in table.iter().enumerate() {
+            let candidate = Contract::intersection(remaining.clone(), row.region.clone(), interner);
+            if empty(&candidate, interner) {
+                report(name, idx, findings);
+                continue;
+            }
+            if row.exact {
+                remaining = if matches!(
+                    subcontract(&remaining, &row.region, interner),
+                    Verdict::Proven
+                ) {
+                    Contract::Bottom
+                } else {
+                    Contract::difference(remaining, row.region.clone(), interner)
+                };
+            }
+        }
+    } else {
+        let Some((_, table)) = super::region::instance_table_multi(callee, cenv, interner) else {
+            return;
+        };
+        let mut remaining: Vec<Contract> = vec![Contract::Top; arity];
+        for (idx, row) in table.iter().enumerate() {
+            let dead = remaining.iter().zip(&row.regions).any(|(rem, reg)| {
+                let c = Contract::intersection(rem.clone(), reg.clone(), interner);
+                empty(&c, interner)
+            });
+            if dead {
+                report(name, idx, findings);
+                continue;
+            }
+            if row.exact && row.constrained == 0 {
+                for rem in &mut remaining {
+                    *rem = Contract::Bottom;
+                }
+            } else if row.exact && row.constrained == 1 {
+                let p = row
+                    .regions
+                    .iter()
+                    .position(|r| !matches!(r, Contract::Top))
+                    .expect("one constrained position");
+                remaining[p] = if matches!(
+                    subcontract(&remaining[p], &row.regions[p], interner),
+                    Verdict::Proven
+                ) {
+                    Contract::Bottom
+                } else {
+                    Contract::difference(remaining[p].clone(), row.regions[p].clone(), interner)
+                };
+            }
+        }
+    }
+}
+
 fn malformed(name: &str, why: &str) -> Finding {
     Finding {
         class: TrapClass::ArgumentObligation,

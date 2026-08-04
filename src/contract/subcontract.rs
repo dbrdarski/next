@@ -112,6 +112,14 @@ fn provable(a: &Contract, b: &Contract) -> bool {
         Union(a1, a2) => return provable(a1, b) && provable(a2, b),
         // `A \ E ⊑ B` if `A ⊑ B` (sound, incomplete — E may remove the bad part).
         Difference(aa, _) if provable(aa, b) => return true,
+        // `(X ∪ Y) ∖ E ⊑ B` iff each member, minus the exclusion, lands in `B` —
+        // the distribution that lets a union scrutinee prove exhaustive after its
+        // members are consumed one arm at a time.
+        Difference(aa, e) if matches!(&**aa, Union(_, _)) => {
+            let Union(x, y) = &**aa else { unreachable!() };
+            return provable(&Difference(x.clone(), e.clone()), b)
+                && provable(&Difference(y.clone(), e.clone()), b);
+        }
         // `LengthRestricted(T, D) ⊑ B` if `T ⊑ B` — the restriction only narrows
         // (sound, incomplete: the length filter may remove the part outside `B`).
         LengthRestricted(t, _) if provable(t, b) => return true,
@@ -233,6 +241,13 @@ pub(crate) fn disjoint(a: &Contract, b: &Contract) -> bool {
         (Intersection(a1, a2), other) | (other, Intersection(a1, a2)) => {
             disjoint(a1, other) || disjoint(a2, other)
         }
+        // `X ∖ E` excludes everything in `E` and includes at most `X`, so it is
+        // disjoint from any `B ⊑ E` (independent of `X`) and from anything disjoint
+        // from `X` itself — the first rule lets a consumed remainder refuse its own
+        // consumer (`(Top ∖ Number) ∩ Number = ∅`).
+        (Difference(x, e), other) | (other, Difference(x, e)) => {
+            provable(other, e) || disjoint(x, other)
+        }
         _ => match (interval_exact(a), interval_exact(b)) {
             (Some(ia), Some(ib)) => intervals_disjoint(&ia, &ib),
             _ => false,
@@ -264,7 +279,9 @@ fn is_empty(c: &Contract) -> bool {
         Range(lo, hi) => lo > hi,
         Intersection(a, b) => is_empty(a) || is_empty(b) || disjoint(a, b),
         Union(a, b) => is_empty(a) && is_empty(b),
-        Difference(a, _) => is_empty(a),
+        // `X ∖ E` is empty when `X` is, and also when `X ⊑ E` — everything is
+        // excluded (the consumed-remainder collapse the region walks rely on).
+        Difference(a, e) => is_empty(a) || provable(a, e),
         _ => false,
     }
 }

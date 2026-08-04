@@ -1818,6 +1818,287 @@ mod region_instantiation_multi {
     }
 }
 
+// The RT-01…14 suite obligations (region spec §10) not already pinned at the lib
+// layer (RT-05 ladder, RT-09 cache identity) or by `region_instantiation` (RT-01,
+// both arities). Table-level rows assert the spec's (region, exact) facets; the
+// walk facets assert selection/consumption; RT-10/RT-14 assert program behavior.
+mod region_rows {
+    use super::*;
+    use next::analyzer::TypeEnv;
+    use next::analyzer::domain::AnalysisContract;
+    use next::analyzer::region::{region_table_in, region_table_multi, select, select_multi};
+    use next::contract::{Contract, Kind};
+    use next::interner::Interner;
+    use next::oracle::harness::run_source_in;
+
+    fn body_of(src: &str, i: &mut Interner) -> next::ast::Expr {
+        let f = run_source_in(src, i).unwrap().0;
+        (*f.as_closure().unwrap().lambda.body).clone()
+    }
+
+    /// RT-02 [the v0.2 selection-blocker regression guard]: a bounded-range capture
+    /// row is a may-region — `check(50)` selects it **without first-match resolution**
+    /// (the reject row is selected too, results joined), while `check(200)` falls
+    /// outside the bound and selects the reject row alone.
+    #[test]
+    fn rt02_bounded_capture_never_resolves_first_match() {
+        let mut i = Interner::new();
+        let cenv = std::collections::HashMap::new();
+        let body = body_of("cap = 0\nf = (n) => n <= cap ? 1 : 2\nf", &mut i);
+        let mut caps = TypeEnv::new();
+        caps.insert(
+            "cap".to_string(),
+            AnalysisContract::of_contract(Contract::LessEq(100.into())),
+        );
+        let rows = region_table_in(&body, "n", &caps, &cenv, &mut i);
+        assert!(!rows[0].exact, "case (b) is never exact");
+        assert_eq!(rows[0].region, Contract::LessEq(100.into()));
+        let fifty = Contract::Equals(i.integer(50));
+        assert_eq!(
+            select(&rows, &fifty, &mut i).len(),
+            2,
+            "both carried, joined"
+        );
+        let two_hundred = Contract::Equals(i.integer(200));
+        let sel = select(&rows, &two_hundred, &mut i);
+        assert_eq!(sel.len(), 1, "accept's candidate is empty at 200");
+    }
+
+    /// RT-03 (W-3 totality) and RT-11 (case (c) is *opaque*, not held): a
+    /// two-parameter guard with zero captures regionalizes to all-`Top` non-exact;
+    /// both rows stay selected over the open domain. RT-06 (W-6 negation opacity):
+    /// `!(n <= limit)` reads opaque too — never `Bottom`, both rows selected.
+    #[test]
+    fn rt03_06_11_sibling_parameters_are_opaque_never_bottom() {
+        let mut i = Interner::new();
+        for src in [
+            "f = (n, limit) => n <= limit ? 1 : 2\nf",
+            "f = (n, limit) => !(n <= limit) ? 1 : 2\nf",
+        ] {
+            let body = body_of(src, &mut i);
+            let rows = region_table_multi(&body, &["n".into(), "limit".into()], &mut i)
+                .expect("guard-only arms build the positional table");
+            assert!(
+                rows[0].regions.iter().all(|c| matches!(c, Contract::Top)),
+                "opaque guard row: {rows:?}"
+            );
+            assert!(!rows[0].exact, "opaque is never exact");
+            assert!(
+                rows.iter()
+                    .all(|r| r.regions.iter().all(|c| !matches!(c, Contract::Bottom))),
+                "negation of opaque must not degenerate: {rows:?}"
+            );
+            let num = Contract::Kind(Kind::Number);
+            let sel = select_multi(&rows, &[num.clone(), num], &mut i);
+            assert_eq!(sel.len(), 2, "totality: both selected, results joined");
+        }
+    }
+
+    /// RT-04 (W-4): a compound guard with a known and an opaque leaf narrows by the
+    /// known leaf (`GT(0)`), stays non-exact, and consumes nothing — the else arm
+    /// remains live over the whole domain.
+    #[test]
+    fn rt04_compound_guard_narrows_by_the_known_leaf() {
+        let mut i = Interner::new();
+        let cenv = std::collections::HashMap::new();
+        let body = body_of(
+            "lo = 0\nhi = 0\nf = (n) => n > lo && n < hi ? 1 : 2\nf",
+            &mut i,
+        );
+        let mut caps = TypeEnv::new();
+        caps.insert(
+            "lo".to_string(),
+            AnalysisContract::of_contract(Contract::Equals(i.integer(0))),
+        );
+        let rows = region_table_in(&body, "n", &caps, &cenv, &mut i);
+        assert_eq!(rows[0].region, Contract::Greater(0.into()), "{rows:?}");
+        assert!(!rows[0].exact, "an opaque leaf is present");
+        let num = Contract::Kind(Kind::Number);
+        assert_eq!(select(&rows, &num, &mut i).len(), 2, "else stays live");
+    }
+
+    /// RT-07: a bind pattern with a guard composes — region = pattern ∩ guard,
+    /// exact = pattern-exact && guard-exact — in both directions (exact comparison
+    /// guard stays exact; opaque guard drops exactness).
+    #[test]
+    fn rt07_row_exactness_is_pattern_and_guard() {
+        let mut i = Interner::new();
+        let cenv = std::collections::HashMap::new();
+        let caps = TypeEnv::new();
+        let body = body_of("f = (x) => x :: { k when k <= 5 => 1\n _ => 2 }\nf", &mut i);
+        let rows = region_table_in(&body, "x", &caps, &cenv, &mut i);
+        assert_eq!(rows[0].region, Contract::LessEq(5.into()));
+        assert!(rows[0].exact, "bind-exact && comparison-exact");
+        let body2 = body_of(
+            "f = (x) => x :: { k when k * k <= 5 => 1\n _ => 2 }\nf",
+            &mut i,
+        );
+        let rows2 = region_table_in(&body2, "x", &caps, &cenv, &mut i);
+        assert!(matches!(rows2[0].region, Contract::Top) && !rows2[0].exact);
+    }
+
+    /// RT-12 [pin blocker regression guard]: a non-singleton pin (`^y`, `y` a
+    /// sibling parameter) is `region Top, exact false` — it consumes nothing, the
+    /// wildcard keeps the whole domain, and the pin did **not** consume the else arm.
+    #[test]
+    fn rt12_non_singleton_pin_consumes_nothing() {
+        let mut i = Interner::new();
+        let cenv = std::collections::HashMap::new();
+        let body = body_of("f = (x, y) => x :: { ^y => 1\n _ => 2 }\nf", &mut i);
+        let rows = region_table_in(&body, "x", &TypeEnv::new(), &cenv, &mut i);
+        assert!(
+            matches!(rows[0].region, Contract::Top) && !rows[0].exact,
+            "relational, unrepresentable as unary on x: {rows:?}"
+        );
+        let num = Contract::Kind(Kind::Number);
+        let sel = select(&rows, &num, &mut i);
+        assert_eq!(sel.len(), 2, "wildcard stays selectable");
+        assert_eq!(
+            sel[1].region,
+            Contract::Kind(Kind::Number),
+            "the pin consumed nothing — `x != y` still reaches the else arm"
+        );
+    }
+
+    /// RT-13: a singleton pin (`y = 5`) is the point region, exact; it consumes its
+    /// point — `5` selects the pin alone, anything else the wildcard alone.
+    #[test]
+    fn rt13_singleton_pin_consumes_its_point() {
+        let mut i = Interner::new();
+        let cenv = std::collections::HashMap::new();
+        let body = body_of("y = 5\nf = (x) => x :: { ^y => 1\n _ => 2 }\nf", &mut i);
+        let mut caps = TypeEnv::new();
+        caps.insert(
+            "y".to_string(),
+            AnalysisContract::of_contract(Contract::Equals(i.integer(5))),
+        );
+        let rows = region_table_in(&body, "x", &caps, &cenv, &mut i);
+        assert!(rows[0].exact, "singleton pin is exact: {rows:?}");
+        let five = i.integer(5);
+        assert!(rows[0].region.contains(&five), "the point region");
+        let at5 = Contract::Equals(five);
+        assert_eq!(select(&rows, &at5, &mut i).len(), 1, "the pin consumes 5");
+        let at7 = Contract::Equals(i.integer(7));
+        let sel = select(&rows, &at7, &mut i);
+        assert_eq!(sel.len(), 1, "7 reaches the wildcard alone");
+    }
+
+    /// RT-10 [per-call vs source guard], all three outcomes kept distinct: a row
+    /// disjoint from one call's argument is silent non-selection; a row dead over
+    /// the *declared* domain is silent too (the entry contract is not the
+    /// function's domain — internal recursion lawfully arrives outside it, the
+    /// recovered grid's `Strict` factorial being the normative witness); only a
+    /// row whose region is consumed by *prior arms* — dead over the function's
+    /// whole parameter domain — is the E9 unreachable-branch error.
+    #[test]
+    fn rt10_per_call_and_declared_narrowing_stay_silent() {
+        let v = check_source("f = (x) => x :: { Number => 1\n String => 2 }\nr = f(5)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            v.accepted(),
+            "non-selection is not an error: {:#?}",
+            v.findings
+        );
+
+        let w = check_source(
+            "f where (Number) => Number\nf = (x) => x :: { Number => 1\n String => 2 }\nr = f(5)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            w.accepted(),
+            "declared-domain narrowing is not deadness: {:#?}",
+            w.findings
+        );
+    }
+
+    /// RT-10's error half: consumption-dead arms — a duplicate kind row, a
+    /// duplicate literal row, and any row after a wildcard — reject with the
+    /// unreachable-branch error at the `where` seat.
+    #[test]
+    fn rt10_consumption_dead_arms_error() {
+        for src in [
+            "f where (Number) => Number\nf = (x) => x :: { Number => 1\n Number => 2 }\nr = f(5)\n",
+            "f where (Number) => Number\nf = (x) => x :: { 5 => 1\n 5 => 2\n _ => 3 }\nr = f(5)\n",
+            "f where (Number) => Number\nf = (x) => x :: { _ => 1\n Number => 2 }\nr = f(5)\n",
+        ] {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(!v.accepted(), "consumption-dead arm must reject: {src}");
+            assert!(
+                v.findings
+                    .iter()
+                    .any(|f| f.message.contains("unreachable branch")),
+                "{src} → {:#?}",
+                v.findings
+            );
+        }
+    }
+
+    /// RT-14 [witness bridge]: an arm selected only through an over-approximate
+    /// candidate licenses no refutation — the trap behind an opaque guard's else
+    /// arm rejects through the **Unproven** voice, never `Refuted` (no represented
+    /// witness reaches it; dynamically none ever does).
+    #[test]
+    fn rt14_over_approximate_selection_mints_no_witness() {
+        let v = check_source(
+            "f where (Number) => Number\nf = (n) => n * n >= 0 ? 1 : 1 + \"s\"\nx = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(!v.accepted(), "policy blocks unproven safety at a where");
+        assert!(
+            v.body_safety_demands
+                .iter()
+                .all(|d| { !matches!(d.verdict, next::analyzer::safety::BodySafety::Refuted(_)) }),
+            "no refutation without a represented witness: {:#?}",
+            v.findings
+        );
+        assert!(
+            v.body_safety_demands
+                .iter()
+                .any(|d| { matches!(d.verdict, next::analyzer::safety::BodySafety::Unproven(_)) }),
+            "the honest third voice carries the rejection"
+        );
+    }
+
+    /// RT-14's completion half, plus the E10 produce claim at the `where`: a body
+    /// whose match provably falls through over the declared domain rejects (the
+    /// oracle traps ExpectingSeat on the same input), and one whose coverage is
+    /// merely unproven (opaque guard) rejects through the unproven voice — with
+    /// the return demand never claiming a refutation witness in either case.
+    #[test]
+    fn rt14_where_completion_rejects_without_minting_witnesses() {
+        let proven_gap = check_source(
+            "f where (Number) => Number\nf = (n) => n :: { k when k >= 5 => 1 }\nx = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !proven_gap.accepted(),
+            "f(3) traps ExpectingSeat in the oracle — accepting is a false accept"
+        );
+
+        let unproven_gap = check_source(
+            "f where (Number) => Number\nf = (n) => n :: { k when k * k >= 0 => 1 }\nx = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !unproven_gap.accepted(),
+            "coverage behind an opaque guard is not proven — the claim cannot stamp"
+        );
+        for v in [&proven_gap, &unproven_gap] {
+            assert!(
+                v.return_demands.iter().all(|d| {
+                    !matches!(d.verdict, next::analyzer::refute::ClaimVerdict::Refuted(_))
+                }),
+                "no manufactured completion witness (RT-14)"
+            );
+        }
+    }
+}
+
 // The guards' own path demands (T3.1): a guard is a body seat like any other —
 // its operations and its strict Boolean tested seat (E10) fire for every arrival.
 mod guard_demands {

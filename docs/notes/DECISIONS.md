@@ -5670,3 +5670,55 @@ stated weakening.**
 
 **Verification:** 466 lib passed / 1 ignored; 158 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-05 — The RT-01…14 rows close: two honesty defects measured and fixed at their true seats
+
+**Coverage first, then repair.** The probe swept every unpinned suite obligation (region spec
+§10). RT-02/03/04/06/07/11/12/13 behaved per spec on first measure and are now pinned
+table-and-walk-level in conformance `region_rows` (RT-05 and RT-09 were already lib-pinned;
+RT-01 lives in `region_instantiation`, both arities). Three obligations needed machinery, and
+two of those uncovered defects in the dangerous direction.
+
+**RT-10 — the §E9 unreachable-branch error, with the author's grid as tiebreaker.** The
+diagnostic landed first over the *declared* domain and immediately tripped the recovered
+grid's `Strict` factorial (`where (Strict)`, guard `n == 0`, domain ≥ 1 — the base arm is
+reached by the internal `f(n-1)`, not by entry): **the entry contract is not the function's
+domain**, so declared-domain emptiness is ordinary non-selection. The committed seat walks the
+instantiated table **from `Top`** at `analyze_where` (`source_unreachable_arms`, both
+arities): only prior arms' certain consumption kills an arm — RT §4's "property of the
+function" read literally. Both `// [ask-author]` markers sit on the helper: the
+walk-from-Top reading (grid-forced; confirm), and the reuse of `TrapClass::ExpectingSeat`
+for the finding (the §6 catalog is closed; definition-error precedent followed). Pinned: three
+consumption-dead shapes error; per-call disjointness and declared-domain narrowing stay
+silent.
+
+**RT-14 — the witness bridge held on paper, not in the walk.** `verify_by_partition` gated
+row-result evidence on the row's **own** exactness, so a trap in an exact else arm refuted at
+full strength even when its *arrival* was inflated by an earlier non-exact row —
+`n * n >= 0 ? 1 : 1 + "s"` under `where (Number)` reported **Refuted** for a trap no
+represented (indeed no possible) input reaches. `Selected`/`SelectedN` now carry **definite
+arrival** (every earlier selected row exact && own region exact — an unselected row's proven-
+empty candidate breaks nothing), computed inside both walks, point fast path included; both
+partition consumers gate on it. The voice is now Unproven — same rejection, honest evidence.
+
+**E10's produce claim was never asked at the `where` — a measured false accept.**
+`f where (Number) => Number` with body `n :: { k when k >= 5 => 1 }` **accepted** while the
+oracle traps ExpectingSeat on `f(3)`. First fix attempt put a coverage demand inside
+`safety::prove` — and the existing statement-seat pin (`selected_arm_completion_is_demanded_
+only_by_the_match_consumer`) correctly rejected it: a fall-through is a completion outcome
+owned by the consumer seat, not a body trap. The committed seat: `analyze_where` asks
+`Claim::Completes` (already in the induction inventory, never consumed there) over the
+declared domain for Pure bodies — unproven completion rejects like unproven safety/return
+(late-resolution §5), no witness minted (RT-14), Mutator/Effect bodies exempt (no coverage
+obligation). Per-call completion stays the application machinery's judgment.
+
+**Two sound prover strengthenings carried the proofs:** `disjoint` gains the Difference arm
+(`X ∖ E` ⊥ `B` if `B ⊑ E` or `X` ⊥ `B` — what lets a consumed remainder refuse its own
+consumer, and what makes the dup-kind dead arm provable); `is_empty`/`provable` gain the
+exclusion-aware Difference rules (`X ∖ E = ∅` when `X ⊑ E`; `(X ∪ Y) ∖ E ⊑ B`
+member-wise) — which is exactly what lets a union scrutinee prove exhaustive arm-by-arm, so
+the recursive-contract structural matches kept their green through the new completion demand.
+
+**Verification:** 466 lib passed / 1 ignored; 168 conformance passed / 2 ignored (+10
+`region_rows`); 10 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+Oracle ground truth pinned in-row: the exact-guard gap program traps ExpectingSeat at `f(3)`.

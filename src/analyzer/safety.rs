@@ -308,7 +308,7 @@ fn verify_by_partition(
             world_for_act(closure.lambda.act_kind),
             interner,
         );
-        out.extend_analysis(analysis, sel.exact);
+        out.extend_analysis(analysis, sel.definite);
     }
     out
 }
@@ -1181,7 +1181,7 @@ fn verify_inner(
                         world_for_act(closure.lambda.act_kind),
                         interner,
                     );
-                    out.extend_analysis(analysis, sel.exact);
+                    out.extend_analysis(analysis, sel.definite);
                 }
                 return out;
             }
