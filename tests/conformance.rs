@@ -1631,6 +1631,87 @@ mod phase_a {
 // First measured batch (suite spec Phase GR; specimen numbers from
 // `next-grounding-specification-v0-5.md` §15). Under the stamp [user, 2026-08-03]
 // unproven termination is an error, so every "unproven" specimen is a rejection row.
+// Recursive named contracts (C§9 / plan T2.4): ordinary named bindings mentioning
+// themselves or their group — no special form, source order immaterial at the static
+// layer. Admissibility violations are definition errors; membership at a runtime
+// contract-as-pattern resolves through the group walk.
+mod recursive_contracts {
+    use super::*;
+
+    /// The flagship shape: a self-recursive list contract, guarded through a Record
+    /// constructor. Runtime membership walks the group; non-members fall through.
+    #[test]
+    fn rc_runtime_membership_through_the_group() {
+        let mut i = Interner::new();
+        let v = eval_in(
+            &mut i,
+            "IntList = Union(Null, {value: Number, next: IntList})\n\
+             l = {value: 1, next: {value: 2, next: null}}\n\
+             l :: { IntList => \"yes\"\n _ => \"no\" }\n",
+        );
+        assert_eq!(str_of(&v), "yes");
+
+        let v = eval_in(
+            &mut i,
+            "IntList = Union(Null, {value: Number, next: IntList})\n\
+             l = {value: 1, next: 5}\n\
+             l :: { IntList => \"yes\"\n _ => \"no\" }\n",
+        );
+        assert_eq!(str_of(&v), "no");
+    }
+
+    /// A mutual group: `A` and `B` define each other; the second pass evaluates
+    /// them jointly and the membership walk resolves cross-references.
+    #[test]
+    fn rc_mutual_group_membership() {
+        let mut i = Interner::new();
+        let v = eval_in(
+            &mut i,
+            "A = Union(Null, B)\nB = {next: A}\n\
+             x = {next: {next: null}}\n\
+             x :: { A => \"in\"\n _ => \"out\" }\n",
+        );
+        assert_eq!(str_of(&v), "in");
+    }
+
+    /// C§9's two definition errors, verbatim: a negative occurrence has no least
+    /// fixpoint; an unguarded cycle has no well-founded inclusion induction. Both
+    /// reject at check with the definition named.
+    #[test]
+    fn rc_definition_errors_reject() {
+        let v = check_source("Bad = Difference(Top, Bad)\nx = 1\n")
+            .expect("parses and checks")
+            .0;
+        assert!(!v.accepted(), "negative polarity is a definition error");
+        assert!(
+            v.errors().any(|e| e.message.contains("negative polarity")),
+            "{:?}",
+            v.findings
+        );
+
+        let v = check_source("R = Union(Number, R)\nx = 1\n")
+            .expect("parses and checks")
+            .0;
+        assert!(!v.accepted(), "an unguarded cycle is a definition error");
+        assert!(
+            v.errors()
+                .any(|e| e.message.contains("crosses no Tuple/Record")),
+            "{:?}",
+            v.findings
+        );
+    }
+
+    /// The admissible definition checks clean: the contract binding is static, not
+    /// an executable item, and the module accepts.
+    #[test]
+    fn rc_admissible_definition_accepts() {
+        let v = check_source("IntList = Union(Null, {value: Number, next: IntList})\nx = 1\n")
+            .expect("parses and checks")
+            .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+}
+
 mod phase_gr {
     use super::*;
 

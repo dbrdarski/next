@@ -164,14 +164,14 @@ pub(crate) fn analyze_program_in(
             tenv.insert(name, AnalysisContract::of_value(value));
         }
     }
-    let (values, cenv, contract_names) = collect(module, scope, interner);
+    let (values, cenv, contract_names, collect_findings) = collect(module, scope, interner);
     let top_world = if module.name.is_some() {
         World::Pure
     } else {
         World::Effect
     };
 
-    let mut findings = Vec::new();
+    let mut findings = collect_findings;
     let mut return_demands = Vec::new();
     let mut body_safety_demands = Vec::new();
     let mut executable_demands = Vec::new();
@@ -499,10 +499,17 @@ fn collect(
     module: &Module,
     scope: &Env,
     interner: &mut Interner,
-) -> (HashMap<String, ValueRef>, ContractEnv, HashSet<String>) {
+) -> (
+    HashMap<String, ValueRef>,
+    ContractEnv,
+    HashSet<String>,
+    Vec<Finding>,
+) {
     let mut values = HashMap::new();
     let mut cenv = ContractEnv::new();
     let mut contract_names = HashSet::new();
+    let mut findings = Vec::new();
+    let mut deferred: Vec<(String, Expr)> = Vec::new();
 
     for item in &module.items {
         match item {
@@ -525,9 +532,48 @@ fn collect(
                 if let Some(c) = eval_contract(value, &cenv, interner) {
                     cenv.insert(name.clone(), c);
                     contract_names.insert(name.clone());
+                } else {
+                    // Deferred to the C§9 second pass: a recursive named contract
+                    // fails in-order evaluation only because it mentions itself or
+                    // its group.
+                    deferred.push((name.clone(), value.clone()));
                 }
             }
             _ => {}
+        }
+    }
+
+    // The C§9 second pass (T2.4): recursive named contracts are ordinary bindings
+    // mentioning themselves or their group. An inadmissible group is a **definition
+    // error** — the whole group is rejected (members define each other), the names
+    // still count as contract definitions (suppressing executable-walk noise on the
+    // same items), and nothing enters the environment.
+    match crate::contract::eval_recursive_contract_bindings(&deferred, &cenv, interner) {
+        Ok(defs) => {
+            for (name, c) in defs {
+                contract_names.insert(name.clone());
+                cenv.insert(name, c);
+            }
+        }
+        Err(err) => {
+            for (name, _) in &deferred {
+                contract_names.insert(name.clone());
+            }
+            let message = match err {
+                crate::contract::recursive::DefError::NegativeOccurrence { name } => format!(
+                    "recursive contract definition error: `{name}` occurs at negative \
+                     polarity (under a Difference exclusion) — no least fixpoint exists"
+                ),
+                crate::contract::recursive::DefError::Unguarded { name, hint } => format!(
+                    "recursive contract definition error: the reference cycle through \
+                     `{name}` crosses no Tuple/Record constructor — {hint}"
+                ),
+            };
+            findings.push(Finding {
+                class: TrapClass::OperationSafety,
+                severity: Severity::Error,
+                message,
+            });
         }
     }
 
@@ -544,7 +590,7 @@ fn collect(
             values.insert(name, canonical);
         }
     }
-    (values, cenv, contract_names)
+    (values, cenv, contract_names, findings)
 }
 
 fn define(

@@ -7,12 +7,12 @@
 //! constructor applications, prelude Kind names, structural tuple/record literals,
 //! and references to earlier named contracts — into a [`Contract`].
 //!
-//! **Scope:** non-recursive named contracts (a reference resolves to its already
-//! evaluated definition). Recursive/mutual source contracts — which would build a
-//! [`super::RecGroup`] and carry `Contract::Ref` — are the next increment; here a
-//! self/forward reference simply fails to resolve (`None`). Numeric/string
-//! arguments must be literals (`Const`); computed contract arguments are owed
-//! (C§12.2 static evaluation of arbitrary expressions).
+//! **Scope:** in-order evaluation resolves a reference to its already evaluated
+//! definition; recursive/mutual source contracts land on the **second pass**
+//! ([`eval_recursive_contract_bindings`]) — failed bindings re-evaluated jointly
+//! with their names bound to `Contract::Ref`, admissibility-checked as one group
+//! (C§9, plan T2.4). Numeric/string arguments must be literals (`Const`); computed
+//! contract arguments are owed (C§12.2 static evaluation of arbitrary expressions).
 
 use std::collections::HashMap;
 
@@ -182,4 +182,85 @@ pub fn build_contract_env<'a>(
         }
     }
     env
+}
+
+/// The C§9 second pass (plan T2.4). Bindings that failed in-order evaluation are
+/// re-evaluated **jointly**, with every failed name bound to [`Contract::Ref`] —
+/// this is the whole mechanism behind *"recursive contracts are ordinary named
+/// bindings mentioning themselves or their group"*: no special form, and source
+/// order is immaterial at the static layer. Exactly two passes, never an
+/// iteration: a binding that is not a contract under Ref-seeding stays a runtime
+/// binding.
+///
+/// Only definitions whose `Ref`s stay within the surviving set are kept (a
+/// reference to a name that never evaluates as a contract would dangle); the drop
+/// loop is bounded by the shrinking set. The result is **checked for
+/// admissibility** (C§9 §1: positivity + structural guardedness) — a definition
+/// error rejects the *whole* group, because the members define each other: the
+/// checker turns the error into a compile finding, and the oracle consumes only
+/// admissible definitions (the recursive membership walk terminates only on
+/// admissible groups).
+pub fn eval_recursive_contract_bindings(
+    failed: &[(String, Expr)],
+    env: &ContractEnv,
+    i: &mut Interner,
+) -> Result<Vec<(String, Contract)>, super::recursive::DefError> {
+    if failed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut seeded = env.clone();
+    for (name, _) in failed {
+        seeded.insert(name.clone(), Contract::Ref(name.clone()));
+    }
+    let mut defs: Vec<(String, Contract)> = failed
+        .iter()
+        .filter_map(|(n, x)| eval_contract(x, &seeded, i).map(|c| (n.clone(), c)))
+        .collect();
+    loop {
+        let names: std::collections::HashSet<String> =
+            defs.iter().map(|(n, _)| n.clone()).collect();
+        let before = defs.len();
+        defs.retain(|(_, c)| refs_within(c, &names));
+        if defs.len() == before {
+            break;
+        }
+    }
+    if defs.is_empty() {
+        return Ok(Vec::new());
+    }
+    super::recursive::admissible(&super::recursive::RecGroup::new(defs.iter().cloned()))?;
+    Ok(defs)
+}
+
+/// Whether every [`Contract::Ref`] in `c` names a member of `names`.
+fn refs_within(c: &Contract, names: &std::collections::HashSet<String>) -> bool {
+    match c {
+        Contract::Ref(name) => names.contains(name),
+        other => contract_children(other)
+            .iter()
+            .all(|child| refs_within(child, names)),
+    }
+}
+
+/// Whether `c` mentions a [`Contract::Ref`] anywhere — the test that routes a
+/// consumer through the recursive-group machinery instead of the plain walkers
+/// (which treat a bare `Ref` as denoting nothing).
+pub fn mentions_ref(c: &Contract) -> bool {
+    match c {
+        Contract::Ref(_) => true,
+        other => contract_children(other).iter().any(|ch| mentions_ref(ch)),
+    }
+}
+
+/// The immediate contract children of a compound form (leaves yield nothing).
+fn contract_children(c: &Contract) -> Vec<&Contract> {
+    match c {
+        Contract::Union(a, b)
+        | Contract::Intersection(a, b)
+        | Contract::Difference(a, b)
+        | Contract::LengthRestricted(a, b) => vec![a, b],
+        Contract::Record(fields) => fields.iter().map(|(_, v)| &**v).collect(),
+        Contract::Tuple(elems) | Contract::Concat(elems) => elems.iter().map(|e| &**e).collect(),
+        _ => Vec::new(),
+    }
 }

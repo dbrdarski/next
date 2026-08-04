@@ -245,8 +245,20 @@ impl<'a> Oracle<'a> {
                 has("path") && has("reason")
             }),
             // A user-named contract (E9: "a capitalized pattern name must resolve
-            // to a contract") — membership by the contract layer's denotation.
-            other if self.cenv.contains_key(other) => self.cenv[other].contains(value),
+            // to a contract") — membership by the contract layer's denotation. A
+            // definition mentioning a `Ref` belongs to a recursive group (C§9) and
+            // resolves through the group walk (the plain walk treats a bare `Ref`
+            // as denoting nothing); the pre-pass admits only admissible groups, on
+            // which the walk terminates.
+            other if self.cenv.contains_key(other) => {
+                let c = self.cenv[other].clone();
+                if crate::contract::mentions_ref(&c) {
+                    let group = crate::contract::RecGroup::new(self.cenv.clone());
+                    crate::contract::recursive::contains(&group, &c, value)
+                } else {
+                    c.contains(value)
+                }
+            }
             other => {
                 return Self::trap(
                     TrapClass::OperationSafety,

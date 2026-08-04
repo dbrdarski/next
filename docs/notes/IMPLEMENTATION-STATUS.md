@@ -273,6 +273,16 @@ a process abort, now a clean machine-limit verdict; conformance ~13 s → ~1 s).
 live. **Conformance ignores: 2 — the Part-D adoption gates, the author's to open.** Detail in
 `DECISIONS.md` (2026-08-04).
 
+**T2.4 recursive source contracts landed (2026-08-04): `Contract::Ref` is live.**
+`eval_recursive_contract_bindings` — the C§9 two-pass (in-order, then one joint pass with failed
+names bound to `Ref`) — feeds both front ends: the checker rejects inadmissible groups with the
+spec's two definition errors (negative polarity; unguarded cycle, with hint), the oracle
+pre-passes admissible groups before item order and answers runtime contract-as-pattern
+membership through `recursive::contains`. The μ construction-window filter excludes
+all-contract "value groups". Analyzer-side Ref-bearing contracts stay conservatively honest;
+group-aware subcontract/emptiness consumers are the next increment. Four `recursive_contracts`
+conformance rows. Detail in `DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -491,7 +501,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **457 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **143 passed, 0 failed, 2 ignored** (McCarthy + Ackermann live; only the 2 Part-D adoption gates remain) |
+| `cargo test --test conformance` | **147 passed, 0 failed, 2 ignored** (McCarthy + Ackermann + recursive contracts live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

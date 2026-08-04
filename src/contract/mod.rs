@@ -5,8 +5,10 @@
 //! concrete value is in that set. This membership is the **denotational kernel**
 //! the whole analyzer is grounded on and tested against — per Part I, every
 //! contract rule is brute-tested against the oracle's values. Membership is
-//! decidable for every constructor here; **named recursive contracts (C§9) are
-//! owed** and not yet represented.
+//! decidable for every constructor here; named recursive contracts (C§9) are
+//! represented by [`Contract::Ref`] within a [`recursive::RecGroup`] — a bare
+//! `Ref` denotes nothing, and group-aware consumers route through
+//! [`recursive`]'s walks (plan T2.4).
 //!
 //! This is analysis-layer code — legitimate now that the oracle + normalization
 //! harness are green (CLAUDE.md hard rule 1).
@@ -27,7 +29,9 @@ mod numeric;
 mod operation;
 pub mod recursive;
 mod subcontract;
-pub use expr::{ContractEnv, build_contract_env, eval_contract};
+pub use expr::{
+    ContractEnv, build_contract_env, eval_contract, eval_recursive_contract_bindings, mentions_ref,
+};
 pub use length::{Len, Stamp, intersection_empty_by_length, len, restrict_len};
 pub use operation::{OpResult, OpSafety, analyze_operation};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};

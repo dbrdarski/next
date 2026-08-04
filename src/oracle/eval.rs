@@ -143,7 +143,50 @@ impl<'a> Oracle<'a> {
     /// As [`run_module`], but in a caller-supplied environment (so the harness can
     /// pre-install host effects / prelude bindings).
     pub fn run_module_in(&mut self, module: &Module, env: &Env) -> Result<ValueRef, Trap> {
-        let groups = module_group_windows(module);
+        // The C§9 pre-pass (T2.4): recursive named contracts are ordinary static
+        // bindings whose references are late-bound within their group, so they are
+        // recognized over the whole module before item order runs — mirroring the
+        // checker's collect. Only an **admissible** group is consumed (the
+        // recursive membership walk terminates on admissible groups only); an
+        // inadmissible definition is the checker's rejection, and here the name
+        // simply stays unresolved. The in-order item handler skips a bind whose
+        // name is already a contract definition.
+        {
+            let mut pass1 = crate::contract::ContractEnv::new();
+            let mut deferred: Vec<(String, Expr)> = Vec::new();
+            for item in &module.items {
+                if let Item::Bind(b) = item
+                    && let crate::ast::BindTarget::Name(name) = &b.target
+                    && !matches!(b.value, Expr::Lambda(_))
+                {
+                    if let Some(c) = crate::contract::eval_contract(&b.value, &pass1, self.interner)
+                    {
+                        pass1.insert(name.clone(), c);
+                    } else {
+                        deferred.push((name.clone(), b.value.clone()));
+                    }
+                }
+            }
+            if let Ok(defs) =
+                crate::contract::eval_recursive_contract_bindings(&deferred, &pass1, self.interner)
+            {
+                for (name, c) in defs {
+                    self.cenv.insert(name, c);
+                }
+            }
+        }
+        // A window whose members are all pre-passed contract definitions is not a
+        // value-construction group at all — the "self-reference" it saw is the
+        // contract's own late-bound Ref, already resolved statically above.
+        let groups: Vec<mu::GroupWindow> = module_group_windows(module)
+            .into_iter()
+            .filter(|group| {
+                !group
+                    .members
+                    .iter()
+                    .all(|(_, name)| self.cenv.contains_key(name))
+            })
+            .collect();
         let mut last = None;
         for (index, item) in module.items.iter().enumerate() {
             for group in groups.iter().filter(|group| group.start == index) {
@@ -181,11 +224,18 @@ impl<'a> Oracle<'a> {
                 // the oracle's contract environment for contract-as-pattern matching.
                 if let crate::ast::BindTarget::Name(name) = &b.target
                     && !matches!(b.value, Expr::Lambda(_))
-                    && let Some(c) =
-                        crate::contract::eval_contract(&b.value, &self.cenv, self.interner)
                 {
-                    self.cenv.insert(name.clone(), c);
-                    return Ok(None);
+                    // Already defined by the recursive pre-pass — a static
+                    // definition, never a runtime evaluation.
+                    if self.cenv.contains_key(name) {
+                        return Ok(None);
+                    }
+                    if let Some(c) =
+                        crate::contract::eval_contract(&b.value, &self.cenv, self.interner)
+                    {
+                        self.cenv.insert(name.clone(), c);
+                        return Ok(None);
+                    }
                 }
                 self.eval_bind(b, env, world)?;
                 Ok(None)

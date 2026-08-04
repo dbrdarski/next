@@ -5368,3 +5368,45 @@ restriction on gated decreases is the v1-tight reading of the single-point-exclu
 
 **Verification:** 457 lib passed / 1 ignored; 143 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — T2.4: recursive source contracts land; `Contract::Ref` gets its first consumers
+
+**The C§9 mechanism, wired exactly as the spec states it** — *"recursive contracts are ordinary
+named bindings mentioning themselves or their group — late binding, no special form."*
+`contract::eval_recursive_contract_bindings` is the whole trick: bindings that fail in-order
+evaluation are re-evaluated **jointly** with every failed name bound to `Contract::Ref` (exactly
+two passes, never an iteration; a binding that is not a contract under Ref-seeding stays a
+runtime binding; definitions whose Refs would dangle drop by a shrinking-set closure). The
+result is admissibility-checked as **one group** (C§9 §1: positivity + structural guardedness) —
+a violation rejects the whole group, because the members define each other.
+
+**Both front ends consume it.** The checker's `collect` defers in-order failures and turns a
+`DefError` into a compile finding verbatim from the spec's two error classes (`Bad =
+Difference(Top, Bad)` → negative polarity, no least fixpoint; `R = Union(Number, R)` → unguarded
+cycle, with the spec's rewrite hint), while the failed names still count as contract definitions
+so the executable walk stays quiet. The oracle mirrors the same two-pass **before item order
+runs** and consumes only admissible groups (the recursive membership walk terminates on
+admissible groups only; an inadmissible name simply stays unresolved at runtime — rejection is
+the checker's job). One integration subtlety was real: the μ **construction-window** machinery
+saw `IntList = …IntList…` as a recursive *value* group and evaluated it as an open value before
+the contract branch could speak — a window whose members are all pre-passed contract definitions
+is now filtered out, because the "self-reference" it saw is the contract's own late-bound Ref,
+already resolved statically.
+
+**The first consumer is runtime contract-as-pattern membership** (E9): a user-named contract
+mentioning a `Ref` resolves through `recursive::contains` with the group built from the oracle's
+own contract environment — `l :: { IntList => … }` walks the finite value against the finite
+canonical graph. Analyzer-side, Ref-bearing contracts flow through pattern narrowing
+conservatively (a bare `Ref` denotes nothing; subcontract stays the honest third voice), which
+is sound and leaves the deeper group-aware subcontract/emptiness consumers as the next
+increment. `Contract::difference`'s new disjoint-elision and `mentions_ref` are shared support.
+
+**Measured:** self-recursive list membership accepts and non-members fall through; the mutual
+`A`/`B` pair evaluates jointly and matches; both definition-error classes reject at check with
+the definition named; the admissible definition checks clean. Four conformance rows land under
+`recursive_contracts`. **`// [ask-author]`: none — the two-pass is C§9's own "ordinary named
+bindings, late-bound" reading, and the admissibility errors are the spec's two definition
+errors verbatim.**
+
+**Verification:** 457 lib passed / 1 ignored; 147 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
