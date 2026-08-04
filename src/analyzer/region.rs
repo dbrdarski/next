@@ -282,3 +282,156 @@ fn intersect(a: Contract, b: Contract, i: &mut Interner) -> Contract {
         (a, b) => Contract::intersection(a, b, i),
     }
 }
+
+// ── §5 — the argument-tuple projection (multi-parameter rows) ─────────────────
+
+/// A multi-parameter row (§5): one region per parameter position — a constraint on a
+/// bound name becomes a contract at its position, `Top` elsewhere — plus the count of
+/// constrained positions. Consumption is positionwise, which is set-exact only when a
+/// row constrains at most one position (the complement of a product is not a product);
+/// wider rows select but never consume — uncertainty selects (E9).
+#[derive(Clone, Debug)]
+pub struct RowN {
+    pub regions: Vec<Contract>,
+    pub exact: bool,
+    pub result: Expr,
+    pub constrained: usize,
+}
+
+/// A selected multi-parameter row: the per-position **effective** regions
+/// (`remaining ∩ region`), and the row's exactness for the RT-14 discipline.
+#[derive(Clone, Debug)]
+pub struct SelectedN {
+    pub regions: Vec<Contract>,
+    pub exact: bool,
+    pub result: Expr,
+}
+
+/// The flat parameter names of a plain tuple pattern (`(a, b)` → `["a", "b"]`), or
+/// `None` for destructuring/rests — those stay on the whole-body path.
+pub fn flat_params(params: &Pat) -> Option<Vec<String>> {
+    let Pat::Tuple(elems) = params else {
+        return None;
+    };
+    elems
+        .iter()
+        .map(|e| match e {
+            PatElem::Pat(Pat::Bind(n)) => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The §5 table for a guarded (scrutinee-less) multi-parameter body — the ternary/
+/// `when` chain shape. Pattern-arm bodies stay single-parameter territory (v1).
+pub fn region_table_multi(body: &Expr, params: &[String], i: &mut Interner) -> Option<Vec<RowN>> {
+    let Expr::Match(m) = body else {
+        return None;
+    };
+    if m.scrutinee.is_some() {
+        return None;
+    }
+    let mut rows = Vec::new();
+    for item in &m.items {
+        let MatchItem::Arm(arm) = item else {
+            return None; // binds/statements make this a block — whole-body territory
+        };
+        if arm.pattern.is_some() {
+            return None;
+        }
+        let (regions, exact) = match &arm.guard {
+            Some(g) => regionalize_guard_positional(g, params, i),
+            None => (vec![Contract::Top; params.len()], true),
+        };
+        let constrained = regions
+            .iter()
+            .filter(|r| !matches!(r, Contract::Top))
+            .count();
+        rows.push(RowN {
+            regions,
+            exact,
+            result: arm.result.clone(),
+            constrained,
+        });
+    }
+    Some(rows)
+}
+
+/// A guard's positionwise regionalization: each conjunct lands at its parameter's
+/// position; positions the guard does not mention stay `Top`.
+fn regionalize_guard_positional(
+    g: &Expr,
+    params: &[String],
+    i: &mut Interner,
+) -> (Vec<Contract>, bool) {
+    // The desugared conjunction distributes positionwise.
+    if let Expr::Match(m) = g
+        && m.scrutinee.is_none()
+        && let [MatchItem::Arm(first), MatchItem::Arm(second)] = &m.items[..]
+        && first.pattern.is_none()
+        && second.pattern.is_none()
+        && second.guard.is_none()
+        && matches!(&second.result, Expr::Const(v) if v.as_boolean() == Some(false))
+        && let Some(a) = &first.guard
+    {
+        let (ra, ea) = regionalize_guard_positional(a, params, i);
+        let (rb, eb) = regionalize_guard_positional(&first.result, params, i);
+        let regions = ra
+            .into_iter()
+            .zip(rb)
+            .map(|(x, y)| intersect(x, y, i))
+            .collect();
+        return (regions, ea && eb);
+    }
+    // A single-parameter form lands at the one position that mentions it.
+    for (idx, p) in params.iter().enumerate() {
+        let (region, exact) = regionalize_guard(g, p, i);
+        if !matches!(region, Contract::Top) {
+            let mut regions = vec![Contract::Top; params.len()];
+            regions[idx] = region;
+            return (regions, exact);
+        }
+    }
+    (vec![Contract::Top; params.len()], false)
+}
+
+/// The §3 walk over per-position domains: a row is selected when **every** position's
+/// `remaining ∩ region` is not proven empty; an exact row consumes only when it
+/// constrains at most one position (subtracting there — or everything, for the
+/// unconditional remainder arm).
+pub fn select_multi(table: &[RowN], domains: &[Contract], i: &mut Interner) -> Vec<SelectedN> {
+    let mut remaining: Vec<Contract> = domains.to_vec();
+    let mut out = Vec::new();
+    for row in table {
+        if remaining
+            .iter()
+            .zip(&row.regions)
+            .any(|(rem, reg)| disjoint(rem, reg))
+        {
+            continue;
+        }
+        let effective: Vec<Contract> = remaining
+            .iter()
+            .zip(&row.regions)
+            .map(|(rem, reg)| intersect(rem.clone(), reg.clone(), i))
+            .collect();
+        out.push(SelectedN {
+            regions: effective,
+            exact: row.exact,
+            result: row.result.clone(),
+        });
+        if row.exact && row.constrained == 0 {
+            for rem in &mut remaining {
+                *rem = Contract::Bottom; // the unconditional arm takes everything left
+            }
+        } else if row.exact && row.constrained == 1 {
+            let p = row
+                .regions
+                .iter()
+                .position(|r| !matches!(r, Contract::Top))
+                .expect("one constrained position");
+            remaining[p] = Contract::difference(remaining[p].clone(), row.regions[p].clone(), i);
+        }
+    }
+    out
+}

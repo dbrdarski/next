@@ -1374,8 +1374,10 @@ mod phase_a {
         assert!(v.accepted(), "{:#?}", v.findings);
     }
 
+    /// gcd, released: the §5 multi-parameter partition carries `b ≠ 0` to the
+    /// divisor, the Rem image keeps integrality, the modulo-descent certificate
+    /// grounds the recursion, and the mod-orbit envelope closes bare concrete calls.
     #[test]
-    #[ignore = "A-NEG pin: gcd — awaits the §5 multi-parameter row projection (the `b == 0` narrowing never reaches the divisor, so the Rem image keeps its ModZero rail) plus the modulo-descent measure; the Rem integrality half landed 2026-08-04"]
     fn a_neg_gcd_accepts() {
         let v = check_source("gcd = (a, b) => b == 0 ? a : gcd(b, a % b)\nx = gcd(12, 8)\n")
             .expect("parses and checks")

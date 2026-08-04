@@ -769,13 +769,7 @@ fn ground_demand(
     {
         return;
     }
-    // `ground` judges a single input domain; a multi-parameter callee is judged by the
-    // domain-free certificates (shared-measure, lexicographic, structural, mutual).
-    let domain = match arguments {
-        [one] => one.clone(),
-        _ => Contract::Top,
-    };
-    let verdict = grounding::ground(callee, &domain, cenv, interner);
+    let verdict = grounding::ground_args(callee, arguments, cenv, interner);
     // GR-26's aggregation order: a witnessed refutation is never swallowed; an
     // all-Grounded call keeps ordinary proven completion; only the honest Unproven
     // may be excused by GR-24's world-decided certificate — and only for an Effect

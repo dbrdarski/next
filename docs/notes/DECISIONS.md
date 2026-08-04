@@ -5059,3 +5059,35 @@ domain keeps `0` and the Rem image soundly keeps its `ModZero` rail. The pin now
 
 **Verification:** 447 lib passed / 1 ignored; 136 conformance passed / 7 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Euclid compiles: §5 rows, modulo descent, and the mod-orbit envelope
+
+**Built, in one connected slice — the gcd pin's two named gates and their envelope:**
+
+**(1) §5's argument-tuple projection, first live cut.** `region_table_multi` builds
+per-position rows for flat multi-parameter guarded bodies — a constraint on a bound name becomes a
+contract at its position, `Top` elsewhere, conjunctions distributing positionwise — and
+`select_multi` runs the §3 walk over per-position domains with the *single-position consumption
+rule*: only a row constraining at most one position subtracts (the complement of a product is not a
+product; wider rows select but never consume — uncertainty selects). The safety verifier and the
+produced-contract partition take this path for ≥2 flat parameters when the table is informative —
+a zero-constraint table falls back to whole-body analysis, which sees folds the partition cannot
+(`always() = true` dead-arm pruning; the one suite flip this exposed, gated rather than silenced).
+The old 07-30 attempt's precision/termination tension never arises: no reaching fixpoint exists to
+diverge — recursion closes through facts and envelopes, as everywhere post-recovery.
+
+**(2) The modulo-descent certificate.** `ground_args` (the seat now passes full argument vectors)
+recognizes Euclid's shape: every self-call passes `param % param_p` at some position `p` and bare
+parameter references elsewhere, with a base row pinning `p` to `0` — over non-negative integer
+starts every position stays a non-negative integer, and `p` strictly decreases while recursion
+continues, so the chain is finite. **(3) The mod-orbit envelope** closes bare concrete calls at
+the discovery stop: everything the recursion visits lies in `Range(0, max_start) ∧ Mod(1, 0)` at
+every position, and the ordinary induction proves the fact over that vector.
+
+**Released:** `a_neg_gcd_accepts` — `gcd = (a, b) => b == 0 ? a : gcd(b, a % b)` with
+`x = gcd(12, 8)`, bare, compiles; the declared `(Nat, Nat)` form proves safety, return, and
+termination. Register: 137 passed / 6 pins (3 A-NEG certs · threading grids · 2 Part-D gates).
+**`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 137 conformance passed / 6 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

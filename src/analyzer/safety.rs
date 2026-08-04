@@ -604,16 +604,20 @@ fn discover(
                 // shape and is gone. The derivation **proposes** a fact domain — the
                 // ordinary vector induction must still prove the fact over it — and
                 // where no certificate applies, the honest cutoff remains.
-                if let [single] = &input[..]
-                    && let Some(envelope) = crate::analyzer::grounding::derived_orbit_domain(
+                // Propose the envelope node even when it equals the asked domain —
+                // the node itself is what closes (its recursive targets fall inside
+                // it and covering-reuse makes it a self-loop); duplicates are
+                // prevented by the covering check, never by skipping. Multi-argument
+                // targets derive the modulo-descent envelope (gcd's shape): one
+                // shared bound for every position from non-negative integer starts.
+                let derived = match &input[..] {
+                    [single] => crate::analyzer::grounding::derived_orbit_domain(
                         &target, single, cenv, interner,
                     )
-                {
-                    // Propose the envelope node even when it equals the asked domain —
-                    // the node itself is what closes (its recursive targets fall inside
-                    // it and covering-reuse makes it a self-loop); duplicates are
-                    // prevented by the covering check, never by skipping.
-                    let derived = vec![envelope];
+                    .map(|envelope| vec![envelope]),
+                    _ => crate::analyzer::grounding::mod_orbit_domain(&target, &input, interner),
+                };
+                if let Some(derived) = derived {
                     if let Some(j) = covering_node(&nodes, &target, &derived, interner) {
                         edges[i].push(j);
                         continue;
@@ -879,6 +883,38 @@ fn verify_inner(
             verify_by_partition(callee, &closure, &param, domain, cenv, interner)
         }
         _ => {
+            // §5's argument-tuple projection: a flat multi-parameter tuple with a
+            // guarded body partitions per position, so each row's guard narrowing
+            // reaches every parameter (`b == 0 ? a : gcd(b, a % b)` verifies its else
+            // row under `b ≠ 0`). Destructuring and pattern-arm bodies fall through.
+            if let Some(params) = crate::analyzer::region::flat_params(&closure.lambda.params)
+                && params.len() >= 2
+                && params.len() == args.len()
+                && let Some(table) = crate::analyzer::region::region_table_multi(
+                    &closure.lambda.body,
+                    &params,
+                    interner,
+                )
+                && table.iter().any(|row| row.constrained > 0)
+            {
+                let base = capture_env(callee);
+                let mut out = SafetyReport::default();
+                for sel in crate::analyzer::region::select_multi(&table, args, interner) {
+                    let mut env = base.clone();
+                    for (p, region) in params.iter().zip(&sel.regions) {
+                        env.insert(p.clone(), region.clone());
+                    }
+                    let analysis = analyze_in_world(
+                        &sel.result,
+                        &env,
+                        cenv,
+                        world_for_act(closure.lambda.act_kind),
+                        interner,
+                    );
+                    out.extend_analysis(analysis, sel.exact);
+                }
+                return out;
+            }
             let mut env = capture_env(callee);
             let arg_tuple = Contract::tuple(args.to_vec(), interner);
             bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
@@ -919,7 +955,45 @@ pub(crate) fn produced_by_partition(
     let closure = callee.as_closure()?;
     let (param, domain) = match (single_param(&closure.lambda.params), args) {
         (Some(param), [domain]) => (param, domain),
-        _ => return None,
+        _ => {
+            // §5: the multi-parameter partition serves the produced contract too —
+            // each row's result analyzed under its per-position effective regions.
+            let params = crate::analyzer::region::flat_params(&closure.lambda.params)?;
+            if params.len() < 2 || params.len() != args.len() {
+                return None;
+            }
+            let table = crate::analyzer::region::region_table_multi(
+                &closure.lambda.body,
+                &params,
+                interner,
+            )?;
+            if !table.iter().any(|row| row.constrained > 0) {
+                return None; // uninformative — the whole-body path sees more (folds)
+            }
+            let base = capture_env(callee);
+            let mut parts = Vec::new();
+            for sel in crate::analyzer::region::select_multi(&table, args, interner) {
+                let mut env = base.clone();
+                for (p, region) in params.iter().zip(&sel.regions) {
+                    env.insert(p.clone(), region.clone());
+                }
+                parts.push(
+                    analyze_in_world(
+                        &sel.result,
+                        &env,
+                        cenv,
+                        world_for_act(closure.lambda.act_kind),
+                        interner,
+                    )
+                    .contract,
+                );
+            }
+            return if parts.is_empty() {
+                None
+            } else {
+                Some(crate::analyzer::union_of(parts, interner))
+            };
+        }
     };
     let table = region_table(&closure.lambda.body, &param, cenv, interner);
     let base = capture_env(callee);

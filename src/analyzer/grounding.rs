@@ -2220,3 +2220,165 @@ mod review_gates {
         );
     }
 }
+
+// ── The modulo-descent certificate (gcd's shape) ─────────────────────────────
+
+/// The seat entry taking the full argument vector: the single-domain candidates run
+/// first (`ground`), and a multi-parameter recursion may then ground by
+/// **modulo descent** — strictly decreasing non-negative integers at one position.
+pub(crate) fn ground_args(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Verdict {
+    let single = match args {
+        [one] => one.clone(),
+        _ => Contract::Top,
+    };
+    let v = ground(callee, &single, cenv, interner);
+    if !matches!(v, Verdict::Unproven) {
+        return v;
+    }
+    if args.len() >= 2 && mod_descent_shape(callee, args.len(), interner).is_some() {
+        let nat = nat_contract(interner);
+        if args
+            .iter()
+            .all(|a| matches!(subcontract(a, &nat, interner), Sub::Proven))
+        {
+            return Verdict::Grounded;
+        }
+    }
+    Verdict::Unproven
+}
+
+fn nat_contract(interner: &mut Interner) -> Contract {
+    Contract::intersection(
+        Contract::GreaterEq(Rational::from(0)),
+        Contract::Mod {
+            n: BigInt::from(1),
+            r: BigInt::from(0),
+        },
+        interner,
+    )
+}
+
+/// The **modulo-descent shape** (Euclid's): a flat multi-parameter self-recursion whose
+/// every self-call passes, at some position `p`, `param % param_p` — and bare parameter
+/// references everywhere else — with a preceding base row pinning position `p` to `0`.
+/// Over non-negative integer starts: every position stays a non-negative integer (a
+/// truncated remainder of naturals lies in `[0, divisor)`), and position `p` strictly
+/// decreases while the recursion continues (`p ≥ 1` off the base row), so the chain is
+/// finite. Returns `p`.
+fn mod_descent_shape(callee: &ValueRef, arity: usize, interner: &mut Interner) -> Option<usize> {
+    let closure = callee.as_closure()?;
+    let params = crate::analyzer::region::flat_params(&closure.lambda.params)?;
+    if params.len() != arity {
+        return None;
+    }
+    let table =
+        crate::analyzer::region::region_table_multi(&closure.lambda.body, &params, interner)?;
+
+    // Gather self-call argument lists and the index of the first recursive row.
+    let mut calls: Vec<Vec<Expr>> = Vec::new();
+    let mut first_recursive = usize::MAX;
+    let mut base_zero_positions: Vec<(usize, usize)> = Vec::new(); // (row, position)
+    for (idx, row) in table.iter().enumerate() {
+        let mut gc = Vec::new();
+        collect_self_calls(&row.result, &closure, callee, &mut gc);
+        if gc.is_empty() {
+            for (pos, region) in row.regions.iter().enumerate() {
+                if matches!(point_value(region), Some(v) if v == Rational::from(0)) {
+                    base_zero_positions.push((idx, pos));
+                }
+            }
+        } else {
+            calls.extend(gc);
+            first_recursive = first_recursive.min(idx);
+        }
+    }
+    if calls.is_empty() {
+        return None;
+    }
+
+    // A candidate position: pinned to zero by a base row before any recursive row.
+    'position: for &(row, p) in &base_zero_positions {
+        if row > first_recursive {
+            continue;
+        }
+        for call in &calls {
+            if call.len() != arity {
+                continue 'position;
+            }
+            for (pos, arg) in call.iter().enumerate() {
+                let ok = if pos == p {
+                    is_param_rem(arg, &params, &params[p])
+                } else {
+                    is_any_param(arg, &params)
+                };
+                if !ok {
+                    continue 'position;
+                }
+            }
+        }
+        return Some(p);
+    }
+    None
+}
+
+/// `param % param_p` — the descending position's required argument form.
+fn is_param_rem(e: &Expr, params: &[String], divisor: &str) -> bool {
+    let Expr::PrimOp {
+        op: PrimOp::Rem,
+        args,
+    } = e
+    else {
+        return false;
+    };
+    matches!(&args[..], [x, d]
+        if is_any_param(x, params) && is_param(d, divisor))
+}
+
+fn is_any_param(e: &Expr, params: &[String]) -> bool {
+    params.iter().any(|p| is_param(e, p))
+}
+
+/// The modulo-descent **orbit envelope** for exact/bounded non-negative integer
+/// starts: bare-reference positions carry existing values and remainder positions
+/// shrink, so everything the recursion visits lies in `Range(0, max_start) ∧ Mod(1,0)`
+/// at every position.
+pub(crate) fn mod_orbit_domain(
+    callee: &ValueRef,
+    args: &[Contract],
+    interner: &mut Interner,
+) -> Option<Vec<Contract>> {
+    if args.len() < 2 {
+        return None;
+    }
+    mod_descent_shape(callee, args.len(), interner)?;
+    let nat = nat_contract(interner);
+    if !args
+        .iter()
+        .all(|a| matches!(subcontract(a, &nat, interner), Sub::Proven))
+    {
+        return None;
+    }
+    let mut hi: Option<Rational> = None;
+    for a in args {
+        let h = upper_bound(a)?;
+        hi = Some(match hi {
+            Some(cur) if cur >= h => cur,
+            _ => h,
+        });
+    }
+    let hi = hi?;
+    let envelope = Contract::intersection(
+        Contract::Range(Rational::from(0), hi),
+        Contract::Mod {
+            n: BigInt::from(1),
+            r: BigInt::from(0),
+        },
+        interner,
+    );
+    Some(vec![envelope; args.len()])
+}
