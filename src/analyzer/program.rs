@@ -165,6 +165,17 @@ pub(crate) fn analyze_program_in(
         }
     }
     let (values, cenv, contract_names, collect_findings) = collect(module, scope, interner);
+    // C§9's group-aware consumers: when the environment defines recursive named
+    // contracts, install the ambient group for this analysis's whole extent, so
+    // narrowing, dead arms, exhaustiveness, and the where demands resolve
+    // `Contract::Ref` through the group walk. Ref-free environments skip it.
+    let _rec_group = if cenv.values().any(crate::contract::mentions_ref) {
+        Some(crate::contract::rec_group_guard(
+            crate::contract::RecGroup::new(cenv.clone()),
+        ))
+    } else {
+        None
+    };
     let top_world = if module.name.is_some() {
         World::Pure
     } else {

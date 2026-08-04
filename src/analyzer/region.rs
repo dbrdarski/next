@@ -19,7 +19,7 @@
 
 use crate::analyzer::pattern_contract;
 use crate::ast::{BindingRef, Expr, Match, MatchItem, Pat, PatElem, PatField, PrimOp, Ref};
-use crate::contract::{Contract, ContractEnv, disjoint};
+use crate::contract::{Contract, ContractEnv, Verdict, disjoint, subcontract};
 use crate::interner::Interner;
 use crate::rational::Rational;
 
@@ -149,7 +149,14 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
             });
         }
         if row.exact {
-            remaining = Contract::difference(remaining, row.region.clone(), i);
+            // Collapse a fully-consumed remainder outright (the same discipline the
+            // completion coverage check uses): a Difference the walkers cannot see
+            // through would keep dead later rows selectable.
+            remaining = if matches!(subcontract(&remaining, &row.region, i), Verdict::Proven) {
+                Contract::Bottom
+            } else {
+                Contract::difference(remaining, row.region.clone(), i)
+            };
         }
     }
     out
@@ -427,7 +434,14 @@ pub(crate) fn remaining_multi(
                 .iter()
                 .position(|r| !matches!(r, Contract::Top))
                 .expect("one constrained position");
-            remaining[p] = Contract::difference(remaining[p].clone(), row.regions[p].clone(), i);
+            remaining[p] = if matches!(
+                subcontract(&remaining[p], &row.regions[p], i),
+                Verdict::Proven
+            ) {
+                Contract::Bottom
+            } else {
+                Contract::difference(remaining[p].clone(), row.regions[p].clone(), i)
+            };
         }
     }
     remaining
@@ -464,7 +478,14 @@ pub fn select_multi(table: &[RowN], domains: &[Contract], i: &mut Interner) -> V
                 .iter()
                 .position(|r| !matches!(r, Contract::Top))
                 .expect("one constrained position");
-            remaining[p] = Contract::difference(remaining[p].clone(), row.regions[p].clone(), i);
+            remaining[p] = if matches!(
+                subcontract(&remaining[p], &row.regions[p], i),
+                Verdict::Proven
+            ) {
+                Contract::Bottom
+            } else {
+                Contract::difference(remaining[p].clone(), row.regions[p].clone(), i)
+            };
         }
     }
     out

@@ -31,8 +31,54 @@ pub enum Verdict {
     Unproven,
 }
 
+thread_local! {
+    /// The **ambient recursive group** (C§9): installed for the extent of an
+    /// analysis whose contract environment defines recursive named contracts, so
+    /// every subcontract consumer — narrowing, dead arms, exhaustiveness, region
+    /// remainders, the where demands — resolves `Contract::Ref` through the group
+    /// walk instead of treating it as opaque. `None` (the common case) costs one
+    /// cell read.
+    static AMBIENT_GROUP: std::cell::RefCell<Option<std::rc::Rc<super::recursive::RecGroup>>> =
+        const { std::cell::RefCell::new(None) };
+    /// Re-entry guard: the group walk's own leaf delegations and final fallback
+    /// call back into this function and must take the plain path.
+    static ROUTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Install `group` as the ambient recursive group for the guard's lifetime
+/// (save/restore, so scopes nest).
+pub fn rec_group_guard(group: super::recursive::RecGroup) -> RecGroupGuard {
+    let previous = AMBIENT_GROUP.with(|g| g.borrow_mut().replace(std::rc::Rc::new(group)));
+    RecGroupGuard { previous }
+}
+
+pub struct RecGroupGuard {
+    previous: Option<std::rc::Rc<super::recursive::RecGroup>>,
+}
+
+impl Drop for RecGroupGuard {
+    fn drop(&mut self) {
+        AMBIENT_GROUP.with(|g| *g.borrow_mut() = self.previous.take());
+    }
+}
+
 /// Decide `A ⊑ B`.
 pub fn subcontract(a: &Contract, b: &Contract, interner: &mut Interner) -> Verdict {
+    // A pair mentioning a recursive reference resolves through the ambient group's
+    // progress-guarded induction (C§9 §5) — including the emptiness question
+    // (`A ⊑ Bottom`: empty sources prove at step 0; an inhabited source refutes
+    // with its assembled witness). The plain walk treats a bare `Ref` as opaque.
+    if !ROUTING.with(std::cell::Cell::get) {
+        let ambient = AMBIENT_GROUP.with(|g| g.borrow().clone());
+        if let Some(group) = ambient
+            && (super::mentions_ref(a) || super::mentions_ref(b))
+        {
+            ROUTING.with(|r| r.set(true));
+            let verdict = super::recursive::subcontract(&group, a, b, interner);
+            ROUTING.with(|r| r.set(false));
+            return verdict;
+        }
+    }
     if provable(a, b) {
         return Verdict::Proven;
     }

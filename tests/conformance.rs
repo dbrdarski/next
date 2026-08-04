@@ -1710,6 +1710,49 @@ mod recursive_contracts {
             .0;
         assert!(v.accepted(), "{:#?}", v.findings);
     }
+
+    /// The group-aware analyzer consumers (the ambient-group routing): a recursive
+    /// contract **pattern** consumes its whole declared domain, so the wildcard arm
+    /// is dead and the produced contract is exactly the first arm's — the declared
+    /// `Range(1, 1)` return proves. The wrong claim stays rejected.
+    #[test]
+    fn rc_contract_pattern_consumes_and_kills_later_arms() {
+        let v = check_source(
+            "IntList = Union(Null, {value: Number, next: IntList})\n\
+             f where (IntList) => Range(1, 1)\n\
+             f = (l) => l :: { IntList => 1\n _ => 2 }\n\
+             x = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+
+        let wrong = check_source(
+            "IntList = Union(Null, {value: Number, next: IntList})\n\
+             f where (IntList) => Range(2, 2)\n\
+             f = (l) => l :: { IntList => 1\n _ => 2 }\n\
+             x = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(!wrong.accepted(), "the selected arm's 1 refutes Range(2,2)");
+    }
+
+    /// Structural exhaustiveness over the recursive union, no wildcard: `Null` and
+    /// the record branch cover `IntList`, proven by the group's progress-guarded
+    /// induction routed through the ambient group.
+    #[test]
+    fn rc_structural_match_proves_exhaustive() {
+        let v = check_source(
+            "IntList = Union(Null, {value: Number, next: IntList})\n\
+             g where (IntList) => Number\n\
+             g = (l) => l :: { Null => 0\n {value: v, next: n} => 1 }\n\
+             x = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
 }
 
 mod phase_gr {

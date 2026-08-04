@@ -35,7 +35,7 @@ pub use expr::{
 pub use length::{Len, Stamp, intersection_empty_by_length, len, restrict_len};
 pub use operation::{OpResult, OpSafety, analyze_operation};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};
-pub use subcontract::{Verdict, subcontract};
+pub use subcontract::{RecGroupGuard, Verdict, rec_group_guard, subcontract};
 
 /// Whether two contracts are provably disjoint (`⟦a⟧ ∩ ⟦b⟧ = ∅`) — sound, so
 /// `true` only when provable. Used by the analyzer's access demands (E6).

@@ -292,6 +292,17 @@ operand only — clustering merges rightward-in; the −2 ZWJ seam family is the
 `LR ⊑ LR` componentwise) so lifted produced contracts still discharge plain String demands.
 Detail in `DECISIONS.md` (2026-08-04).
 
+**Group-aware consumers landed (2026-08-04): `Contract::Ref` is no longer opaque to the
+analyzer.** `subcontract` routes Ref-mentioning pairs through the ambient recursive group
+(`rec_group_guard`, RAII dynamic scope; a `ROUTING` flag guards the walk's own fallback), so
+narrowing, dead arms, exhaustiveness, region remainders, and the `where` demands all consume
+C§9's progress-guarded induction — emptiness included. The region walkers additionally collapse
+a fully-consumed remainder to `Bottom` (the completion coverage discipline, applied to
+`select`/`select_multi`/`remaining_multi`) — an across-the-board sharpening the recursive
+pattern rows exposed. Structural matches over recursive unions prove exhaustive without
+wildcards; contract patterns consume their domains and kill later arms. Detail in
+`DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -510,7 +521,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **461 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **147 passed, 0 failed, 2 ignored** (McCarthy + Ackermann + recursive contracts live; only the 2 Part-D adoption gates remain) |
+| `cargo test --test conformance` | **149 passed, 0 failed, 2 ignored** (McCarthy + Ackermann + recursive contracts live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

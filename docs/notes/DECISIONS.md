@@ -5443,3 +5443,35 @@ case.**
 
 **Verification:** 461 lib passed / 1 ignored; 147 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Group-aware consumers: `Ref` stops being opaque to the analyzer
+
+**One chokepoint, dynamic scope — the established pattern.** `subcontract` gains the **ambient
+recursive group**: `rec_group_guard` (an RAII save/restore, the hypothesis-table precedent)
+installs the environment's `RecGroup` for the extent of a program analysis, and a pair
+mentioning `Contract::Ref` routes through `recursive::subcontract`'s progress-guarded induction
+(C§9 §5) — which also answers the emptiness question, since an empty source proves at step 0
+and an inhabited one refutes `⊑ Bottom` with its assembled witness. A `ROUTING` re-entry flag
+keeps the group walk's own leaf delegations and final fallback on the plain path (without it,
+`recursive::subcontract`'s fallback into the plain `subcontract` would loop). Ref-free
+environments never install the guard and pay one cell read. Every subcontract consumer —
+narrowing, dead arms, exhaustiveness, region remainders, the `where` demands — becomes
+group-aware at once, with the fact-cache keys already carrying the named-contract environment.
+
+**The measured gap this exposed was in `select`, not the routing:** the region walkers
+subtracted an exact row's region as a raw `Difference`, which later disjointness checks cannot
+see through — so a row consuming its **whole** remaining domain (`IntList` as a pattern over a
+declared `IntList` input) left the wildcard arm selectable and polluted the produced union.
+`select`, `select_multi`, and `remaining_multi` now collapse a fully-consumed remainder to
+`Bottom` outright (`remaining ⊑ region` → `Bottom`) — the same discipline the completion
+coverage check already used, and an across-the-board sharpening, not a Ref special case.
+
+**Measured:** the dead-arm flip proves (`f where (IntList) => Range(1, 1)` with
+`l :: { IntList => 1, _ => 2 }` accepts — the wildcard is dead; the `Range(2, 2)` claim still
+rejects), and a **structural match with no wildcard** (`Null` + the record branch) proves
+exhaustive over the recursive union. Two conformance rows join `recursive_contracts` (now six).
+**`// [ask-author]`: none — the routing consumes C§9's own subcontract; the remainder collapse
+applies E9's consumption law where the walkers had left it spelled un-collapsed.**
+
+**Verification:** 461 lib passed / 1 ignored; 149 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
