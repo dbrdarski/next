@@ -1450,10 +1450,85 @@ mod phase_a {
         );
     }
 
+    /// A-WRK — the recovered worked-example grids, verified (grids 1–7; the doc's own
+    /// note gates grids 8–9 on the Part-D families candidate). Grid rows already live
+    /// elsewhere (countdown−2, broken fibonacci, collatz, the −4 trap in A-NEG/GR-18;
+    /// McCarthy 91 pinned) are not duplicated here.
     #[test]
-    #[ignore = "Phase A: RECOVER discharged — grids are in `next-phase-a-worked-examples-recovered.md` (verbatim from transcripts). Verification still needs the program-level analyzer (Part D recursion arc): factorial/countdown/where contract derivation, drift, fact-cycle pairs."]
     fn a_wrk_worked_example_grids() {
-        unreachable!("verification awaits the remaining recursion arc");
+        let accepts = |src: &str| {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(v.accepted(), "must accept: {src}\n{:#?}", v.findings);
+        };
+        let rejects = |src: &str| {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(!v.accepted(), "must reject: {src}");
+        };
+
+        // Grid 1 — factorial: the orbit hits 0 iff the start is a non-negative integer.
+        rejects("f = (n) => n == 0 ? 1 : n * f(n - 1)\nx = f(-3)\n");
+        rejects("f = (n) => n == 0 ? 1 : n * f(n - 1)\nx = f(2.5)\n");
+
+        // Grid 1 — the `where` triple: exactly-derived and stricter-than-derived
+        // accept (C§12.1 split variance; the recursion's visited domain closes through
+        // the unbounded envelope `GE(0) ∧ Mod(1,0)`); looser-than-derived rejects —
+        // it promises −5 and the body cannot ground there.
+        accepts(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\nf where (Nat) => Number\n\
+             f = (n) => n == 0 ? 1 : n * f(n - 1)\n",
+        );
+        accepts(
+            "Strict = Intersection(GreaterEq(1), Mod(1, 0))\nf where (Strict) => Number\n\
+             f = (n) => n == 0 ? 1 : n * f(n - 1)\n",
+        );
+        rejects(
+            "Loose = GreaterEq(-5)\nf where (Loose) => Number\n\
+             f = (n) => n == 0 ? 1 : n * f(n - 1)\n",
+        );
+
+        // Grid 7 — the same-bases pair: point bases {0, 0}, unit hops; both members
+        // derive `GE(0) ∧ Mod(1,0)`, exactly factorial's contract. A negative start
+        // descends below both bases forever and rejects.
+        const PAIR: &str = "isEven = (n) => n :: {\n 0 => true\n _ => isOdd(n - 1)\n}\n\
+            isOdd = (n) => n :: {\n 0 => false\n _ => isEven(n - 1)\n}\n";
+        accepts(&format!("{PAIR}x = isEven(4)\n"));
+        rejects(&format!("{PAIR}x = isEven(-1)\n"));
+    }
+
+    #[test]
+    #[ignore = "A-WRK pin: grid 1's guard-narrowing call (`k when k >= 0 && k % 1 == 0 => f(k)`) awaits compound-guard regionalization (region-table cases beyond (a)/(d) — T3.1)"]
+    fn a_wrk_guard_narrowing_accepts() {
+        let v = check_source(
+            "f = (n) => n == 0 ? 1 : n * f(n - 1)\ncheck = (x) => x :: {\n\
+              k when k >= 0 && k % 1 == 0 => f(k)\n _ => 0\n}\ny = check(7)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+
+    #[test]
+    #[ignore = "A-WRK pin: grid 7's different-bases variant (0⇒true / 1⇒true) awaits the per-exit parity grids — the threading example derives isEven: GE(0) ∧ Mod(2,0), isOdd: GE(1) ∧ Mod(2,1)"]
+    fn a_wrk_threading_variant() {
+        const PAIR: &str = "isEven = (n) => n :: {\n 0 => true\n _ => isOdd(n - 1)\n}\n\
+            isOdd = (n) => n :: {\n 1 => true\n _ => isEven(n - 1)\n}\n";
+        let even = check_source(&format!("{PAIR}x = isEven(4)\n"))
+            .expect("parses and checks")
+            .0;
+        assert!(even.accepted(), "{:#?}", even.findings);
+        let odd = check_source(&format!("{PAIR}x = isEven(3)\n"))
+            .expect("parses and checks")
+            .0;
+        assert!(
+            !odd.accepted(),
+            "isEven(3) threads between the bases forever"
+        );
+    }
+
+    #[test]
+    #[ignore = "A-WRK pin: grids 8–9 (makeLinkedList, pairUp ×3, rotate) are the Part-D families candidate's battery — expectation-only until that adoption gate opens (D§9)"]
+    fn a_wrk_family_grids() {
+        unreachable!("the families candidate is design-gated (Part D adoption)");
     }
 }
 

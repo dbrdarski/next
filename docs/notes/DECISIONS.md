@@ -4932,3 +4932,37 @@ one-certificate gate, the register's intended end-state shape. **`// [ask-author
 
 **Verification:** 447 lib passed / 1 ignored; 130 conformance passed / 9 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — A-WRK live: the recovered grids verified; two envelope extensions
+
+**Directed by the grids themselves (normative, recovered verbatim):** grid 1's `where` triple and
+grid 7's same-bases pair demanded two small extensions of the orbit derivation, both composed from
+what the certificates already read.
+
+**(1) Unbounded envelopes.** `derived_orbit_domain` no longer requires a point start: a landing
+descent from any integer-lattice start derives `GreaterEq(floor) ∧ Mod(1,0)` when no upper bound
+exists (`Range(floor, hi)` when one does) — the shared `envelope` helper. This is grid 1's own
+derived contract, and it makes the stricter-than-derived `where (GE(1) ∧ ℤ)` prove: the recursion's
+visited domain (`GE(0) ∧ ℤ`) closes as its own fact node. The discovery guard that skipped
+proposing an envelope equal to the asked domain was wrong and is gone — the node itself is what
+closes; covering-reuse prevents duplicates, never skipping. Looser-than-derived (`GE(−5)`) still
+rejects: no landing, no envelope, and the termination demand fails.
+
+**(2) Point bases for mutual groups.** `group_orbit_domain` reads pattern-const stops (`0 => true`)
+beside half-line guards — sound only in the unit-step, same-value case (consecutive descent visits
+every integer down to `b`, and whichever member holds `b` stops there), and only from a start
+provably at-or-above the base on the lattice (below it nothing lands — `isEven(−1)` diverges and
+stays rejected). `ground` gains the domain-aware **mutual grid**: the group envelope's own
+derivation is the two-component certificate over the asked start, so the same-bases pair passes the
+termination demand at the seat while the domain-free `mutual_descent` correctly keeps refusing
+point bases. Different base values remain the threading example — deferred, pinned.
+
+**A-WRK released:** grid 1 (−3 and 2.5 reject; the `where` triple exact/stricter/looser =
+accept/accept/reject) and grid 7's same-bases pair (accepts; negative start rejects) are live;
+three pins name their gates — compound-guard regionalization (T3.1), the per-exit parity grids
+(the threading variant), and the Part-D families adoption (grids 8–9). Register: 131 passed /
+11 ignored = 3 broad batteries (A-DRV · A-SND · broad A-VER) + 8 certificate/gate pins.
+**`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 131 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

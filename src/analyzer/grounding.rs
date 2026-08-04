@@ -136,6 +136,20 @@ pub fn ground(
     {
         return Verdict::Grounded;
     }
+    // The domain-aware mutual grid: the group orbit's own derivation *is* the
+    // two-component certificate over this start (all-negative constant cross-steps;
+    // a landing the descending chain must enter — half-line, or a shared point base
+    // the start provably sits above on the lattice). Grid 7's same-bases pair.
+    {
+        let group = reachable_closures(callee.clone());
+        if group
+            .iter()
+            .any(|g| g != callee && callee_targets(g).contains(callee))
+            && group_orbit_domain(&group, domain, interner).is_some()
+        {
+            return Verdict::Grounded;
+        }
+    }
     if let Some(start) = point_value(domain)
         && let Some(refutation) = drift_away(callee, &start, cenv, interner)
     {
@@ -263,10 +277,8 @@ pub(crate) fn derived_orbit_domain(
         return group_orbit_domain(&group, start, interner);
     }
 
-    let s = point_value(start)?;
-    if !s.is_integer() {
-        return None;
-    }
+    // `lands` requires the start on the integer lattice; the envelope handles point
+    // and non-point starts (a declared `GreaterEq` domain derives `GreaterEq(floor)`).
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
     let rows = region_table(&closure.lambda.body, &param, cenv, interner);
@@ -311,8 +323,6 @@ pub(crate) fn derived_orbit_domain(
             _ => return None,
         },
     };
-    // A start already at or inside the base has the trivial orbit `{start}`.
-    let floor = if floor > s { s.clone() } else { floor };
 
     // Every reachable value is `start − Σ kᵢ·|dᵢ| ≡ start (mod g)`, g = gcd of the steps.
     let mut g = BigInt::from(0);
@@ -320,15 +330,43 @@ pub(crate) fn derived_orbit_domain(
         let step = (-d.clone()).as_ratio().numer().clone();
         g = gcd_bigint(g, step);
     }
-    let r = {
+    envelope(start, floor, g, interner)
+}
+
+/// The envelope a landing orbit derives: bounded-above starts give
+/// `Range(floor, hi)`; an unbounded start (a declared `GreaterEq` domain — grid 1's
+/// `where` cases) gives `GreaterEq(floor)`. The congruence facet needs a uniform
+/// class: a point start carries its own class; otherwise only the unit lattice is
+/// uniform (v1).
+fn envelope(
+    start: &Contract,
+    floor: Rational,
+    g: BigInt,
+    interner: &mut Interner,
+) -> Option<Contract> {
+    let cong = if let Some(s) = point_value(start) {
         let n = s.as_ratio().numer().clone();
-        ((n % &g) + &g) % &g
+        Contract::Mod {
+            r: ((n % &g) + &g) % &g,
+            n: g,
+        }
+    } else if g == BigInt::from(1) {
+        Contract::Mod {
+            n: g,
+            r: BigInt::from(0),
+        }
+    } else {
+        return None;
     };
-    Some(Contract::intersection(
-        Contract::Range(floor, s),
-        Contract::Mod { n: g, r },
-        interner,
-    ))
+    let extent = match upper_bound(start) {
+        Some(hi) => {
+            // A start already at or inside the base has the trivial orbit `{start}`.
+            let floor = if floor > hi { hi.clone() } else { floor };
+            Contract::Range(floor, hi)
+        }
+        None => Contract::GreaterEq(floor),
+    };
+    Some(Contract::intersection(extent, cong, interner))
 }
 
 /// The **group orbit envelope** — the mutual form of the derivation. When every
@@ -343,12 +381,9 @@ fn group_orbit_domain(
     start: &Contract,
     interner: &mut Interner,
 ) -> Option<Contract> {
-    let hi = upper_bound(start)?;
-    if !hi.is_integer() {
-        return None;
-    }
     let mut steps: Vec<Rational> = Vec::new();
-    let mut boundaries: Vec<Rational> = Vec::new();
+    let mut half_line_boundaries: Vec<Rational> = Vec::new();
+    let mut point_bases: Vec<Rational> = Vec::new();
     for f in group {
         let closure = f.as_closure()?;
         let param = single_param(&closure.lambda.params)?;
@@ -356,18 +391,24 @@ fn group_orbit_domain(
             return None; // a forwarder-shaped member — no stop to read (v1)
         };
         let mut member_calls: Vec<Vec<Expr>> = Vec::new();
-        let mut member_stops: Vec<Rational> = Vec::new();
+        let mut member_half_lines: Vec<Rational> = Vec::new();
+        let mut member_points: Vec<Rational> = Vec::new();
         let mut first_call = usize::MAX;
         for (idx, item) in m.items.iter().enumerate() {
             let MatchItem::Arm(arm) = item else { continue };
             let mut gc = Vec::new();
             walk(&arm.result, &closure, group, &[], &[], &mut gc);
             if gc.is_empty() {
-                if let Some(g) = &arm.guard
-                    && idx < first_call
-                    && let Some(b) = stop_boundary(g, &param)
-                {
-                    member_stops.push(b);
+                if idx < first_call {
+                    if let Some(g) = &arm.guard {
+                        if let Some(b) = stop_boundary(g, &param) {
+                            member_half_lines.push(b);
+                        }
+                    } else if let Some(Pat::Const(v)) = &arm.pattern
+                        && let Some(b) = v.as_number()
+                    {
+                        member_points.push(b.clone());
+                    }
                 }
             } else {
                 member_calls.extend(gc.into_iter().map(|(args, _)| args));
@@ -384,37 +425,57 @@ fn group_orbit_domain(
             }
             steps.push(-d);
         }
-        boundaries.push(member_stops.into_iter().min()?);
+        if let Some(b) = member_half_lines.into_iter().min() {
+            half_line_boundaries.push(b);
+        } else {
+            // A recursive member with no readable stop derives nothing.
+            point_bases.push(member_points.into_iter().min()?);
+        }
     }
     if steps.is_empty() {
         return None;
     }
     let max_step = steps.iter().cloned().max()?;
-    let floor = boundaries.into_iter().min()? - max_step;
-    let floor = if floor > hi { hi.clone() } else { floor };
+    // Half-line stops pad by the largest step. Point bases across a group are exact
+    // only in the unit-step, same-value case: consecutive descent visits every
+    // integer down to `b`, and whichever member holds `b` stops there — grid 7's
+    // same-bases pair. Different base values are the threading example (per-exit
+    // parity grids) and stay out; so do mixed stop kinds (v1).
+    let floor = match (half_line_boundaries.is_empty(), point_bases.is_empty()) {
+        (false, true) => half_line_boundaries.into_iter().min()? - max_step,
+        (true, false) => {
+            let one = Rational::from(1);
+            if !steps.iter().all(|s| *s == one) {
+                return None;
+            }
+            let first = point_bases[0].clone();
+            if !point_bases.iter().all(|b| *b == first) {
+                return None;
+            }
+            // A point base is entered only from at-or-above on the integer lattice:
+            // consecutive unit descent visits every integer down to `b`. Below the
+            // base nothing lands (isEven(−1) diverges), so the start must sit inside.
+            let integers = Contract::Mod {
+                n: BigInt::from(1),
+                r: BigInt::from(0),
+            };
+            let above = matches!(
+                subcontract(start, &Contract::GreaterEq(first.clone()), interner),
+                Sub::Proven
+            );
+            let lattice = matches!(subcontract(start, &integers, interner), Sub::Proven);
+            if !above || !lattice {
+                return None;
+            }
+            first
+        }
+        _ => return None,
+    };
     let mut g = BigInt::from(0);
     for s in &steps {
         g = gcd_bigint(g, s.as_ratio().numer().clone());
     }
-    let cong = if let Some(s) = point_value(start) {
-        let n = s.as_ratio().numer().clone();
-        Contract::Mod {
-            r: ((n % &g) + &g) % &g,
-            n: g,
-        }
-    } else if g == BigInt::from(1) {
-        Contract::Mod {
-            n: g,
-            r: BigInt::from(0),
-        }
-    } else {
-        return None; // a non-point start off a coarser lattice — no envelope (v1)
-    };
-    Some(Contract::intersection(
-        Contract::Range(floor, hi),
-        cong,
-        interner,
-    ))
+    envelope(start, floor, g, interner)
 }
 
 /// The boundary of a **descending** half-line stop guard on `param` (`param <= c` /

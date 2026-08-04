@@ -606,15 +606,17 @@ fn discover(
                         &target, single, cenv, interner,
                     )
                 {
+                    // Propose the envelope node even when it equals the asked domain —
+                    // the node itself is what closes (its recursive targets fall inside
+                    // it and covering-reuse makes it a self-loop); duplicates are
+                    // prevented by the covering check, never by skipping.
                     let derived = vec![envelope];
-                    if derived != input {
-                        if let Some(j) = covering_node(&nodes, &target, &derived, interner) {
-                            edges[i].push(j);
-                            continue;
-                        }
-                        input = derived;
-                        cutoff = false;
+                    if let Some(j) = covering_node(&nodes, &target, &derived, interner) {
+                        edges[i].push(j);
+                        continue;
                     }
+                    input = derived;
+                    cutoff = false;
                 }
             }
             nodes.push(Node {
