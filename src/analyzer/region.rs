@@ -31,6 +31,9 @@ pub struct Row {
     /// `true` iff every contributing leaf is exact — only exact rows consume (§3).
     pub exact: bool,
     pub result: Expr,
+    /// A bare-binder pattern's name (`x :: { k when … => … }` — `k` aliases the
+    /// parameter in this row); consumers bind it beside the parameter.
+    pub binder: Option<String>,
 }
 
 /// A selected row's **effective** candidate region (`remaining ∩ region` at selection),
@@ -43,6 +46,8 @@ pub struct Selected {
     pub region: Contract,
     pub exact: bool,
     pub result: Expr,
+    /// The row's parameter-alias binder, if any (see [`Row::binder`]).
+    pub binder: Option<String>,
 }
 
 /// The region table of `body` over the single parameter `param`. An arm-only `Match`
@@ -56,6 +61,7 @@ pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv, i: &mut Intern
             region_rows(m, param, cenv, i)
         }
         other => vec![Row {
+            binder: None,
             region: Contract::Top,
             exact: true,
             result: other.clone(),
@@ -79,14 +85,24 @@ fn region_rows(m: &Match, param: &str, cenv: &ContractEnv, i: &mut Interner) -> 
             (Some(_), false) => (Contract::Top, false),
             (None, _) => (Contract::Top, true),
         };
+        // A bare-binder pattern over the parameter scrutinee aliases the parameter:
+        // `x :: { k when k >= 0 => … }` guards on `k`, which *is* `x` in that arm.
+        let guard_param: &str = match (&arm.pattern, patterns_on_param) {
+            (Some(Pat::Bind(alias)), true) => alias,
+            _ => param,
+        };
         let (gr, ge) = match &arm.guard {
-            Some(g) => regionalize_guard(g, param, i),
+            Some(g) => regionalize_guard(g, guard_param, i),
             None => (Contract::Top, true),
         };
         rows.push(Row {
             region: intersect(pr, gr, i),
             exact: pe && ge,
             result: arm.result.clone(),
+            binder: match (&arm.pattern, patterns_on_param) {
+                (Some(Pat::Bind(alias)), true) => Some(alias.clone()),
+                _ => None,
+            },
         });
     }
     rows
@@ -108,6 +124,7 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
         for row in table {
             if row.region.contains(v) {
                 out.push(Selected {
+                    binder: row.binder.clone(),
                     region: Contract::Equals(v.clone()),
                     exact: row.exact,
                     result: row.result.clone(),
@@ -125,6 +142,7 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
     for row in table {
         if !disjoint(&remaining, &row.region) {
             out.push(Selected {
+                binder: row.binder.clone(),
                 region: intersect(remaining.clone(), row.region.clone(), i),
                 exact: row.exact,
                 result: row.result.clone(),
@@ -144,11 +162,34 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
 /// anything else → `Top`, non-exact (total fallback).
 fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Contract, bool) {
     let opaque = (Contract::Top, false);
+    // The desugared conjunction `a && b` — `Match(∅, [Arm(guard: a, b), Arm(false)])`
+    // (E10) — regionalizes to the intersection, exact iff both conjuncts are.
+    if let Expr::Match(m) = g
+        && m.scrutinee.is_none()
+        && let [MatchItem::Arm(first), MatchItem::Arm(second)] = &m.items[..]
+        && first.pattern.is_none()
+        && second.pattern.is_none()
+        && second.guard.is_none()
+        && matches!(&second.result, Expr::Const(v) if v.as_boolean() == Some(false))
+        && let Some(a) = &first.guard
+    {
+        let (ra, ea) = regionalize_guard(a, param, i);
+        let (rb, eb) = regionalize_guard(&first.result, param, i);
+        return (intersect(ra, rb, i), ea && eb);
+    }
     let Expr::PrimOp { op, args } = g else {
         return opaque;
     };
     if args.len() != 2 {
         return opaque;
+    }
+    // The integer test `param % 1 == 0` → `Mod(1, 0)`, exactly: a truncated remainder
+    // by 1 is zero iff the operand is an integer, negatives included. Wider moduli
+    // disagree with floored `Mod` membership on negatives and stay case (d).
+    if *op == PrimOp::Eq
+        && let Some(region) = integer_test(&args[0], &args[1], param)
+    {
+        return (region, true);
     }
     let Some((v, flipped)) = param_vs_const(&args[0], &args[1], param) else {
         return opaque;
@@ -157,6 +198,21 @@ fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Contract, bool
         Some(region) => (region, true),
         None => opaque,
     }
+}
+
+/// `param % 1 == 0` (either operand order) — the sound integer-lattice test.
+fn integer_test(a: &Expr, b: &Expr, param: &str) -> Option<Contract> {
+    let is_rem_one = |e: &Expr| {
+        matches!(e, Expr::PrimOp { op: PrimOp::Rem, args }
+            if args.len() == 2
+                && is_param(&args[0], param)
+                && matches!(const_num(&args[1]), Some(n) if n == Rational::from(1)))
+    };
+    let is_zero = |e: &Expr| matches!(const_num(e), Some(v) if v == Rational::from(0));
+    ((is_rem_one(a) && is_zero(b)) || (is_rem_one(b) && is_zero(a))).then(|| Contract::Mod {
+        n: num_bigint::BigInt::from(1),
+        r: num_bigint::BigInt::from(0),
+    })
 }
 
 /// `(value, flipped)` when exactly one operand is `param` and the other a constant

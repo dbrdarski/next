@@ -4999,3 +4999,24 @@ genuinely unknown names. This is the harness doing exactly its job on day one.
 **Verification:** 447 lib passed / 1 ignored; 134 conformance passed / 9 ignored (2 broad-battery
 gates left: the Part-D families pins; plus the 7 certificate pins); 10 machinery gates passed;
 clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Compound guards regionalize: the guard-narrowing pin clears
+
+**Built (T3.1 slice):** three guard-reader extensions in the region table, each read from the
+program's own shapes. (1) The desugared conjunction — `a && b` is `Match(∅, [Arm(guard: a, b),
+Arm(false)])` per E10 — regionalizes to the intersection of its conjuncts, exact iff both are.
+(2) `k % 1 == 0` regionalizes to `Mod(1, 0)` — the sound integer test: a truncated remainder by 1
+is zero iff the operand is an integer, negatives included. **Wider moduli stay case (d), on a
+measured semantic mismatch:** the oracle's `%` truncates toward zero while `Mod` membership floors,
+so `k % 2 == 1` and `Mod(2, 1)` disagree at `k = −3` — an exact region there would over-consume the
+remainder and hide traps from later rows. (3) A bare-binder pattern over the parameter scrutinee
+(`x :: { k when … => f(k) }`) aliases the parameter: the guard regionalizes under the binder's
+name, `Row`/`Selected` carry the binder, and every partition consumer binds it beside the parameter
+— which also fixed the unbound-`k` error the first green exposed in row-result analysis.
+
+**Released:** the A-WRK guard-narrowing pin — grid 1's `k when k >= 0 && k % 1 == 0 => f(k)` call
+now accepts, with the narrowing carried into the recursion's envelope. Register: 135 passed / 8
+pins. **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 135 conformance passed / 8 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

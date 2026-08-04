@@ -260,6 +260,9 @@ fn verify_by_partition(
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
+        if let Some(alias) = &sel.binder {
+            env.insert(alias.clone(), sel.region.clone());
+        }
         let analysis = analyze_in_world(
             &sel.result,
             &env,
@@ -716,6 +719,9 @@ fn calls_of(
             for sel in select(&table, domain, interner) {
                 let mut env = base.clone();
                 env.insert(param.clone(), sel.region.clone());
+                if let Some(alias) = &sel.binder {
+                    env.insert(alias.clone(), sel.region.clone());
+                }
                 collect_calls(&sel.result, &closure, &env, cenv, interner, &mut out);
             }
         }
@@ -795,7 +801,10 @@ pub(crate) fn verify_completes(
         let base = capture_env(callee);
         for sel in select(&table, domain, interner) {
             let mut env = base.clone();
-            env.insert(param.clone(), sel.region);
+            env.insert(param.clone(), sel.region.clone());
+            if let Some(alias) = &sel.binder {
+                env.insert(alias.clone(), sel.region);
+            }
             let selected = analyze_in_world(
                 &sel.result,
                 &env,
@@ -918,6 +927,9 @@ pub(crate) fn produced_by_partition(
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
+        if let Some(alias) = &sel.binder {
+            env.insert(alias.clone(), sel.region.clone());
+        }
         parts.push(
             analyze_in_world(
                 &sel.result,

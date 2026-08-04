@@ -1566,8 +1566,10 @@ mod phase_a {
         rejects(&format!("{PAIR}x = isEven(-1)\n"));
     }
 
+    /// Grid 1's guard-narrowing call: the compound guard regionalizes — the
+    /// desugared `&&` intersects its conjuncts and `k % 1 == 0` is the sound
+    /// integer test — and the binder `k` aliases the parameter in its row.
     #[test]
-    #[ignore = "A-WRK pin: grid 1's guard-narrowing call (`k when k >= 0 && k % 1 == 0 => f(k)`) awaits compound-guard regionalization (region-table cases beyond (a)/(d) — T3.1)"]
     fn a_wrk_guard_narrowing_accepts() {
         let v = check_source(
             "f = (n) => n == 0 ? 1 : n * f(n - 1)\ncheck = (x) => x :: {\n\
