@@ -671,7 +671,16 @@ pub(crate) fn abs_rem(x: &NumAbs, y: &NumAbs) -> NumAbs {
             bound.map(Bound::Excl).unwrap_or(Bound::Unbounded),
         ),
     };
-    NumAbs::of(Interval { low: lo, high: hi })
+    // Integrality survives `%`: `a % b = a − b·trunc(a/b)`, so two integer operands
+    // yield an integer remainder. Any congruence facet denotes integers only, so
+    // both-facets-present licenses the unit lattice on the result (gcd's recursive
+    // argument staying inside `GE(0) ∧ Mod(1,0)` rides on exactly this).
+    let cong = (x.cong.is_some() && y.cong.is_some())
+        .then(|| Congruence::new(BigInt::from(1), BigInt::from(0)));
+    NumAbs {
+        iv: Interval { low: lo, high: hi },
+        cong,
+    }
 }
 
 /// The largest `|v|` over an interval, when both endpoints are finite.

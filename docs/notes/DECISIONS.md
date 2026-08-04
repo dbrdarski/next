@@ -5042,3 +5042,20 @@ threading parity grids · 2 Part-D adoption gates). **`// [ask-author]`: none.**
 
 **Verification:** 447 lib passed / 1 ignored; 136 conformance passed / 7 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Rem keeps integrality; gcd's pin re-attributed by measurement
+
+**Built:** `abs_rem` now carries the congruence facet — `a % b = a − b·trunc(a/b)`, so two integer
+operands yield an integer remainder; any congruence facet denotes integers only, so
+both-facets-present licenses the unit lattice on the image. With the interval half it already had,
+`Nat % Nat⁺` now images inside `GE(0) ∧ Mod(1, 0)`. Verified by the operation sweep as usual.
+
+**gcd's pin re-attributed (probe, not assumption):** even with the image fixed, the declared
+`gcd where (Nat, Nat)` cannot prove — the body's `b == 0` guard narrowing never reaches the
+divisor, because the region partition is **single-parameter only**: the §5 multi-parameter row
+projection is the recorded owed item (T3.1, with its resolution note), and without it the divisor's
+domain keeps `0` and the Rem image soundly keeps its `ModZero` rail. The pin now names both gates:
+§5 projection (safety) and the modulo-descent measure (termination). **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 136 conformance passed / 7 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

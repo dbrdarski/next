@@ -1375,7 +1375,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "A-NEG pin: gcd — awaits the modulo-descent measure (a % b < b for b > 0)"]
+    #[ignore = "A-NEG pin: gcd — awaits the §5 multi-parameter row projection (the `b == 0` narrowing never reaches the divisor, so the Rem image keeps its ModZero rail) plus the modulo-descent measure; the Rem integrality half landed 2026-08-04"]
     fn a_neg_gcd_accepts() {
         let v = check_source("gcd = (a, b) => b == 0 ? a : gcd(b, a % b)\nx = gcd(12, 8)\n")
             .expect("parses and checks")
