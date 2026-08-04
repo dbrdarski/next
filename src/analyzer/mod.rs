@@ -1542,6 +1542,20 @@ fn call_return(
     {
         return c;
     }
+    // The multi-parameter form, through the lex envelope (Ackermann's shape).
+    if arg_contracts.len() >= 2
+        && let Some(envelope) = grounding::lex_envelope(cv, interner)
+        && arg_contracts.len() == envelope.len()
+        && arg_contracts.iter().zip(&envelope).all(|(a, e)| {
+            matches!(
+                crate::contract::subcontract(a, e, interner),
+                crate::contract::Verdict::Proven
+            )
+        })
+        && let Some(c) = induction::infer_return_fact(cv, Some(&envelope), cenv, interner)
+    {
+        return c;
+    }
     Contract::Top
 }
 
@@ -1760,6 +1774,7 @@ fn analyze_match(
                 // and does not muddy the fall-through classification); only a genuinely
                 // *opaque* guard consumes nothing (uncertainty selects, E9).
                 let mut opaque_guard = false;
+                let mut guard_consumption: Option<(String, Contract)> = None;
                 if let Some(g) = &arm.guard {
                     let mut ga = analyze_in_world(g, &arm_env, cenv, world, interner);
                     demand(&ga, &mut findings);
@@ -1774,6 +1789,32 @@ fn analyze_match(
                     opaque_guard =
                         !matches!(subcontract(&ga.contract, &t, interner), Verdict::Proven);
                     any_guarded |= opaque_guard;
+
+                    // E-4/E9's remainder law, applied to the live environments: a guard
+                    // that regionalizes on exactly one in-scope variable narrows that
+                    // variable **inside the arm** (the guard held on this path), and an
+                    // **exact** guard region is consumed from the variable for the items
+                    // after the arm — the same reading the region table performs per row
+                    // (`regionalize_guard`), which is what keeps a *nested* tested match
+                    // narrowing (`n == 0 ? … : … n - 1 …` inside another arm).
+                    if let Some((var, region, exact)) =
+                        single_var_guard_region(g, &arm_env, interner)
+                    {
+                        if let Some(prior) = arm_env.get(&var) {
+                            let tightened = domain::intersect_a(
+                                prior,
+                                &AnalysisContract::of_contract(region.clone()),
+                                interner,
+                            );
+                            arm_env.insert(var.clone(), tightened);
+                        }
+                        // Consumption is sound only when the arm cannot decline for a
+                        // reason other than the guard: a pattern may reject a value the
+                        // guard admits, leaving it for later arms.
+                        if exact && arm.pattern.is_none() {
+                            guard_consumption = Some((var, region));
+                        }
+                    }
                 }
 
                 // The arm exits the Match with its result's whole outcome. The result
@@ -1803,6 +1844,15 @@ fn analyze_match(
                         difference(&remainder, &pc, interner)
                     };
                 }
+                // An exact guard region is consumed from its variable for later items
+                // (E9: an exact row consumes; the accumulated Difference is what the
+                // next arm's environment sees).
+                if let Some((var, region)) = guard_consumption
+                    && let Some(prior) = body_env.get(&var)
+                {
+                    let rest = difference(&prior.erase(interner), &region, interner);
+                    body_env.insert(var, AnalysisContract::of_contract(rest));
+                }
             }
         }
     }
@@ -1825,6 +1875,88 @@ fn analyze_match(
         findings,
         safety_demands,
         completion: join_completions(&completions),
+    }
+}
+
+/// A guard's region on the **one** in-scope variable it constrains — the region
+/// table's own reading (`region::regionalize_guard`) lifted to the expression layer.
+/// `None` when the guard constrains no bound variable, or more than one (a
+/// two-variable guard is relational — [permanent] — and concludes nothing here).
+pub(crate) fn single_var_guard_region(
+    g: &Expr,
+    env: &TypeEnv,
+    interner: &mut Interner,
+) -> Option<(String, Contract, bool)> {
+    let mut names = Vec::new();
+    collect_ref_names(g, &mut names);
+    names.sort();
+    names.dedup();
+    let mut hit: Option<(String, Contract, bool)> = None;
+    for name in names {
+        if env.get(&name).is_none() {
+            continue;
+        }
+        let (region, exact) = region::regionalize_guard(g, &name, interner);
+        if matches!(region, Contract::Top) {
+            continue;
+        }
+        if hit.is_some() {
+            return None; // constrains two variables — relational, no conclusion
+        }
+        hit = Some((name, region, exact));
+    }
+    hit
+}
+
+/// The reference names a guard expression mentions (best-effort walk over the guard
+/// shapes `regionalize_guard` reads; unvisited forms only cost narrowing, never
+/// soundness).
+fn collect_ref_names(e: &Expr, out: &mut Vec<String>) {
+    use crate::ast::{Arg, MatchItem, TemplatePart};
+    match e {
+        Expr::Ref(crate::ast::Ref::Immutable(crate::ast::BindingRef::Name(n))) => {
+            out.push(n.clone())
+        }
+        Expr::Ref(_) => {}
+        Expr::Const(_) | Expr::Lambda(_) => {}
+        Expr::PrimOp { args, .. } => {
+            for a in args {
+                collect_ref_names(a, out);
+            }
+        }
+        Expr::Apply { callee, args } => {
+            collect_ref_names(callee, out);
+            for a in args {
+                let (Arg::Expr(x) | Arg::Spread(x)) = a;
+                collect_ref_names(x, out);
+            }
+        }
+        Expr::Match(m) => {
+            if let Some(s) = &m.scrutinee {
+                collect_ref_names(s, out);
+            }
+            for item in &m.items {
+                match item {
+                    MatchItem::Bind(b) => collect_ref_names(&b.value, out),
+                    MatchItem::Stmt(x) => collect_ref_names(x, out),
+                    MatchItem::Arm(arm) => {
+                        if let Some(g) = &arm.guard {
+                            collect_ref_names(g, out);
+                        }
+                        collect_ref_names(&arm.result, out);
+                    }
+                }
+            }
+        }
+        Expr::Template(parts) => {
+            for p in parts {
+                if let TemplatePart::Interp(x) = p {
+                    collect_ref_names(x, out);
+                }
+            }
+        }
+        Expr::Access { target, .. } => collect_ref_names(target, out),
+        Expr::TupleCons(_) | Expr::RecordCons(_) | Expr::Write { .. } => {}
     }
 }
 

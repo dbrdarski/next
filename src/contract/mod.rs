@@ -86,6 +86,14 @@ impl Contract {
     }
 
     pub fn difference(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        // Normalization (C§4's family — empty intersections normalize to Bottom; the
+        // dual here): an exclusion **proven disjoint** from the base removes nothing,
+        // so the difference *is* the base. This keeps derived remainders in their
+        // canonical spelling — `Equals(8) ∖ [0,0]` stays `Equals(8)` — which the
+        // point/interval readers downstream (orbit envelopes, grids) can consume.
+        if disjoint(&a, &b) {
+            return a;
+        }
         Contract::Difference(i.contract(a), i.contract(b))
     }
 

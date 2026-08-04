@@ -258,6 +258,21 @@ constants) and is pinned as a rejecting twin. GR specimen 7 is live; conformance
 **3** (Ackermann + the 2 Part-D adoption gates). Detail and the honest review-provenance note
 in `DECISIONS.md` (2026-08-04).
 
+**The joint lexicographic certificate landed (2026-08-04): Ackermann accepts; no real
+certificate pin remains.** `grounding::lex_grounded` mechanizes GR-13/14: point floors from the
+`== k` guards, `GE(floor) ∧ Mod(1,0)` envelopes, gated unit decreases (the negated point test on
+the call's path), domain closure at every position with the nested call's membership through the
+proven return fact (GR-13's return half), and one fixed dictionary over GR-14's injective-sequence
+enumeration. The enabling repairs: guard-region narrowing at the expression layer AND the
+discovery walk (E-4/E9's remainder law — nested tested matches kept their narrowing);
+`verify_completes` multi-parameter partition; a semantic uninformative filter for return
+proposals (`Union(…, Top)` is as vacuous as `Top`); `Contract::difference` normalizing
+proven-disjoint exclusions (C§4's family); and `FUELED_MAX_CALL_DEPTH` 256 → 48 (measured:
+≈21 KiB interpreter stack per call level in debug overflowed 2 MiB test threads before fuel —
+a process abort, now a clean machine-limit verdict; conformance ~13 s → ~1 s). GR specimen 5 is
+live. **Conformance ignores: 2 — the Part-D adoption gates, the author's to open.** Detail in
+`DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -475,15 +490,15 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **455 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **141 passed, 0 failed, 3 ignored** (McCarthy live via the zone certificate; Ackermann + 2 Part-D gates remain) |
+| `cargo test --lib` | **457 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **143 passed, 0 failed, 2 ignored** (McCarthy + Ackermann live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
-417 / 421 / 424 / 426 / 438 / 439 / 447 / 452) are
+417 / 421 / 424 / 426 / 438 / 439 / 447 / 452 / 455) are
 **HISTORICAL**; this table is current.
 **Green ≠ complete:** the deferred finite-product extension's acceptance twin remains ignored (§4),
 and the staged work recorded elsewhere in this file remains open.

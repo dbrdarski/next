@@ -157,9 +157,13 @@ struct PendingValue {
 /// The recursion-depth bound for a fueled run. A loop-free functional program can only
 /// diverge by unbounded call depth, so this is the primary divergence guard — and it
 /// caps the interpreter's own Rust stack use, so a diverging input yields `OutOfFuel`
-/// rather than a stack overflow. Small enough for the debug stack; far above the depth
-/// any refutation sample needs.
-const FUELED_MAX_CALL_DEPTH: u32 = 256;
+/// rather than a stack overflow. Calibrated for the **2 MiB default test-thread
+/// stack in a debug build** (measured 2026-08-04: ≈21 KiB of interpreter stack per
+/// call level on the Ackermann ascending twin — 256 overflowed the thread before
+/// fuel ran out); still far above the depth any refutation sample needs, and a
+/// too-shallow sample only loses witnesses — the sampler is incomplete by license,
+/// never a proof.
+const FUELED_MAX_CALL_DEPTH: u32 = 48;
 
 impl<'a> Oracle<'a> {
     pub fn new(interner: &'a mut Interner) -> Oracle<'a> {

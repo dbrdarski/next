@@ -695,7 +695,18 @@ fn discover(
                         &target, single, cenv, interner,
                     )
                     .map(|envelope| vec![envelope]),
-                    _ => crate::analyzer::grounding::mod_orbit_domain(&target, &input, interner),
+                    _ => crate::analyzer::grounding::mod_orbit_domain(&target, &input, interner)
+                        .or_else(|| {
+                            // The lex-shaped multi-parameter envelope (Ackermann's):
+                            // per-position `GE(floor) ∧ Mod(1,0)` from the point
+                            // tests, proposed only when the asked domain sits inside
+                            // it. The induction still proves the fact over it.
+                            let env = crate::analyzer::grounding::lex_envelope(&target, interner)?;
+                            let contained = input.iter().zip(&env).all(|(a, e)| {
+                                matches!(subcontract(a, e, interner), Verdict::Proven)
+                            });
+                            contained.then_some(env)
+                        }),
                 };
                 if let Some(derived) = derived {
                     if let Some(j) = covering_node(&nodes, &target, &derived, interner) {
@@ -918,6 +929,44 @@ pub(crate) fn verify_completes(
             subcontract(&remainder, &Contract::Bottom, interner),
             Verdict::Proven
         );
+    }
+
+    // §5's multi-parameter partition, exactly as safety and the produced contract use
+    // it: each selected row's result analyzed under its per-position effective
+    // regions, and coverage by the same single-position consumption walk. Without the
+    // rows, the whole-body analysis loses each guard's narrowing and a nested
+    // recursive call's completion cannot resolve through its own fact.
+    if let Some(params) = crate::analyzer::region::flat_params(&closure.lambda.params)
+        && params.len() >= 2
+        && params.len() == args.len()
+        && let Some(table) =
+            crate::analyzer::region::region_table_multi(&closure.lambda.body, &params, interner)
+        && table.iter().any(|row| row.constrained > 0)
+    {
+        let base = capture_env(callee);
+        for sel in crate::analyzer::region::select_multi(&table, args, interner) {
+            let mut env = base.clone();
+            for (p, region) in params.iter().zip(&sel.regions) {
+                env.insert(p.clone(), region.clone());
+            }
+            let selected = analyze_in_world(
+                &sel.result,
+                &env,
+                cenv,
+                world_for_act(closure.lambda.act_kind),
+                interner,
+            );
+            if !matches!(selected.completion, crate::analyzer::Completion::Produces) {
+                return false;
+            }
+        }
+        let remaining = crate::analyzer::region::remaining_multi(&table, args, interner);
+        return remaining.iter().all(|rem| {
+            matches!(
+                subcontract(rem, &Contract::Bottom, interner),
+                Verdict::Proven
+            )
+        });
     }
 
     let mut env = capture_env(callee);
@@ -1208,10 +1257,44 @@ fn collect_calls(
                     }
                     MatchItem::Stmt(x) => collect_calls(x, closure, &body_env, cenv, interner, out),
                     MatchItem::Arm(arm) => {
+                        // The same guard-region narrowing the live Match analysis
+                        // applies (E-4/E9's remainder law): without it, discovery
+                        // computes call arguments over the un-narrowed domain and
+                        // mints uncoverable graph nodes (Ackermann's `n - 1` read
+                        // over `GE(0)` instead of `GE(1)`).
+                        let mut arm_env = body_env.clone();
+                        let mut consumed: Option<(String, Contract)> = None;
                         if let Some(g) = &arm.guard {
                             collect_calls(g, closure, &body_env, cenv, interner, out);
+                            if let Some((var, region, exact)) =
+                                crate::analyzer::single_var_guard_region(g, &arm_env, interner)
+                            {
+                                if let Some(prior) = arm_env.get(&var) {
+                                    let tightened = crate::analyzer::domain::intersect_a(
+                                        prior,
+                                        &crate::analyzer::domain::AnalysisContract::of_contract(
+                                            region.clone(),
+                                        ),
+                                        interner,
+                                    );
+                                    arm_env.insert(var.clone(), tightened);
+                                }
+                                if exact && arm.pattern.is_none() {
+                                    consumed = Some((var, region));
+                                }
+                            }
                         }
-                        collect_calls(&arm.result, closure, &body_env, cenv, interner, out);
+                        collect_calls(&arm.result, closure, &arm_env, cenv, interner, out);
+                        if let Some((var, region)) = consumed
+                            && let Some(prior) = body_env.get(&var)
+                        {
+                            let rest =
+                                Contract::difference(prior.erase(interner), region, interner);
+                            body_env.insert(
+                                var,
+                                crate::analyzer::domain::AnalysisContract::of_contract(rest),
+                            );
+                        }
                     }
                 }
             }

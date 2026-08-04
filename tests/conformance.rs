@@ -1359,8 +1359,11 @@ mod phase_a {
         assert!(v.accepted(), "{:#?}", v.findings);
     }
 
+    /// Released 2026-08-04: the joint lexicographic certificate (GR-13/14) grounds
+    /// Ackermann — point floors from the `== 0` guards, gated unit decreases, and the
+    /// nested call's membership through the return half (`GE(1) ∧ Mod(1,0)` over the
+    /// `[Nat, Nat]` envelope).
     #[test]
-    #[ignore = "A-NEG pin: Ackermann — awaits the joint lexicographic certificate over the nested call (GR-13/14; GR specimen 5)"]
     fn a_neg_ackermann_accepts() {
         let v = check_source(
             "ack = (m, n) => m == 0 ? n + 1 : (n == 0 ? ack(m - 1, 1) : ack(m - 1, ack(m, n - 1)))\n\
@@ -1730,6 +1733,35 @@ mod phase_gr {
         assert!(
             real.accepted(),
             "proven for all reals — no grid condition on a region base: {real:#?}"
+        );
+    }
+
+    /// Specimen 5 (GR-13/14): Ackermann — **proven** by the joint lexicographic
+    /// certificate: dictionary `(m, n)`, point floors from the `== 0` guards (the
+    /// negated test gates each unit decrease on the integer lattice), and the nested
+    /// `ack(m, n − 1)` argument obtaining domain membership from the induction
+    /// hypothesis's return half. Both the bare call and a declared Nat domain accept;
+    /// the ascending twin (`g(n + 1)`) stays rejected — descent is never assumed
+    /// from the hypothesis (GR-13's own counterexample).
+    #[test]
+    fn gr_specimen5_ackermann_proven() {
+        let bare = check_source(
+            "ack = (m, n) => m == 0 ? n + 1 : (n == 0 ? ack(m - 1, 1) : ack(m - 1, ack(m, n - 1)))\n\
+             x = ack(2, 2)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            bare.accepted(),
+            "the joint lex certificate grounds it: {bare:#?}"
+        );
+
+        let ascending = check_source("g = (n) => n == 0 ? 0 : g(n + 1)\nx = g(1)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            !ascending.accepted(),
+            "descent-from-hypothesis stays rejected: {ascending:#?}"
         );
     }
 

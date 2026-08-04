@@ -160,7 +160,7 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
 /// Forward-read a guard as a `(region, exact)` constraint on `param`. Case (a): a
 /// supported comparison of `param` against a constant number → exact. Case (d):
 /// anything else → `Top`, non-exact (total fallback).
-fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Contract, bool) {
+pub(crate) fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Contract, bool) {
     let opaque = (Contract::Top, false);
     // The desugared conjunction `a && b` — `Match(∅, [Arm(guard: a, b), Arm(false)])`
     // (E10) — regionalizes to the intersection, exact iff both conjuncts are.
@@ -399,6 +399,40 @@ fn regionalize_guard_positional(
 /// `remaining ∩ region` is not proven empty; an exact row consumes only when it
 /// constrains at most one position (subtracting there — or everything, for the
 /// unconditional remainder arm).
+/// The per-position domains left uncovered after the multi-parameter walk — the same
+/// remaining-update discipline as [`select_multi`] (single-position consumption only;
+/// product complements are not products). All-`Bottom` means the rows exhaust the
+/// domain product, which is what a completion claim's coverage check needs.
+pub(crate) fn remaining_multi(
+    table: &[RowN],
+    domains: &[Contract],
+    i: &mut Interner,
+) -> Vec<Contract> {
+    let mut remaining: Vec<Contract> = domains.to_vec();
+    for row in table {
+        if remaining
+            .iter()
+            .zip(&row.regions)
+            .any(|(rem, reg)| disjoint(rem, reg))
+        {
+            continue;
+        }
+        if row.exact && row.constrained == 0 {
+            for rem in &mut remaining {
+                *rem = Contract::Bottom;
+            }
+        } else if row.exact && row.constrained == 1 {
+            let p = row
+                .regions
+                .iter()
+                .position(|r| !matches!(r, Contract::Top))
+                .expect("one constrained position");
+            remaining[p] = Contract::difference(remaining[p].clone(), row.regions[p].clone(), i);
+        }
+    }
+    remaining
+}
+
 pub fn select_multi(table: &[RowN], domains: &[Contract], i: &mut Interner) -> Vec<SelectedN> {
     let mut remaining: Vec<Contract> = domains.to_vec();
     let mut out = Vec::new();

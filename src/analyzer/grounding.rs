@@ -1220,6 +1220,324 @@ fn linear_form(e: &Expr, params: &[String]) -> Option<LinComb> {
     }
 }
 
+// ── The joint lexicographic certificate over point floors (§5 GR-13/14) ───────
+//
+// Ackermann's shape (GR specimen 5): a flat multi-parameter self-recursion whose
+// positions are floored by `param == k` **point guards** (the arm order is the gate:
+// a recursive call sits below the negation of its position's point test, so on an
+// integer lattice at or above the floor the position is ≥ floor + 1 and a unit
+// decrease lands back at or above the floor), whose recursive arguments per position
+// are the same parameter with a constant drift, an admitted integer constant, or a
+// **nested self-call** whose value obtains domain membership from the induction
+// hypothesis's *return half* (GR-13: the joint `(terminates ∧ returns ⊑ R)`
+// induction — mechanically, the proven return fact over the envelope must sit inside
+// the position's envelope). One fixed dictionary — an injective sequence of argument
+// positions (GR-14's advance enumeration) — must pass every recursive call: reading
+// in order, positions strictly decrease (gated, unit steps in v1) or are carried
+// unchanged, and any reset (constant / nested-call) position is admitted only after
+// the strict decrease. Candidate-locality throughout (GR-04): any departure
+// contributes no conclusion.
+
+/// The per-position **point floors** read off the body: every `param == k` guard
+/// constant (integer k), per position. A position with no point test derives no
+/// floor and the certificate declines.
+fn point_floors(body: &Expr, params: &[String]) -> Vec<Vec<Rational>> {
+    fn scan(e: &Expr, params: &[String], out: &mut Vec<Vec<Rational>>) {
+        if let Expr::PrimOp {
+            op: PrimOp::Eq,
+            args,
+        } = e
+            && args.len() == 2
+        {
+            for (idx, p) in params.iter().enumerate() {
+                let hit = (is_param(&args[0], p), const_num(&args[1]));
+                let flipped = (is_param(&args[1], p), const_num(&args[0]));
+                if let (true, Some(k)) = hit {
+                    out[idx].push(k);
+                } else if let (true, Some(k)) = flipped {
+                    out[idx].push(k);
+                }
+            }
+        }
+        for_each_child(e, &mut |child| scan(child, params, out));
+    }
+    let mut out = vec![Vec::new(); params.len()];
+    scan(body, params, &mut out);
+    out
+}
+
+/// The **lex orbit envelope**: `GE(floor_p) ∧ Mod(1, 0)` per position, from the
+/// program's own point tests — the least `== k` constant each position is tested
+/// against. `None` when a position has no integer point test or a recursive
+/// argument departs from the admitted shapes (same-position constant drift,
+/// integer constant, nested self-call). The derivation **proposes**; safety and
+/// completion facts over it are still proven by the ordinary vector induction.
+pub(crate) fn lex_envelope(callee: &ValueRef, interner: &mut Interner) -> Option<Vec<Contract>> {
+    let closure = callee.as_closure()?;
+    let params = crate::analyzer::region::flat_params(&closure.lambda.params)?;
+    if params.len() < 2 {
+        return None;
+    }
+    let mut calls = Vec::new();
+    collect_self_calls(&closure.lambda.body, &closure, callee, &mut calls);
+    if calls.is_empty() {
+        return None;
+    }
+    let floors = point_floors(&closure.lambda.body, &params);
+    let mut envelope = Vec::new();
+    for f in &floors {
+        let b = f.iter().min()?.clone();
+        if !b.is_integer() {
+            return None;
+        }
+        envelope.push(Contract::intersection(
+            Contract::GreaterEq(b),
+            Contract::Mod {
+                n: BigInt::from(1),
+                r: BigInt::from(0),
+            },
+            interner,
+        ));
+    }
+    // Every recursive argument must be one of the admitted shapes.
+    for arglist in &calls {
+        if arglist.len() != params.len() {
+            return None;
+        }
+        for (idx, arg) in arglist.iter().enumerate() {
+            let admitted = position_drift(arg, &params[idx]).is_some()
+                || const_num(arg).is_some_and(|k| k.is_integer())
+                || matches!(arg, Expr::Apply { callee: c, .. }
+                    if resolves_to_target(c, &closure, std::slice::from_ref(callee)));
+            if !admitted {
+                return None;
+            }
+        }
+    }
+    Some(envelope)
+}
+
+/// One recursive call with the **negated point tests** in force on its path: `gates[p]`
+/// holds every constant `k` such that the path passed the `false` side of a
+/// `param_p == k` test. Later arms of a `Match` run under the negation of every
+/// earlier arm's point guard — the E9 remainder, read for this one gate shape.
+fn lex_calls_with_gates(
+    e: &Expr,
+    closure: &Closure,
+    cv: &ValueRef,
+    params: &[String],
+    gates: &[Vec<Rational>],
+    out: &mut Vec<(Vec<Expr>, Vec<Vec<Rational>>)>,
+) {
+    match e {
+        Expr::Const(_) | Expr::Ref(_) | Expr::Lambda(_) => {}
+        Expr::Apply { callee, args } => {
+            if resolves_to_target(callee, closure, std::slice::from_ref(cv)) {
+                let mut positional = Vec::new();
+                let mut clean = true;
+                for a in args {
+                    match a {
+                        Arg::Expr(x) => positional.push(x.clone()),
+                        Arg::Spread(_) => clean = false,
+                    }
+                }
+                if clean {
+                    out.push((positional, gates.to_vec()));
+                } else {
+                    out.push((Vec::new(), gates.to_vec()));
+                }
+            }
+            lex_calls_with_gates(callee, closure, cv, params, gates, out);
+            for a in args {
+                let (Arg::Expr(x) | Arg::Spread(x)) = a;
+                lex_calls_with_gates(x, closure, cv, params, gates, out);
+            }
+        }
+        Expr::Match(m) => {
+            if let Some(s) = &m.scrutinee {
+                lex_calls_with_gates(s, closure, cv, params, gates, out);
+            }
+            let mut acc = gates.to_vec();
+            for item in &m.items {
+                match item {
+                    MatchItem::Bind(Bind { value, .. }) => {
+                        lex_calls_with_gates(value, closure, cv, params, &acc, out)
+                    }
+                    MatchItem::Stmt(x) => lex_calls_with_gates(x, closure, cv, params, &acc, out),
+                    MatchItem::Arm(arm) => {
+                        if let Some(g) = &arm.guard {
+                            lex_calls_with_gates(g, closure, cv, params, &acc, out);
+                        }
+                        lex_calls_with_gates(&arm.result, closure, cv, params, &acc, out);
+                        // After this arm, its point guard is negated for later items.
+                        if let Some(Expr::PrimOp {
+                            op: PrimOp::Eq,
+                            args,
+                        }) = arm.guard.as_ref()
+                            && args.len() == 2
+                        {
+                            for (idx, p) in params.iter().enumerate() {
+                                if is_param(&args[0], p)
+                                    && let Some(k) = const_num(&args[1])
+                                {
+                                    acc[idx].push(k);
+                                } else if is_param(&args[1], p)
+                                    && let Some(k) = const_num(&args[0])
+                                {
+                                    acc[idx].push(k);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        other => {
+            for_each_child(other, &mut |child| {
+                lex_calls_with_gates(child, closure, cv, params, gates, out)
+            });
+        }
+    }
+}
+
+/// The joint lexicographic certificate (GR-13/14) over `args`. Proves `Grounded`
+/// when: the lex envelope derives and contains `args`; the **return half** — the
+/// proven return fact over the envelope — sits inside every position that receives
+/// a nested self-call or that the envelope must re-admit; and one fixed dictionary
+/// passes every recursive call: strict unit decreases gated by the position's
+/// negated point test, earlier positions carried unchanged, resets (constants and
+/// nested calls, both proven inside the position's envelope) only after the strict
+/// decrease.
+pub(crate) fn lex_grounded(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    let Some(closure) = callee.as_closure() else {
+        return false;
+    };
+    let Some(params) = crate::analyzer::region::flat_params(&closure.lambda.params) else {
+        return false;
+    };
+    if params.len() != args.len() {
+        return false;
+    }
+    // Self-recursion only in v1 — a genuine mutual group needs GR-07's full cycle
+    // inventory for the fixed-candidate rule.
+    let group = reachable_closures(callee.clone());
+    if group
+        .iter()
+        .any(|g| g != callee && callee_targets(g).contains(callee))
+    {
+        return false;
+    }
+    let Some(envelope) = lex_envelope(callee, interner) else {
+        return false;
+    };
+    for (a, e) in args.iter().zip(&envelope) {
+        if !matches!(subcontract(a, e, interner), Sub::Proven) {
+            return false;
+        }
+    }
+    let floors: Vec<Rational> = point_floors(&closure.lambda.body, &params)
+        .iter()
+        .map(|f| f.iter().min().cloned().expect("envelope derived"))
+        .collect();
+
+    let mut calls = Vec::new();
+    lex_calls_with_gates(
+        &closure.lambda.body,
+        &closure,
+        callee,
+        &params,
+        &vec![Vec::new(); params.len()],
+        &mut calls,
+    );
+    if calls.is_empty() || calls.iter().any(|(a, _)| a.len() != params.len()) {
+        return false;
+    }
+
+    // GR-13's return half, once per certificate: the nested call's value must sit
+    // inside the envelope of the position that receives it.
+    let needs_return = calls.iter().any(|(a, _)| {
+        a.iter().any(|arg| {
+            matches!(arg, Expr::Apply { callee: c, .. }
+            if resolves_to_target(c, &closure, std::slice::from_ref(callee)))
+        })
+    });
+    let returned = if needs_return {
+        match crate::analyzer::induction::infer_return_fact(callee, Some(&envelope), cenv, interner)
+        {
+            Some(r) => Some(r),
+            None => return false,
+        }
+    } else {
+        None
+    };
+
+    let zero = Rational::from(0);
+    let one = Rational::from(1);
+
+    // **Domain closure at every position** (GR-14), dictionary-independent: every
+    // argument of every recursive call must stay inside its position's envelope.
+    // A decreasing drift needs its gate (unit step below the negated point floor:
+    // `p != floor` on the integer lattice at or above the floor means
+    // `p ≥ floor + 1`, so `p − 1` lands at or above it); carries and increases stay
+    // inside a `GE` envelope freely; constants and nested-call values must be proven
+    // inside the envelope (the nested value through GR-13's return half).
+    let closed = calls.iter().all(|(cargs, gates)| {
+        cargs.iter().enumerate().all(|(i, arg)| {
+            if let Some(d) = position_drift(arg, &params[i]) {
+                d >= zero || (d == -one.clone() && gates[i].contains(&floors[i]))
+            } else {
+                match arg {
+                    Expr::Apply { callee: c, .. }
+                        if resolves_to_target(c, &closure, std::slice::from_ref(callee)) =>
+                    {
+                        returned.as_ref().is_some_and(|r| {
+                            matches!(subcontract(r, &envelope[i], interner), Sub::Proven)
+                        })
+                    }
+                    _ => const_num(arg).is_some_and(|k| {
+                        matches!(
+                            subcontract(
+                                &Contract::Equals(interner.number(k)),
+                                &envelope[i],
+                                interner
+                            ),
+                            Sub::Proven
+                        )
+                    }),
+                }
+            }
+        })
+    });
+    if !closed {
+        return false;
+    }
+
+    // **The descent scan** — one fixed dictionary must pass every call: reading in
+    // order, carried positions (drift 0) pass through, and the first *changed*
+    // position must be a strict (already gate-validated) decrease. An increase or a
+    // reset (constant / nested call) before the decrease fails the dictionary; a
+    // call with no dictionary decrease at all is a potential same-state loop and
+    // fails too.
+    let positions: Vec<usize> = (0..params.len()).collect();
+    injective_seqs(&positions).into_iter().any(|dict| {
+        calls.iter().all(|(cargs, _)| {
+            for &i in &dict {
+                match position_drift(&cargs[i], &params[i]) {
+                    Some(d) if d.is_zero() => continue,
+                    Some(d) if d < zero => return true,
+                    _ => return false, // increase or reset before the decrease
+                }
+            }
+            false // every dictionary position carried — no decrease
+        })
+    })
+}
+
 // ── Lexicographic descent (§5 GR-13/14) ───────────────────────────────────────
 
 /// Lexicographic descent (§5 GR-13/14, single-function / one-cycle case). Some ordered
@@ -2112,6 +2430,55 @@ mod tests {
     }
 
     #[test]
+    fn ackermann_grounds_by_the_joint_lex_certificate() {
+        // GR-13/14 (specimen 5): dictionary (m, n); point floors from the `== 0`
+        // guards; each unit decrease gated by its negated point test; the nested
+        // `ack(m, n − 1)` value obtains membership from the return half over the
+        // `[Nat, Nat]` envelope.
+        let mut i = Interner::new();
+        let ack = f(
+            "ack = (m, n) => m == 0 ? n + 1 : (n == 0 ? ack(m - 1, 1) : ack(m - 1, ack(m, n - 1)))\nack",
+            &mut i,
+        );
+        let nat2 = vec![nonneg_ints(&mut i), nonneg_ints(&mut i)];
+        assert_eq!(
+            ground_args(&ack, &nat2, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
+        let two = Contract::Equals(i.integer(2));
+        assert_eq!(
+            ground_args(&ack, &[two.clone(), two], &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
+    }
+
+    #[test]
+    fn the_lex_certificate_declines_ascent_and_missing_floors() {
+        // The ascending-inner twin genuinely diverges (`f(1, 1)` climbs n forever):
+        // the descent scan finds no dictionary whose first change is a decrease.
+        let mut i = Interner::new();
+        let up = f(
+            "f = (m, n) => m == 0 ? n : (n == 0 ? f(m - 1, 1) : f(m - 1, f(m, n + 1)))\nf",
+            &mut i,
+        );
+        let nat2 = vec![nonneg_ints(&mut i), nonneg_ints(&mut i)];
+        assert_eq!(
+            ground_args(&up, &nat2, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
+
+        // A decrease with no point test anywhere on its position derives no floor —
+        // the envelope declines and the candidate contributes nothing (honest, even
+        // though this variant happens to terminate on Nat through `n`).
+        let unfloored = f("f = (m, n) => n == 0 ? 0 : f(m - 1, n - 1)\nf", &mut i);
+        let nat2 = vec![nonneg_ints(&mut i), nonneg_ints(&mut i)];
+        assert_eq!(
+            ground_args(&unfloored, &nat2, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
+    }
+
+    #[test]
     fn mccarthy_grounds_over_all_reals_by_the_zone_certificate() {
         // Grid §6's closed form (GR specimen 7): ascending half-line stop above,
         // climbs +11, exit shift −10, one-level feed-back; laps net +1. The region
@@ -2585,6 +2952,10 @@ pub(crate) fn ground_args(
         {
             return Verdict::Grounded;
         }
+    }
+    // The joint lexicographic certificate over point floors (GR-13/14; Ackermann).
+    if args.len() >= 2 && lex_grounded(callee, args, cenv, interner) {
+        return Verdict::Grounded;
     }
     Verdict::Unproven
 }

@@ -39,6 +39,7 @@ thread_local! {
     /// vector pass. A `Vec` (linear lookup) — components are small.
     static HYPOTHESES: RefCell<Vec<Hypothesis>> = const { RefCell::new(Vec::new()) };
 
+
     /// Set while an [`infer_return_fact`] run is in progress — the **re-entrancy
     /// guard**. A driver pass analyzes bodies, whose calls reach `analyze_apply` again;
     /// this flag stops that inner `analyze_apply` from launching a *nested* inference
@@ -454,8 +455,16 @@ fn infer_inner(
             })?;
             let claim = produced.generalize(interner);
             // Top proves trivially (no information); Bottom claims no value (a baseless
-            // recursion) — neither is an informative fact.
-            if matches!(claim, Contract::Top | Contract::Bottom) {
+            // recursion) — neither is an informative fact. The Top test is semantic:
+            // a union containing Top (`Union(Number, Top)`) admits every value just as
+            // literal Top does, proves just as vacuously, and would otherwise be
+            // returned as a junk "fact" that pre-empts the envelope retry.
+            if matches!(claim, Contract::Bottom)
+                || matches!(
+                    subcontract(&Contract::Top, &claim, interner),
+                    Verdict::Proven
+                )
+            {
                 return None;
             }
             Some(Candidate {

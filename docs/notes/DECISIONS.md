@@ -5305,3 +5305,66 @@ from any spec sentence, and pinned as a rejecting twin.**
 
 **Verification:** 455 lib passed / 1 ignored; 141 conformance passed / 3 ignored; 10
 machinery gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The joint lexicographic certificate: Ackermann accepts; the certificate-pin era closes
+
+**GR-13/14 landed as `grounding::lex_grounded`** (with `lex_envelope`, `point_floors`, and the
+gate-tracking call walk). The certificate is read entirely off the written program: **point
+floors** from each position's `param == k` guard constants (the minimum per position);
+per-position envelopes `GE(floor) ∧ Mod(1, 0)`; **gates** — a recursive call sits below the
+negation of its position's point test (the E9 remainder read for the one gate shape), so on the
+integer lattice at or above the floor the position is ≥ floor + 1 and a **unit** decrease lands
+back at or above it; **domain closure at every position** (GR-14) — carried and ascending drifts
+stay inside a `GE` envelope, constants prove membership, and a **nested self-call obtains
+membership from GR-13's return half**: the proven return fact over the envelope
+(`infer_return_fact` — for Ackermann, `GE(1) ∧ Mod(1,0)` over `[Nat, Nat]`); and **one fixed
+dictionary** (GR-14's injective-sequence enumeration) passing every call — carried positions pass
+through, the first changed position must be the gated strict decrease, resets only after it.
+Self-recursion only in v1 (a genuine mutual group needs GR-07's full cycle inventory and
+declines). `ground_args` consumes it; the discovery cutoff and `call_return` gained the
+matching multi-parameter envelope routes.
+
+**The root defect the battery exposed was not in grounding at all** (the gcd lesson again —
+probe the contract layer first): the live `analyze_match` and the discovery walk
+(`collect_calls`) applied **no guard-region narrowing**, so a *nested* tested match lost E-4/E9's
+remainder law — `n - 1` in Ackermann's inner else-arm read over un-narrowed `GE(0)` as
+`GE(−1)`, minting uncoverable graph nodes. Both now read a guard's single-variable region
+through the region table's own `regionalize_guard` (narrowing inside the arm; an **exact**
+region consumed for later items only when the arm's pattern cannot decline — pattern `None`).
+Three adjacent repairs the same trace forced: `verify_completes` gained the §5 multi-parameter
+partition (with `region::remaining_multi` for coverage — single-position consumption only,
+product complements are not products); the return-proposal's uninformative filter is now
+**semantic** (a `Union(…, Top)` admits everything and proves as vacuously as literal `Top`; it
+was being returned as a junk fact that pre-empted the envelope retry); and
+`Contract::difference` normalizes a **proven-disjoint exclusion** away (C§4's normalization
+family — `Equals(8) ∖ [0,0]` stays `Equals(8)`), which the gcd row's orbit reader needed after
+the new narrowing changed its remainder spelling — caught by the battery as a same-session
+regression and fixed at the constructor.
+
+**A robustness defect measured and fixed:** `FUELED_MAX_CALL_DEPTH` was 256, calibrated for an
+8 MiB debug stack; the refutation sampler running the divergent ascending twin consumed ≈21 KiB
+of interpreter stack per call level (measured from the crash report) and overflowed the 2 MiB
+default test-thread stack **before fuel ran out** — a process abort, not a verdict. The cap is
+now 48: still far above any witness the suites realize, and a too-shallow sample only loses
+witnesses (the sampler is incomplete by license, never a proof). Conformance wall-time dropped
+~13 s → ~1 s as a side effect.
+
+**Measured:** bare `ack(2, 2)` **accepts** (return `GE(1)∧ℤ` over `[Nat, Nat]`; safety and
+completion prove through the envelope; grounding by the lex certificate); the declared
+`(Nat, Nat)` form accepts; the **ascending twin** (`f(m − 1, f(m, n + 1))` — genuinely
+divergent) rejects with the descent scan finding no dictionary; the **unfloored twin**
+(`f(m − 1, n − 1)`, no `m ==` test) declines the envelope honestly. GR specimen 5 goes live.
+**Conformance ignores: 2 — both Part-D adoption gates, the author's to open. No real
+certificate pin remains.**
+
+**Review provenance:** performed inline (the workflow surface stayed limit-bound): the twins
+measured above, the full suites, and the hand argument that the certificate's conditions close
+the lex induction — any infinite chain must either decrease a floored integer position
+infinitely or eventually hold every dictionary-earlier position constant, and closure keeps
+every argument inside the envelope (the nested value through the *true* partial-correctness
+return fact). Formal §16 discharge stays owed with GR-13's joint-settlement theorem.
+**`// [ask-author]`: none — the certificate mechanizes GR-13/14's stated design; the unit-step
+restriction on gated decreases is the v1-tight reading of the single-point-exclusion gate.**
+
+**Verification:** 457 lib passed / 1 ignored; 143 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
