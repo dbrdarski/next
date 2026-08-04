@@ -4843,3 +4843,32 @@ coverage. **`// [ask-author]`: none.**
 **Verification:** 447 lib passed / 1 ignored; 123 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-04 — The module linking core: four rows released
+
+**Built — `src/link.rs`, static whole-program resolution over one store (E12/T3.4):** a project is
+named modules plus exactly one headerless entry. Per-file front ends share one interner; duplicate
+module names are one project error naming both files (MOD-05); the header-required-iff-exports rule
+landed at the desugarer, where the single-file pipeline also enforces it (P-27b). Imports validate
+against export tables (unknown module / not-exported names are link errors). Named imports install
+the exported **binding itself** into the consumer's scope — for `@state` that is the slot, so
+cross-module reads are live through the one shared store (MOD-03). Whole-module imports and the
+`m = Counter` alias form resolve statically: `m.count` rewrites at link time to a hidden
+`"Counter.count"` binding (the dot keeps it out of the user namespace), with local shadowing honored
+through lambdas, patterns, and match items; a module name in any other value seat is the clear
+ruled error. Modules set up in topological import order (cycles: clear error, v1) under one oracle;
+the entry runs last in effect world (MOD-04's aliased and direct reads are pointer-equal after the
+imported mutator fires).
+
+**Chosen (mine, scoping):** runtime linking only — `--check` still treats `Item::Import` as
+metadata, so project-level *analysis* (imported bindings visible to the program checker, MOD-01
+across files) is the follow-up slice; the conformance rows are runtime rows and the checker's
+single-module behavior is unchanged. Aliases do not re-export; exported names come from `Name`
+targets only; dotted module names parse and join with `.`.
+
+**Released:** P-27b, MOD-03, MOD-04, MOD-05 — the conformance ignore register drops 11 → 7
+(6 broad Phase A · M-04). **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 127 conformance passed / 7 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.

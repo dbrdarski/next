@@ -41,7 +41,7 @@ fn failure(interner: &mut Interner, path: &str, reason: &str) -> ValueRef {
 }
 
 /// Install the host-effect doubles into `env`, sharing `io` for observation.
-fn install_host_effects(interner: &mut Interner, env: &Env, io: &Rc<RefCell<HostIo>>) {
+pub(crate) fn install_host_effects(interner: &mut Interner, env: &Env, io: &Rc<RefCell<HostIo>>) {
     // println(msg): record `msg` (stringified minimally), return null.
     let io_println = io.clone();
     let println = NativeFn {

@@ -183,6 +183,14 @@ its first consumer is the stamped law itself: the program checker adjudicates a 
 The compendium's Principle 9 text still carries the pre-stamp wording — the normative stamp record
 is an author-owned edit; `DECISIONS.md` (2026-08-03) is the provenance record until it lands.
 
+**The module linking core landed (2026-08-04):** `src/link.rs` — static whole-program
+resolution over one shared store; named imports install the exported binding itself (slots stay the
+same location — live cross-module reads), whole-module imports and `m = Counter` aliases rewrite
+statically to hidden namespace bindings, duplicate module names and headerless exports are project
+errors (the latter enforced at the desugarer for the single-file path too). Runtime linking only:
+`--check` still treats imports as metadata — project-level analysis is the follow-up. Conformance
+ignores drop to 7 (6 broad Phase A · M-04).
+
 **The group orbit landed (2026-08-04):** bare mutual pairs close with no contracts —
 `grounding::group_orbit_domain` derives one shared envelope from the group's cross-call drifts and
 half-line stops (reusing the shared-measure certificate's own reading); the joint induction proves
@@ -437,7 +445,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **447 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **123 passed, 0 failed, 11 ignored** (Failure-overlap subset + Phase GR incl. GR-24) |
+| `cargo test --test conformance` | **127 passed, 0 failed, 7 ignored** (Phase GR live; module linking released P-27b + MOD-03/04/05) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

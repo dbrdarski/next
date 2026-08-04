@@ -12,6 +12,7 @@ pub mod env;
 pub mod intern;
 pub mod interner;
 pub mod lex;
+pub mod link;
 pub mod normalize;
 pub mod oracle;
 pub mod parse;

@@ -76,10 +76,21 @@ impl<'a> Desugarer<'a> {
         for stmt in &p.statements {
             items.extend(self.top_item(stmt)?);
         }
-        Ok(Module {
-            name: p.header.as_ref().map(|parts| parts.join(".")),
-            items,
-        })
+        let name = p.header.as_ref().map(|parts| parts.join("."));
+        // E12: the header is required iff the file exports anything — an entry file
+        // that exports is unimportable *and* mis-headed, one honest error (P-27b).
+        if name.is_none() {
+            let exports = items.iter().any(|item| match item {
+                Item::Bind(b) => b.exported,
+                Item::SlotDecl(s) => s.exported,
+                Item::ActBind(a) => a.exported,
+                Item::Stmt(_) | Item::Import(_) | Item::Where(_) => false,
+            });
+            if exports {
+                return err("a file that exports anything needs a `module` header (E12)");
+            }
+        }
+        Ok(Module { name, items })
     }
 
     fn top_item(&mut self, stmt: &SStmt) -> Result<Vec<Item>, DesugarError> {

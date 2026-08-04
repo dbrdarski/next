@@ -445,8 +445,8 @@ mod phase1 {
     }
 
     #[test]
-    #[ignore = "module-system semantics staged: the headerless-export project error is not yet enforced (MOD rows)"]
     fn p27b_headerless_export_rejected() {
+        // E12: the header is required iff the file exports anything (desugar-level).
         assert!(rejected_any_stage("export x = 1"));
     }
 
@@ -1017,22 +1017,64 @@ mod phase3 {
         assert_eq!(io.output, vec!["hi".to_string()]);
     }
 
+    const COUNTER: &str = "module Counter\n\
+        export @state count = 0\n\
+        export @mutate increment = () => {\n\
+         count := count + 1\n\
+        }\n";
+
     #[test]
-    #[ignore = "module-system semantics staged: cross-module store imports"]
     fn mod03_store_module_live_read() {
-        unreachable!("module linking pending");
+        // Import the binding itself: the slot is the same location, so the read
+        // after the imported mutator fires sees the new value — live.
+        let (v, _) = next::link::run_project(&[
+            COUNTER,
+            "import { count, increment } from Counter\n\
+             increment()\n\
+             count\n",
+        ])
+        .expect("the project links and runs");
+        num_eq(&v, 1);
     }
 
     #[test]
-    #[ignore = "module-system semantics staged: module aliasing"]
     fn mod04_module_alias_is_live() {
-        unreachable!("module linking pending");
+        // `m = Counter` aliases the namespace; `m.count` and `Counter.count` are the
+        // same live binding after mutation.
+        let (v, _) = next::link::run_project(&[
+            COUNTER,
+            "import Counter\n\
+             import { increment } from Counter\n\
+             m = Counter\n\
+             increment()\n\
+             [m.count, Counter.count]\n",
+        ])
+        .expect("the project links and runs");
+        let t = v.as_tuple().expect("a pair");
+        assert!(t[0].ptr_eq(&t[1]), "one binding, one value");
+        num_eq(&t[0], 1);
     }
 
     #[test]
-    #[ignore = "module-system semantics staged: project-wide duplicate-module error"]
     fn mod05_duplicate_module_names_error() {
-        unreachable!("module linking pending");
+        // Two files declaring `module X` — one project-wide error naming both.
+        let err = next::link::run_project(&[
+            "module X\nexport a = 1\n",
+            "module X\nexport b = 2\n",
+            "0\n",
+        ])
+        .expect_err("duplicate module names are a project error");
+        match err {
+            next::link::ProjectError::Link(next::link::LinkError::DuplicateModule {
+                name,
+                first,
+                second,
+            }) => {
+                assert_eq!(name, "X");
+                assert_eq!((first, second), (0, 1));
+            }
+            other => panic!("expected the duplicate-module error, got {other:?}"),
+        }
     }
 }
 
