@@ -5167,3 +5167,82 @@ over the zone. Both are design-shaped (hypothesis stacking discipline; completio
 
 **Verification:** 447 lib passed / 1 ignored; 139 conformance passed / 4 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Hypothesis stacking + nested-seat completion; McCarthy proves everything but termination
+
+**Provenance correction first, because the record must not drift from the tree.** The previous
+entry recorded three produced-path sharpenings as landed; the commit (`a9e5ced`) carried only the
+third (the partition-aware proposal in `induction.rs`). Sharpenings 1 and 2 — the safety-context
+guarded branch and the failed-safety early return consulting `call_return` in `mod.rs` — existed
+in that session's working tree but were never committed, and the entry's measured results
+("the return claim over Number proves"; "the zone derives exactly") did **not** hold on the
+committed tree: re-measured this session, the zone came back Top-polluted
+(`Union((90,101], Top)`) and the return claim Unproven. Both sharpenings are now re-landed as
+recorded, with this note as the audit trail. Lesson applied to process: after committing, re-run
+the measurement the entry claims, from the committed tree.
+
+**Residue (a) — hypothesis stacking discipline.** `with_hypotheses` now **stacks** (extends the
+ambient table, restored by truncation) rather than replacing it — C§13.2a's own words,
+*"hypotheses assumed jointly"*: a settlement nested inside another pass (a completion settlement
+inside a safety verification; a return inference inside either) keeps the ambient facts visible,
+exactly as if the two components were one joint vector. Lookup is innermost-wins
+(`hypothesis_for` iterates newest-first), so a proposal's `Bottom` pin shadows an outer pass's
+claim for the same instance and base-generalization keeps dropping recursive tails.
+
+**The stacking discipline's soundness half is a new publication guard.** The fact cache's DEPTH
+guard cannot see hypotheses installed without a `begin` (vector passes install them bare), so a
+settlement entered at depth 0 from inside a pass could have consulted ambient assumptions — under
+stacking, publishing it would persist a conclusion leaning on an unverified hypothesis (sharpest
+case: a proposal's `Bottom` pin). `prove_claim` therefore samples
+`induction::any_hypotheses_active()` at `begin` time and `factcache::finish` discards a tainted
+settlement exactly like a nested one: usable at the asking seat, never recorded. Locked red/green
+by `a_settlement_under_ambient_hypotheses_is_not_published`.
+
+**Residue (b) — completion at nested seats.** The two guarded application branches (active
+safety context; failed safety) now answer their **completion** voice from the assumed completion
+facts (`completes_assumed`) and settled coverage (`safety::completes_settled`, a read-only
+exact-hit-or-coverage consultation — deliberately never a settlement past the graph cutoff), and
+their **produced** voice from `call_return` for recursive callees. The safety voice at those
+branches is unchanged — still the honest Unproven demand; §1.6's separate judgment classes is the
+whole license: an unproven safety seat does not falsify a proven completion fact.
+
+**Measured result (all re-verified from the committed tree this time):**
+`infer_return_fact(m, [LessEq(111)])` = exactly `(90, 101]`; over `[Number]` = `Greater(90)`;
+`BodySafe(m, [Number])` **Proven**; `Completes(m, [Number])` **proven**; the
+`where (Number) => Number` return claim **Proven**. The program `m where (Number) => Number;
+x = m(1)` now rejects on exactly one voice: the two Principle-9 termination demands (`[Number]`
+and `[Equals(1)]`, both honestly Unproven). The pin's remaining gap is the landing-zone grounding
+certificate over the nested call (GR specimen 7 expects proven) — next slice. Ackermann is
+expected to share the produced/completion mechanics and still need its joint-lex certificate.
+
+**New pins:** `nested_hypothesis_scopes_stack_rather_than_replace`,
+`the_innermost_return_hypothesis_shadows_the_outer`,
+`a_settlement_under_ambient_hypotheses_is_not_published` (safety.rs);
+`mccarthy_91_proves_safety_and_return_and_rejects_only_on_termination` (program.rs). The
+conformance pin `a_neg_mccarthy_91_accepts` stays ignored, message re-tagged to the one
+remaining voice. **`// [ask-author]`: none — (a) applies C§13.2a's stated joint discipline, (b)
+applies §1.6's stated judgment separation, and the re-landed sharpenings apply the previous
+entry's recorded design.**
+
+**Verification:** 451 lib passed / 1 ignored; 139 conformance passed / 4 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+**Adversarial review addendum (same session, pre-commit):** a three-lens review (soundness,
+termination/re-entrancy, behavioral regression) with per-finding adversarial verification
+returned **zero confirmed defects**. Two findings were raised and both refuted with measurement.
+The substantive one deserves its record: at a seat like `f = (n) => n == 0 ? 0 : f(n - 1) + "s";
+x = f(3)` the body verdict changes Refuted → Unproven under this diff — verified to be a
+**correction, not a regression**: the old Refuted was manufactured (refutation sampling drew `0`
+from the coarse `Top` produced of the recursive call — a value `f(2)` cannot produce), and the
+counterexample `g = (n) => n == 0 ? "a" : g(n / 2) + "s"; x = g(3)` showed the old path refuting
+a body that provably never traps (the divergent chain never returns a value into the `+`). The
+diff's Unproven is the law ("imprecision yields Unproven, never a manufactured verdict";
+"refutations need represented witnesses"); the genuinely-derivable `Add` refutation survives at
+the `where`-declared fact, and both programs still reject. Pinned:
+`a_divergent_recursion_is_not_falsely_refuted_from_a_sampled_top` (program.rs). The second
+finding (a stack overflow on 4-deep nested self-application) was refuted as the documented
+truth-source semantics: that program semantically diverges, the unfueled oracle diverging on it
+is by design, and the compile-time path rejects it normally.
+
+**Verification (final, incl. the new pin):** 452 lib passed / 1 ignored; 139 conformance passed /
+4 ignored; 10 machinery gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

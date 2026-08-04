@@ -1348,7 +1348,7 @@ mod phase_a {
     }
 
     #[test]
-    #[ignore = "A-NEG pin: McCarthy 91 — the return claim over Number now PROVES and the zone (90,101] derives (2026-08-04); safety's residue is named: hypothesis replacement (with_hypotheses swaps, so nested settlements lose ambient facts) and the inner call's completion demand at the outer expecting seat; then the landing-zone termination (GR specimen 7)"]
+    #[ignore = "A-NEG pin: McCarthy 91 — safety, return (the (90,101] zone), and completion all PROVE (2026-08-04: hypothesis stacking + nested-seat completion landed); the one remaining voice is termination — the landing-zone grounding certificate over the nested call (GR specimen 7 expects proven)"]
     fn a_neg_mccarthy_91_accepts() {
         let v = check_source("m = (n) => n > 100 ? n - 10 : m(m(n + 11))\nx = m(1)\n")
             .expect("parses and checks")

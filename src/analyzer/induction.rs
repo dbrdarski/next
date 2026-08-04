@@ -84,7 +84,10 @@ pub(crate) struct Hypothesis {
 /// applies: **the same instance** (`hyp.callee == callee`) **and** the call's argument
 /// domain **contained in** the fact's input domain (`args ⊑ hyp.input`). Consulted by
 /// the analyzer's application rule for recursive/mutual calls — the aliasing guard the
-/// v0.8.1 domain-indexed-fact rule requires.
+/// v0.8.1 domain-indexed-fact rule requires. The table stacks (dynamic scope), so the
+/// **innermost** applicable hypothesis wins: a proposal's `Bottom` pin installed inside
+/// an outer pass must shadow the outer pass's claim for the same instance, or
+/// base-generalization stops dropping recursive tails.
 pub(crate) fn hypothesis_for(
     callee: &ValueRef,
     args: &[Contract],
@@ -92,9 +95,11 @@ pub(crate) fn hypothesis_for(
 ) -> Option<Contract> {
     // Collect the same-instance hypotheses first (dropping the borrow before the
     // subcontract check, which may itself want the interner but never HYPOTHESES).
+    // Reversed: most recently installed first.
     let same_instance: Vec<Hypothesis> = HYPOTHESES.with(|h| {
         h.borrow()
             .iter()
+            .rev()
             .filter(|hyp| hyp.callee == *callee && matches!(hyp.claim, Claim::Return(_)))
             .cloned()
             .collect()
@@ -158,14 +163,36 @@ fn args_within(args: &[Contract], domain: &[Contract], interner: &mut Interner) 
     matches!(subcontract(&call, &dom, interner), Verdict::Proven)
 }
 
-/// Run `body` with `hyps` installed as the active hypotheses, restoring the previous
-/// table afterward (so nested/stacked passes compose). `pub(crate)` so the analyzer
-/// suite can lock the lookup law directly.
+/// Run `body` with `hyps` **stacked onto** the active hypotheses, restoring the
+/// previous table afterward. Stacking, not replacement, is C§13.2a's discipline —
+/// *"hypotheses assumed jointly"*: a settlement nested inside another pass (a return
+/// inference inside a safety verification, a completion settlement inside a return
+/// pass) keeps the ambient facts visible, exactly as if the two components were one
+/// joint vector. Replacement made nested settlements lose the ambient facts and
+/// generate unproven noise — McCarthy's measured residue (a), 2026-08-04.
+///
+/// The soundness counterpart lives in `safety::prove_claim`: a settlement entered
+/// while **any** ambient hypotheses are active is hypothesis-relative and must never
+/// publish to the fact cache. `pub(crate)` so the analyzer suite can lock the lookup
+/// law directly.
 pub(crate) fn with_hypotheses<R>(hyps: Vec<Hypothesis>, body: impl FnOnce() -> R) -> R {
-    let saved = HYPOTHESES.with(|h| std::mem::replace(&mut *h.borrow_mut(), hyps));
+    let mark = HYPOTHESES.with(|h| {
+        let mut table = h.borrow_mut();
+        let mark = table.len();
+        table.extend(hyps);
+        mark
+    });
     let out = body();
-    HYPOTHESES.with(|h| *h.borrow_mut() = saved);
+    HYPOTHESES.with(|h| h.borrow_mut().truncate(mark));
     out
+}
+
+/// Whether **any** hypotheses are active — the taint test for fact publication. A
+/// settlement that begins under ambient hypotheses (of any claim kind) may have
+/// consulted them, so its verdict is hypothesis-relative: usable at the asking seat
+/// inside the enclosing pass, never recordable as an unconditional fact.
+pub(crate) fn any_hypotheses_active() -> bool {
+    HYPOTHESES.with(|h| !h.borrow().is_empty())
 }
 
 /// Whether a safety-component verification is currently in progress. During that

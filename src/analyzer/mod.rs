@@ -1265,12 +1265,26 @@ fn analyze_known_application_alternative(
                 demands: Vec::new(),
             }),
         }));
-        return application_contribution(
-            findings,
-            safety_demands,
-            Contract::Top,
-            Completion::MayFallThrough,
-        );
+        // The safety voice stays Unproven; the OTHER judgments still answer from their
+        // own facts (§1.6 — separate judgment classes). A recursive callee's produced
+        // comes from `call_return` (the return fact is its own induction and settles
+        // no safety facts), so a nested `m(m(n + 11))` keeps a real outer-argument
+        // contract instead of minting an uncoverable `(m, [Top])` node. Completion
+        // consults the assumed completion facts and settled coverage — read-only,
+        // never a settlement past the cutoff.
+        let produced = if induction::is_recursive(callee) {
+            call_return(callee, arg_contracts, has_spread, cenv, interner)
+        } else {
+            Contract::Top
+        };
+        let completion = if induction::completes_assumed(callee, arg_contracts, interner)
+            || safety::completes_settled(callee, arg_contracts, cenv, interner)
+        {
+            Completion::Produces
+        } else {
+            Completion::MayFallThrough
+        };
+        return application_contribution(findings, safety_demands, produced, completion);
     }
     if has_spread {
         return application_contribution(
@@ -1291,12 +1305,24 @@ fn analyze_known_application_alternative(
         verdict: body_safe.clone(),
     }));
     if !discharge_body_safety(&body_safe, &mut findings) {
-        return application_contribution(
-            findings,
-            safety_demands,
-            Contract::Top,
-            Completion::MayFallThrough,
-        );
+        // Safety's failure blocks this seat, but the produced and completion voices
+        // remain their own judgments (§1.6). Under a return pass's hypotheses the
+        // recursive callee must contribute its assumed contract — under the
+        // proposal's bottoms that is `Bottom`, not a proposal-poisoning `Top`.
+        // Completion likewise reads the assumed/settled completion facts only.
+        let produced = if induction::is_recursive(callee) {
+            call_return(callee, arg_contracts, has_spread, cenv, interner)
+        } else {
+            Contract::Top
+        };
+        let completion = if induction::completes_assumed(callee, arg_contracts, interner)
+            || safety::completes_settled(callee, arg_contracts, cenv, interner)
+        {
+            Completion::Produces
+        } else {
+            Completion::MayFallThrough
+        };
+        return application_contribution(findings, safety_demands, produced, completion);
     }
 
     // Safety has settled the complete dependency graph. Completion and recursive

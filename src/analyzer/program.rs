@@ -830,6 +830,76 @@ mod tests {
         crate::oracle::harness::check_source(src).expect("lexes, parses, desugars")
     }
 
+    /// Adversarial-review counterexample (2026-08-04): `g(3)` descends 3 → 1.5 →
+    /// 0.75 → … — it never completes and never traps (`/` is total via
+    /// Indeterminate; the `+` never receives a recursive value because no recursive
+    /// call returns). Before the produced-path sharpening, the recursive call's
+    /// produced coarsened to `Top`, and refutation sampling then minted
+    /// `Add: Refuted([0, "s"])` — a manufactured refutation of a trap-free body,
+    /// from a value `g(1.5)` cannot produce. The law: imprecision yields Unproven,
+    /// never a manufactured verdict; refutations need represented witnesses.
+    #[test]
+    fn a_divergent_recursion_is_not_falsely_refuted_from_a_sampled_top() {
+        let (v, _) = check("g = (n) => n == 0 ? \"a\" : g(n / 2) + \"s\"\nx = g(3)\n");
+        assert!(!v.accepted(), "safety stays unproven and blocks the seat");
+        let refuted = v
+            .executable_demands
+            .iter()
+            .flat_map(|d| &d.safety_demands)
+            .any(|d| match d {
+                SafetyDemand::Operation(o) => matches!(o.verdict, OpSafety::Refuted(_)),
+                SafetyDemand::Body(b) => matches!(b.verdict, safety::BodySafety::Refuted(_)),
+            });
+        assert!(
+            !refuted,
+            "no refutation may be minted without a represented witness: {:?}",
+            v.findings
+        );
+    }
+
+    /// McCarthy 91's measured end state (2026-08-04, after the produced-path
+    /// sharpenings, the hypothesis stacking discipline, and nested-seat completion):
+    /// the declared safety fact and the return claim over `Number` both **prove** —
+    /// the nested `m(m(n + 11))` resolves the inner call's return through its own
+    /// induction (the (90, 101] zone) and the outer expecting seat's completion
+    /// demand through the completion fact — and the program still honestly rejects
+    /// on exactly one voice: termination (Principle 9; the landing-zone grounding
+    /// certificate is the owed piece, GR specimen 7).
+    #[test]
+    fn mccarthy_91_proves_safety_and_return_and_rejects_only_on_termination() {
+        let (v, _) = check(
+            "m where (Number) => Number\n\
+             m = (n) => n > 100 ? n - 10 : m(m(n + 11))\n\
+             x = m(1)\n",
+        );
+        assert!(
+            v.body_safety_demands.iter().all(|d| d.verdict.is_proven()),
+            "declared body safety proves: {:?}",
+            v.body_safety_demands
+        );
+        assert!(
+            v.return_demands
+                .iter()
+                .all(|d| matches!(d.verdict, ClaimVerdict::Proven)),
+            "the declared return claim proves: {:?}",
+            v.return_demands
+        );
+        assert!(
+            v.grounding_demands
+                .iter()
+                .all(|d| matches!(d.verdict, grounding::Verdict::Unproven)),
+            "termination stays honestly unproven pending the landing-zone certificate: {:?}",
+            v.grounding_demands
+        );
+        assert!(!v.accepted(), "Principle 9 still rejects");
+        assert!(
+            v.errors()
+                .all(|e| e.message.contains("not proven to finish")),
+            "termination is the only rejecting voice: {:?}",
+            v.findings
+        );
+    }
+
     /// The point of the whole pass: an author declares a domain, the body traps somewhere
     /// inside it, and the module is rejected — with no call site anywhere in the program.
     /// Before this entry existed, nothing asked the question.

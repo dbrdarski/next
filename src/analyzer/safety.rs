@@ -142,10 +142,14 @@ pub(crate) fn prove_claim(
         return v;
     }
 
+    // Sampled before `begin`: a settlement entered while ambient hypotheses are active
+    // (a vector pass installs them without a `begin`) is hypothesis-relative — its
+    // verdict answers the asking seat inside the enclosing pass but is not a fact.
+    let tainted = induction::any_hypotheses_active();
     factcache::begin(&key);
     let (nodes, edges) = discover(callee, args, &claim, cenv, interner);
     let settlement = settle(nodes, &edges, claim, cenv, interner);
-    let outer = factcache::finish(&key, &settlement.verdict);
+    let outer = factcache::finish(&key, &settlement.verdict, tainted);
     if outer {
         // The graph settled dependencies before their dependants. They are ordinary
         // proven facts of their complete semantic keys, not seed-local evidence; keep
@@ -236,6 +240,28 @@ pub fn completes(
     );
     SETTLING.with(|f| f.set(false));
     out
+}
+
+/// Whether a **settled** completion fact covers this call — the exact-pointer hit or
+/// coverage, as one read. Deliberately not a settlement: the guarded application
+/// branches (active safety context, failed safety) may consult existing completion
+/// evidence for their completion voice, but launching a settlement there would recurse
+/// past the graph cutoff. E10/§1.6: completion is its own judgment class — an unproven
+/// safety seat does not falsify a proven completion fact.
+pub(crate) fn completes_settled(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    let Some(key) = factcache::key(callee, args, &Claim::Completes, cenv, interner) else {
+        return false;
+    };
+    match factcache::lookup(&key) {
+        Some(factcache::Cached::Settled(v)) => v.is_proven(),
+        Some(factcache::Cached::InProgress) => false,
+        None => matches!(factcache::covering(&key, interner), Some(v) if v.is_proven()),
+    }
 }
 
 /// Verify the fact **per region-table row** (§5's partition rule). `region::select`
@@ -524,6 +550,60 @@ mod tests {
             induction::safety_assumed(&cd, std::slice::from_ref(&five), &mut i)
         });
         assert!(covered, "Equals(5) is inside the non-negative integers");
+    }
+
+    #[test]
+    fn nested_hypothesis_scopes_stack_rather_than_replace() {
+        // C§13.2a's discipline — "hypotheses assumed jointly": a pass nested inside
+        // another (a completion settlement inside a safety verification, a return
+        // inference inside either) keeps the ambient facts visible, exactly as if the
+        // two components were one joint vector. Replacement here is what lost the
+        // ambient safety facts and generated McCarthy's unproven noise — the measured
+        // residue (a) of 2026-08-04.
+        let mut i = Interner::new();
+        let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        let outer = Hypothesis {
+            callee: cd.clone(),
+            input: vec![nonneg_ints(&mut i)],
+            claim: Claim::Safety,
+        };
+        let five = Contract::Equals(i.integer(5));
+        let covered = induction::with_hypotheses(vec![outer], || {
+            induction::with_hypotheses(Vec::new(), || {
+                induction::safety_assumed(&cd, std::slice::from_ref(&five), &mut i)
+            })
+        });
+        assert!(covered, "an inner scope must still see the ambient fact");
+    }
+
+    #[test]
+    fn the_innermost_return_hypothesis_shadows_the_outer() {
+        // A proposal's `Bottom` pin installed inside an outer pass must win for the
+        // same instance and domain, or base-generalization stops dropping recursive
+        // tails from the proposed base union.
+        let mut i = Interner::new();
+        let cd = f("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut i);
+        let num = Contract::Kind(crate::contract::Kind::Number);
+        let outer = Hypothesis {
+            callee: cd.clone(),
+            input: vec![num.clone()],
+            claim: Claim::Return(num.clone()),
+        };
+        let inner = Hypothesis {
+            callee: cd.clone(),
+            input: vec![num.clone()],
+            claim: Claim::Return(Contract::Bottom),
+        };
+        let got = induction::with_hypotheses(vec![outer], || {
+            induction::with_hypotheses(vec![inner], || {
+                induction::hypothesis_for(&cd, std::slice::from_ref(&num), &mut i)
+            })
+        });
+        assert_eq!(
+            got,
+            Some(Contract::Bottom),
+            "the innermost hypothesis shadows the outer for the same instance"
+        );
     }
 }
 
@@ -1230,6 +1310,46 @@ mod graph_tests {
                 Some(factcache::Cached::Settled(BodySafety::Proven))
             ),
             "the dependency component must remain memoized"
+        );
+    }
+
+    #[test]
+    fn a_settlement_under_ambient_hypotheses_is_not_published() {
+        // The stacking discipline's soundness half. With hypotheses stacking rather
+        // than replacing, a settlement launched from inside a vector pass (which
+        // installs hypotheses with no cache `begin`) can consult those ambient
+        // assumptions — so its verdict answers the asking seat inside that pass but
+        // must never be recorded as an unconditional fact. Publishing it could
+        // persist a conclusion that leaned on an unverified assumption (a proposal's
+        // `Bottom` pin being the sharpest case).
+        factcache::clear();
+        let mut i = Interner::new();
+        let g = f("g = (y) => y + 1\ng", &mut i);
+        let unrelated = f("u = (n) => n\nu", &mut i);
+        let args = vec![Contract::Kind(crate::contract::Kind::Number)];
+        let hyp = crate::analyzer::induction::Hypothesis {
+            callee: unrelated,
+            input: args.clone(),
+            claim: Claim::Return(Contract::Kind(crate::contract::Kind::Number)),
+        };
+        let v =
+            induction::with_hypotheses(vec![hyp], || prove(&g, &args, &ContractEnv::new(), &mut i));
+        assert!(v.is_proven(), "the verdict still answers locally: {v:?}");
+        let key = factcache::key(&g, &args, &Claim::Safety, &ContractEnv::new(), &mut i)
+            .expect("a known closure has a fact key");
+        assert!(
+            factcache::lookup(&key).is_none(),
+            "a hypothesis-relative settlement must not be recorded as a fact"
+        );
+
+        // The same settlement entered clean is a fact and publishes.
+        assert!(prove(&g, &args, &ContractEnv::new(), &mut i).is_proven());
+        assert!(
+            matches!(
+                factcache::lookup(&key),
+                Some(factcache::Cached::Settled(BodySafety::Proven))
+            ),
+            "the clean settlement publishes normally"
         );
     }
 

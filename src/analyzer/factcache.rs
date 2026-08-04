@@ -212,12 +212,18 @@ pub(crate) fn begin(key: &FactKey) {
 ///
 /// At depth > 1 the verdict was reached with ambient hypotheses in scope, so it is
 /// **removed** rather than recorded — a hypothesis-relative answer is not a fact.
-pub(crate) fn finish(key: &FactKey, verdict: &BodySafety) -> bool {
+/// `tainted` covers the hypotheses DEPTH cannot see: a vector pass installs its
+/// hypotheses without a `begin` (return inference, `check_return_claim`,
+/// `run_pass` verification), so a settlement launched from inside one starts at
+/// depth 0 yet may still have consulted those ambient assumptions. The caller
+/// samples `induction::any_hypotheses_active()` **at `begin` time** and passes it
+/// here; a tainted settlement is discarded exactly like a nested one.
+pub(crate) fn finish(key: &FactKey, verdict: &BodySafety, tainted: bool) -> bool {
     let outer = DEPTH.with(|d| {
         let mut d = d.borrow_mut();
         *d -= 1;
         *d == 0
-    });
+    }) && !tainted;
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if outer {

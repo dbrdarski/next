@@ -227,6 +227,23 @@ again per the completion plan's Tier-4 note. The correction is logged in `DECISI
 third author-caught import; the machinery-gate scope note ("a gate cannot catch a renamed
 reimplementation — that stays a review obligation") performed exactly as written.
 
+**Hypothesis stacking + nested-seat completion landed (2026-08-04):** `with_hypotheses` now
+**stacks** the ambient table (innermost-wins lookup) per C§13.2a's "hypotheses assumed jointly",
+so a settlement nested inside another pass keeps the ambient facts visible; its soundness half is
+a new publication guard — a settlement entered under **any** ambient hypotheses is
+hypothesis-relative and is discarded by `factcache::finish` like a nested one (the DEPTH guard
+alone cannot see hypotheses installed without a `begin`). The two guarded application branches
+(active safety context; failed safety) answer their completion voice from assumed completion
+facts and settled coverage (read-only, never a settlement past the cutoff) and their produced
+voice from `call_return` for recursive callees — §1.6's separate judgment classes; the safety
+voice stays honestly Unproven. This slice also **re-landed** two produced-path sharpenings the
+2026-08-04 instrumentation entry had recorded but whose commit had not actually carried
+(discrepancy audited in `DECISIONS.md`). Measured: McCarthy 91's safety, completion, and
+`where (Number) => Number` return claim all **prove** — `infer_return_fact(m, [LessEq(111)])`
+derives exactly the `(90, 101]` zone — and the program rejects on exactly one voice, the
+Principle-9 termination demands. The remaining McCarthy gap is the landing-zone grounding
+certificate over the nested call (GR specimen 7).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -440,11 +457,11 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 ---
 
-## 7. Test baseline (measured 2026-08-03, not inherited)
+## 7. Test baseline (measured 2026-08-04, not inherited)
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **447 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **452 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **139 passed, 0 failed, 4 ignored** (collatz resolved by the D-4 ruling; McCarthy + Ackermann + 2 Part-D gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
@@ -452,7 +469,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
-417 / 421 / 424 / 426 / 438 / 439) are
+417 / 421 / 424 / 426 / 438 / 439 / 447) are
 **HISTORICAL**; this table is current.
 **Green ≠ complete:** the deferred finite-product extension's acceptance twin remains ignored (§4),
 and the staged work recorded elsewhere in this file remains open.
