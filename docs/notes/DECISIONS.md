@@ -4907,3 +4907,28 @@ ignore register drops 6 → 5 (A-NEG · A-DRV · A-SND · the broad A-VER · A-W
 
 **Verification:** 447 lib passed / 1 ignored; 129 conformance passed / 5 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — A-NEG live: the negative battery, eleven verdicts, five precise pins
+
+**Built:** the broad A-NEG ignore is replaced by a live battery over the Part D§6 / Part I
+specimens, with the stamped Principle 9 applied — the former GRAY verdicts (collatz, Hofstadter)
+are rejections. Live and green: factorial proven over its natural domain; the countdown−2 drift
+pair (aligned accepts, misaligned rejects); broken fibonacci rejected (the rejection smoke test);
+collatz(7) rejected; the −4 trap pair (parity self-loop from 7 rejects with its witness, the
+aligned 8 → 4 → 0 lands and accepts); the terminating isEven/isOdd pair accepted via the group
+orbit and its +1 variant rejected; Hofstadter Q rejected. One record correction: the old stub's
+gloss "factorial → REJECT / countdown−2 → REJECT" misread the battery record — the normative
+parentheticals attach only to broken-fibonacci (rejected) and the gray pair; the unmarked
+specimens carry their ordinary verdicts.
+
+**Five pins, each naming its one awaited certificate** (measured rejecting today, all honestly
+Unproven): collatz(64) — the Pow2 sublanguage / Mod-cycle derivation; McCarthy 91 — landing zones
+over nested recursion; Ackermann — the joint lexicographic certificate over the nested call;
+non-tail mutual (`1 + g(n − 1)`) — the completion/return cross-claim through the group envelope at
+consuming seats (a genuine precision gap found by this battery: the program terminates and is
+safe); gcd — the modulo-descent measure. The conformance register is now 9 ignored: **4 broad
+batteries (A-DRV · A-SND · broad A-VER · A-WRK) + the 5 A-NEG precision pins** — every pin a
+one-certificate gate, the register's intended end-state shape. **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 130 conformance passed / 9 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

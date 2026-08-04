@@ -1281,23 +1281,104 @@ mod phase_a {
         );
     }
 
+    /// A-NEG — the negative battery (Part D§6 / Part I), the anti-regression
+    /// tripwire, under the stamped Principle 9 (the former GRAY verdicts are now
+    /// rejections). Live rows assert today's true verdicts; the pinned twins below
+    /// each name the one certificate their acceptance awaits.
     #[test]
-    #[ignore = "Phase A: grounding is WIRED at program seats (2026-08-03) and Principle 9 is stamped [user]: gray is dead — unproven termination is an error, and the typed three-voice GroundingDemand record exists. Remaining: the battery body is an unreachable!() stub; write it against the stamped verdicts (the former GRAY expectations are now rejections)."]
     fn a_neg_negative_battery() {
-        // Recorded verdicts (Part D§6 — the anti-regression tripwire; these must
-        // never change under any future families/analysis work):
-        //   factorial              → REJECT
-        //   countdown−2            → REJECT
-        //   broken fibonacci       → REJECT
-        //   collatz                → GRAY
-        //   the −4 trap            → excluded per battery record
-        //   McCarthy 91            → proven, all reals
-        //   Ackermann              → (per D§6 record)
-        //   isEven/isOdd (both)    → (per D§6 record)
-        //   non-tail mutual        → (per D§6 record)
-        //   Hofstadter             → GRAY
-        //   gcd                    → (per D§6 record)
-        unreachable!("activates with the program-level analyzer");
+        let accepts = |src: &str| {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(v.accepted(), "must accept: {src}\n{:#?}", v.findings);
+        };
+        let rejects = |src: &str| {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(!v.accepted(), "must reject: {src}");
+        };
+
+        // factorial — proven over its natural domain (also GR-02).
+        accepts(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\nfact where (Nat) => Number\n\
+             fact = (n) => n == 0 ? 1 : n * fact(n - 1)\nx = fact(5)\n",
+        );
+        // countdown−2 — the drift-pair grid (also GR-18).
+        accepts("countdown = (n) => n == 0 ? 0 : countdown(n - 2)\nx = countdown(10)\n");
+        rejects("countdown = (n) => n == 0 ? 0 : countdown(n - 2)\nx = countdown(7)\n");
+        // broken fibonacci — mixed drifts, missing base: the rejection smoke test.
+        rejects("f = (n) => n == 0 ? 1 : f(n - 1) + f(n - 2)\nx = f(1)\n");
+        // collatz — the former gray flagship; unproven now rejects.
+        rejects(
+            "collatz = (n) => n == 1 ? 1 : (n % 2 == 0 ? collatz(n / 2) : collatz(3 * n + 1))\n\
+             x = collatz(7)\n",
+        );
+        // the −4 trap — parity self-loops away from the base; the aligned start lands.
+        rejects("f = (n) => n == 0 ? 0 : f(n - 4)\nx = f(7)\n");
+        accepts("f = (n) => n == 0 ? 0 : f(n - 4)\nx = f(8)\n");
+        // isEven/isOdd — the terminating pair closes (group orbit); the +1 variant rejects.
+        accepts(
+            "isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
+             isOdd = (n) => n <= 0 ? false : isEven(n - 1)\nx = isEven(4)\n",
+        );
+        rejects(
+            "isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
+             isOdd = (n) => n <= 0 ? false : isEven(n + 1)\nx = isEven(4)\n",
+        );
+        // Hofstadter Q — value-dependent steps: honestly unproven, rejects.
+        rejects("q = (n) => n <= 2 ? 1 : q(n - q(n - 1)) + q(n - q(n - 2))\nx = q(5)\n");
+    }
+
+    #[test]
+    #[ignore = "A-NEG pin: collatz(64) — acceptance awaits the Pow2 sublanguage derivation (the Mod-cycle analysis, grid §4); unproven correctly rejects today"]
+    fn a_neg_collatz_pow2_accepts() {
+        let v = check_source(
+            "collatz = (n) => n == 1 ? 1 : (n % 2 == 0 ? collatz(n / 2) : collatz(3 * n + 1))\n\
+             x = collatz(64)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+
+    #[test]
+    #[ignore = "A-NEG pin: McCarthy 91 — proven-for-all-reals awaits landing zones over the nested recursion (grid §6; GR specimen 7); unproven correctly rejects today"]
+    fn a_neg_mccarthy_91_accepts() {
+        let v = check_source("m = (n) => n > 100 ? n - 10 : m(m(n + 11))\nx = m(1)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+
+    #[test]
+    #[ignore = "A-NEG pin: Ackermann — awaits the joint lexicographic certificate over the nested call (GR-13/14; GR specimen 5)"]
+    fn a_neg_ackermann_accepts() {
+        let v = check_source(
+            "ack = (m, n) => m == 0 ? n + 1 : (n == 0 ? ack(m - 1, 1) : ack(m - 1, ack(m, n - 1)))\n\
+             x = ack(2, 2)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+
+    #[test]
+    #[ignore = "A-NEG pin: non-tail mutual — terminates and is safe; acceptance awaits the completion/return cross-claim through the group envelope at consuming seats"]
+    fn a_neg_non_tail_mutual_accepts() {
+        let v = check_source(
+            "f = (n) => n <= 0 ? 0 : 1 + g(n - 1)\ng = (n) => n <= 0 ? 0 : 1 + f(n - 1)\n\
+             x = f(4)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+
+    #[test]
+    #[ignore = "A-NEG pin: gcd — awaits the modulo-descent measure (a % b < b for b > 0)"]
+    fn a_neg_gcd_accepts() {
+        let v = check_source("gcd = (a, b) => b == 0 ? a : gcd(b, a % b)\nx = gcd(12, 8)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
     }
 
     #[test]
