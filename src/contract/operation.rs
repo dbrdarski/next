@@ -73,17 +73,10 @@ use crate::oracle::{eval_prim, values_equal};
 use crate::rational::Rational;
 use crate::value::{IndeterminateFormTag, ValueRef};
 
-/// The operation-safety verdict — a subcontract carrying an *n-ary* witness.
-#[derive(Clone, Debug)]
-pub enum OpSafety {
-    /// No operand tuple drawn from the inputs traps.
-    Proven,
-    /// This operand tuple (one value per input, each in its input's denotation)
-    /// makes the oracle trap.
-    Refuted(Vec<ValueRef>),
-    /// Neither proved safe nor refuted.
-    Unproven,
-}
+/// The operation-safety verdict — a subcontract carrying an *n-ary* witness:
+/// `Refuted` holds the operand tuple (one value per input, each in its input's
+/// denotation) that makes the oracle trap. An alias of the family shape [`Voice`].
+pub type OpSafety = crate::contract::Voice<Vec<ValueRef>>;
 
 /// The result of an operation rule: its safety demand and its image bound.
 #[derive(Clone, Debug)]

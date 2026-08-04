@@ -538,7 +538,7 @@ pub fn intersect_a(
                 metadata: mb,
             },
         ) => {
-            let contract = Contract::intersection(ca.clone(), cb.clone(), interner);
+            let contract = Contract::intersect(ca.clone(), cb.clone(), interner);
             let metadata = meet_metadata(ma, mb, interner);
             AnalysisContract::leaf(contract, metadata)
         }

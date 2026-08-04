@@ -376,6 +376,19 @@ fall-through belongs to the consumer, not body safety. Difference-aware `disjoin
 `is_empty`/`provable` rules carried the exhaustiveness proofs. Detail in `DECISIONS.md`
 (2026-08-05).
 
+**Tier 4 consolidation landed (2026-08-05):** the consumption discipline is two walk
+engines (`region::walk_rows`/`walk_rows_multi`) with six former copies as thin visitors (the
+RT-14 defect was drift between copies — structurally impossible now); the four three-voice
+verdict enums are aliases of one `contract::Voice<W>` (zero consumer churn; `grounding::
+Verdict` and `BodySafety` documented as deliberate divergences); the completion tri-states
+are verified as AP-29's type-enforced witness boundary with one named conversion
+(`CompletionWithoutValue::of`) and the coarse path's realized-witness policy documented; the
+three `intersect` copies are one simplifying `Contract::intersect`. Phase-3 set: residual
+`kind_abstraction` deleted (zero consumers); `summarize_instance`'s per-call role confirmed
+already gone (induction role live); `accepted_domain` kept — live argument-obligation +
+interim group domains (replacement v0.8.1 §5 unbuilt; the plan's deletion gate forbids).
+Detail in `DECISIONS.md` (2026-08-05).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return

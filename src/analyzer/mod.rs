@@ -91,7 +91,10 @@ pub struct Finding {
 
 /// Whether an expression completes **without** producing a value (E10 — a `Match`
 /// that may fall through), three-voiced (the application spec's `CompletionWithoutValue`
-/// at the expression layer): the seat demand's compile-time face.
+/// at the expression layer): the seat demand's compile-time face. The application
+/// layer's [`crate::analyzer::application::CompletionWithoutValue`] is its deliberate
+/// counterpart across the AP-29 witness boundary — convert with
+/// `CompletionWithoutValue::of` (narrowing) / `completion_from_application` (faithful).
 #[derive(Clone, Debug)]
 pub enum Completion {
     /// Every path produces a value (`ProvenAbsent`) — an expecting seat is satisfied.
@@ -1412,15 +1415,7 @@ fn application_contribution(
     } else {
         SeatVerdict::Proven
     };
-    let completion = match completion {
-        Completion::Produces => CompletionWithoutValue::ProvenAbsent,
-        Completion::FallsThrough(CompletionWitness::Application(witness)) => {
-            CompletionWithoutValue::ProvenPresent(witness)
-        }
-        Completion::MayFallThrough | Completion::FallsThrough(_) => {
-            CompletionWithoutValue::UnprovenPossible
-        }
-    };
+    let completion = CompletionWithoutValue::of(completion);
     AlternativeContribution {
         verdict,
         outcome: ApplicationOutcome {
@@ -2212,16 +2207,10 @@ pub(crate) fn check_tested_seat(
     }
 }
 
+/// Adapter for the canonical simplifying conjunction (Tier-4: one implementation;
+/// the elementwise tuple rule lives there now).
 fn intersect(a: &Contract, b: &Contract, i: &mut Interner) -> Contract {
-    match (a, b) {
-        (Contract::Top, x) | (x, Contract::Top) => x.clone(),
-        // Elementwise on matching tuples, so narrowing reaches sub-patterns.
-        (Contract::Tuple(pa), Contract::Tuple(pb)) if pa.len() == pb.len() => {
-            let elems: Vec<Contract> = pa.iter().zip(pb).map(|(x, y)| intersect(x, y, i)).collect();
-            Contract::tuple(elems, i)
-        }
-        _ => Contract::intersection(a.clone(), b.clone(), i),
-    }
+    Contract::intersect(a.clone(), b.clone(), i)
 }
 
 fn difference(a: &Contract, b: &Contract, i: &mut Interner) -> Contract {

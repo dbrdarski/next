@@ -56,6 +56,8 @@ use crate::value::ValueRef;
 #[derive(Debug, Clone)]
 pub enum BodySafety {
     /// Every operation the body reaches over `I` discharges.
+    /// (The enum is a deliberate divergence from the [`crate::contract::Voice`]
+    /// family shape: its unproven voice carries evidence.)
     Proven,
     /// A definitely-reached operation traps — carries diagnostics and the nested
     /// typed demands, including any primitive operation witness.
@@ -315,11 +317,11 @@ fn verify_by_partition(
 
 /// The **guards' own path demands** (T3.1): a guard is evaluated for every arrival
 /// at its row, so its operations and its strict Boolean tested seat (E10) are body
-/// demands like any other. Arrivals are the walk's remaining domain intersected
-/// with the row's own pattern region — an over-approximation as soon as any earlier
-/// row is non-exact, so evidence from later guards is weakened through the ordinary
-/// RT-14 discipline (`extend_analysis`'s non-exact path): refutations need a
-/// definitely-reached seat.
+/// demands like any other. Arrivals are the engine's remaining domain intersected
+/// with the row's own pattern region; evidence is weakened through the ordinary
+/// RT-14 discipline (`definite_prior && pattern_exact` — refutations need a
+/// definitely-reached seat). The consumption discipline lives in
+/// [`crate::analyzer::region::walk_rows`], not here.
 #[allow(clippy::too_many_arguments)]
 fn guard_demands(
     table: &[crate::analyzer::region::Row],
@@ -331,47 +333,25 @@ fn guard_demands(
     out: &mut SafetyReport,
     interner: &mut Interner,
 ) {
-    let mut remaining = domain.clone();
-    let mut definite = true;
-    for row in table {
-        if let Some(seat) = &row.guard {
-            let arrivals = if matches!(seat.pattern_region, Contract::Top) {
-                remaining.clone()
-            } else {
-                Contract::intersection(remaining.clone(), seat.pattern_region.clone(), interner)
-            };
-            let empty = matches!(
-                subcontract(&arrivals, &Contract::Bottom, interner),
-                Verdict::Proven
-            );
-            if !empty {
-                let mut env = base.clone();
-                env.insert(param.to_string(), arrivals.clone());
-                if let Some(alias) = &row.binder {
-                    env.insert(alias.clone(), arrivals);
-                }
-                let mut analysis =
-                    analyze_in_world(&seat.expr, &env, cenv, world_for_act(act), interner);
-                crate::analyzer::check_tested_seat(
-                    &analysis.contract,
-                    &mut analysis.findings,
-                    interner,
-                );
-                out.extend_analysis(analysis, definite && seat.pattern_exact);
+    crate::analyzer::region::walk_rows(table, domain, interner, |interner, v| {
+        let Some(seat) = &v.row.guard else { return };
+        let arrivals = if matches!(seat.pattern_region, Contract::Top) {
+            v.remaining.clone()
+        } else {
+            if crate::contract::disjoint(v.remaining, &seat.pattern_region) {
+                return; // no arrival reaches this guard
             }
+            Contract::intersect(v.remaining.clone(), seat.pattern_region.clone(), interner)
+        };
+        let mut env = base.clone();
+        env.insert(param.to_string(), arrivals.clone());
+        if let Some(alias) = &v.row.binder {
+            env.insert(alias.clone(), arrivals);
         }
-        if row.exact {
-            remaining = if matches!(
-                subcontract(&remaining, &row.region, interner),
-                Verdict::Proven
-            ) {
-                Contract::Bottom
-            } else {
-                Contract::difference(remaining, row.region.clone(), interner)
-            };
-        }
-        definite = definite && row.exact;
-    }
+        let mut analysis = analyze_in_world(&seat.expr, &env, cenv, world_for_act(act), interner);
+        crate::analyzer::check_tested_seat(&analysis.contract, &mut analysis.findings, interner);
+        out.extend_analysis(analysis, v.definite_prior && seat.pattern_exact);
+    });
 }
 
 /// A may-region row cannot refute (RT-14): an `Error` becomes advisory.
@@ -1073,52 +1053,19 @@ fn guard_demands_multi(
     out: &mut SafetyReport,
     interner: &mut Interner,
 ) {
-    let mut remaining: Vec<Contract> = domains.to_vec();
-    let mut definite = true;
-    for row in table {
-        if let Some(guard) = &row.guard {
-            let empty = remaining.iter().any(|rem| {
-                matches!(
-                    subcontract(rem, &Contract::Bottom, interner),
-                    Verdict::Proven
-                )
-            });
-            if !empty {
-                let mut env = base.clone();
-                for (p, rem) in params.iter().zip(&remaining) {
-                    env.insert(p.clone(), rem.clone());
-                }
-                let mut analysis =
-                    analyze_in_world(guard, &env, cenv, world_for_act(act), interner);
-                crate::analyzer::check_tested_seat(
-                    &analysis.contract,
-                    &mut analysis.findings,
-                    interner,
-                );
-                out.extend_analysis(analysis, definite);
-            }
+    crate::analyzer::region::walk_rows_multi(table, domains, interner, |interner, v| {
+        let Some(guard) = &v.row.guard else { return };
+        if v.empty {
+            return;
         }
-        if row.exact && row.constrained == 0 {
-            for rem in &mut remaining {
-                *rem = Contract::Bottom;
-            }
-        } else if row.exact && row.constrained == 1 {
-            let p = row
-                .regions
-                .iter()
-                .position(|r| !matches!(r, Contract::Top))
-                .expect("one constrained position");
-            remaining[p] = if matches!(
-                subcontract(&remaining[p], &row.regions[p], interner),
-                Verdict::Proven
-            ) {
-                Contract::Bottom
-            } else {
-                Contract::difference(remaining[p].clone(), row.regions[p].clone(), interner)
-            };
+        let mut env = base.clone();
+        for (p, rem) in params.iter().zip(v.remaining) {
+            env.insert(p.clone(), rem.clone());
         }
-        definite = definite && row.exact;
-    }
+        let mut analysis = analyze_in_world(guard, &env, cenv, world_for_act(act), interner);
+        crate::analyzer::check_tested_seat(&analysis.contract, &mut analysis.findings, interner);
+        out.extend_analysis(analysis, v.definite_prior);
+    });
 }
 
 /// Verify one member under the currently-assumed facts (the partition rule).

@@ -34,6 +34,13 @@ pub struct ApplicationWitness {
 
 /// Whether a **completed-without-value** (fall-through, E10) execution is present
 /// (§1.5, tri-state — round 4).
+///
+/// This is the application layer's face of the expression layer's
+/// [`crate::analyzer::Completion`]; the two are deliberately distinct types
+/// (Tier-4 reviewed, not merged): §1.5/AP-29 admit **only a jointly-represented
+/// application witness** into `ProvenPresent`, so the conversion
+/// [`CompletionWithoutValue::of`] narrows every other witness class to the third
+/// voice, and the type system keeps that discipline from eroding.
 #[derive(Clone, Debug)]
 pub enum CompletionWithoutValue {
     /// `(E × A) ∩ Row = ∅` for every fall-through row — the product proves *absence*.
@@ -44,6 +51,25 @@ pub enum CompletionWithoutValue {
     /// A live fall-through row whose intersection is not proven empty, but whose joint
     /// inhabitance is not proved — the third voice.
     UnprovenPossible,
+}
+
+impl CompletionWithoutValue {
+    /// The canonical narrowing from the expression layer (AP-29): an application
+    /// witness crosses; a match-remainder or write witness — represented at its own
+    /// layer but not a joint application execution — does **not**, and becomes the
+    /// third voice here.
+    pub fn of(completion: crate::analyzer::Completion) -> CompletionWithoutValue {
+        use crate::analyzer::{Completion, CompletionWitness};
+        match completion {
+            Completion::Produces => CompletionWithoutValue::ProvenAbsent,
+            Completion::FallsThrough(CompletionWitness::Application(witness)) => {
+                CompletionWithoutValue::ProvenPresent(witness)
+            }
+            Completion::MayFallThrough | Completion::FallsThrough(_) => {
+                CompletionWithoutValue::UnprovenPossible
+            }
+        }
+    }
 }
 
 /// The application outcome summary (§1.5). `produced = Bottom` only when the absence
@@ -70,18 +96,7 @@ impl ApplicationOutcome {
 
 /// The three-valued verdict of a **seat** demand or the application driver, carrying a
 /// **structural** witness on refutation (never a bare value).
-#[derive(Clone, Debug)]
-pub enum SeatVerdict {
-    Proven,
-    Refuted(ApplicationWitness),
-    Unproven,
-}
-
-impl SeatVerdict {
-    fn is_proven(&self) -> bool {
-        matches!(self, SeatVerdict::Proven)
-    }
-}
+pub type SeatVerdict = crate::contract::Voice<ApplicationWitness>;
 
 /// The union of two produced contracts (§1.7): the correlated union — a structural
 /// `Alt` that keeps each branch's internal correlation.

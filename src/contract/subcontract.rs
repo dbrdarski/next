@@ -23,13 +23,9 @@ use crate::interner::Interner;
 use crate::rational::Rational;
 use crate::value::{IndeterminateFormTag, ValueRef};
 
-/// The three-valued subcontract verdict.
-#[derive(Clone, Debug)]
-pub enum Verdict {
-    Proven,
-    Refuted(ValueRef),
-    Unproven,
-}
+/// The three-valued subcontract verdict — `Refuted` carries the counterexample
+/// point (a value in `⟦A⟧ ∖ ⟦B⟧`). An alias of the family shape [`Voice`].
+pub type Verdict = crate::contract::Voice<ValueRef>;
 
 thread_local! {
     /// The **ambient recursive group** (C§9): installed for the extent of an

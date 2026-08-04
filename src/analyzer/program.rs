@@ -760,9 +760,6 @@ fn source_unreachable_arms(
     findings: &mut Vec<Finding>,
     interner: &mut Interner,
 ) {
-    fn empty(c: &Contract, i: &mut Interner) -> bool {
-        matches!(subcontract(c, &Contract::Bottom, i), Verdict::Proven)
-    }
     fn report(name: &str, idx: usize, findings: &mut Vec<Finding>) {
         findings.push(Finding {
             class: TrapClass::ExpectingSeat,
@@ -778,58 +775,25 @@ fn source_unreachable_arms(
         let Some((_, table)) = super::region::instance_table(callee, cenv, interner) else {
             return;
         };
-        let mut remaining = Contract::Top;
-        for (idx, row) in table.iter().enumerate() {
-            let candidate = Contract::intersection(remaining.clone(), row.region.clone(), interner);
-            if empty(&candidate, interner) {
+        let mut idx = 0;
+        super::region::walk_rows(&table, &Contract::Top, interner, |_, v| {
+            if v.empty {
                 report(name, idx, findings);
-                continue;
             }
-            if row.exact {
-                remaining = if matches!(
-                    subcontract(&remaining, &row.region, interner),
-                    Verdict::Proven
-                ) {
-                    Contract::Bottom
-                } else {
-                    Contract::difference(remaining, row.region.clone(), interner)
-                };
-            }
-        }
+            idx += 1;
+        });
     } else {
         let Some((_, table)) = super::region::instance_table_multi(callee, cenv, interner) else {
             return;
         };
-        let mut remaining: Vec<Contract> = vec![Contract::Top; arity];
-        for (idx, row) in table.iter().enumerate() {
-            let dead = remaining.iter().zip(&row.regions).any(|(rem, reg)| {
-                let c = Contract::intersection(rem.clone(), reg.clone(), interner);
-                empty(&c, interner)
-            });
-            if dead {
+        let domains = vec![Contract::Top; arity];
+        let mut idx = 0;
+        super::region::walk_rows_multi(&table, &domains, interner, |_, v| {
+            if v.empty {
                 report(name, idx, findings);
-                continue;
             }
-            if row.exact && row.constrained == 0 {
-                for rem in &mut remaining {
-                    *rem = Contract::Bottom;
-                }
-            } else if row.exact && row.constrained == 1 {
-                let p = row
-                    .regions
-                    .iter()
-                    .position(|r| !matches!(r, Contract::Top))
-                    .expect("one constrained position");
-                remaining[p] = if matches!(
-                    subcontract(&remaining[p], &row.regions[p], interner),
-                    Verdict::Proven
-                ) {
-                    Contract::Bottom
-                } else {
-                    Contract::difference(remaining[p].clone(), row.regions[p].clone(), interner)
-                };
-            }
-        }
+            idx += 1;
+        });
     }
 }
 

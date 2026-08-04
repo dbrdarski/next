@@ -293,6 +293,68 @@ fn region_rows(
 /// via denotational membership — this avoids the accumulated-`Difference` imprecision
 /// the general algebra cannot always simplify. Open domains use the general walk, where
 /// over-selection is sound (extra branches are carried and joined downstream).
+/// One step of the **ordered remainder walk** (§3), as seen by a consumer. The
+/// engine owns the discipline — candidate computation, proven-emptiness, exact
+/// consumption with the collapse rule, and **prior-arrival definiteness** (RT-14:
+/// true while every earlier *selected* row was exact, so the carried remainder is
+/// the true remainder; a row's own exactness is the consumer's facet to combine).
+pub(crate) struct Visit<'a> {
+    pub row: &'a Row,
+    /// The remainder *arriving at* this row (before its consumption).
+    pub remaining: &'a Contract,
+    /// `remaining ∩ region` — this row's candidate.
+    pub candidate: Contract,
+    /// The candidate is proven empty (the row is not selected).
+    pub empty: bool,
+    /// Every earlier selected row was exact.
+    pub definite_prior: bool,
+}
+
+/// The single-parameter walk engine (Tier-4: the one implementation of the
+/// consumption discipline — `select`, the guard demands, coverage remainders, and
+/// the unreachable-arm diagnostic are all thin consumers). Returns the final
+/// remainder. An **exact** row consumes its region — collapsing outright when the
+/// remainder is contained (a `Difference` the walkers cannot see through would
+/// keep dead later rows selectable); a non-exact row consumes nothing, and if
+/// selected it makes every later arrival indefinite. An unselected row (proven-
+/// empty candidate) stops nothing: its region over-approximates its acceptance,
+/// so emptiness is decisive and definiteness survives.
+pub(crate) fn walk_rows(
+    table: &[Row],
+    domain: &Contract,
+    i: &mut Interner,
+    mut visit: impl FnMut(&mut Interner, Visit),
+) -> Contract {
+    let mut remaining = domain.clone();
+    let mut definite = true;
+    for row in table {
+        let candidate = intersect(remaining.clone(), row.region.clone(), i);
+        let empty = disjoint(&remaining, &row.region);
+        visit(
+            i,
+            Visit {
+                row,
+                remaining: &remaining,
+                candidate,
+                empty,
+                definite_prior: definite,
+            },
+        );
+        if row.exact {
+            if !empty {
+                remaining = if matches!(subcontract(&remaining, &row.region, i), Verdict::Proven) {
+                    Contract::Bottom
+                } else {
+                    Contract::difference(remaining, row.region.clone(), i)
+                };
+            }
+        } else if !empty {
+            definite = false;
+        }
+    }
+    remaining
+}
+
 pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Selected> {
     if let Contract::Equals(v) = arg_domain {
         let mut out = Vec::new();
@@ -317,37 +379,18 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
         return out;
     }
 
-    let mut remaining = arg_domain.clone();
     let mut out = Vec::new();
-    let mut definite = true;
-    for row in table {
-        if !disjoint(&remaining, &row.region) {
+    walk_rows(table, arg_domain, i, |_, v| {
+        if !v.empty {
             out.push(Selected {
-                binder: row.binder.clone(),
-                region: intersect(remaining.clone(), row.region.clone(), i),
-                exact: row.exact,
-                result: row.result.clone(),
-                definite: definite && row.exact,
+                binder: v.row.binder.clone(),
+                region: v.candidate,
+                exact: v.row.exact,
+                result: v.row.result.clone(),
+                definite: v.definite_prior && v.row.exact,
             });
-            // A selected non-exact row consumes nothing yet may stop inputs at
-            // runtime, so the carried remainder is inflated from here on. An
-            // unselected row (proven-empty candidate) stops nothing: its region
-            // over-approximates its acceptance, so emptiness is decisive.
-            if !row.exact {
-                definite = false;
-            }
         }
-        if row.exact {
-            // Collapse a fully-consumed remainder outright (the same discipline the
-            // completion coverage check uses): a Difference the walkers cannot see
-            // through would keep dead later rows selectable.
-            remaining = if matches!(subcontract(&remaining, &row.region, i), Verdict::Proven) {
-                Contract::Bottom
-            } else {
-                Contract::difference(remaining, row.region.clone(), i)
-            };
-        }
-    }
+    });
     out
 }
 
@@ -578,13 +621,9 @@ fn const_num(e: &Expr) -> Option<Rational> {
     }
 }
 
-/// `Top ∩ x = x`; otherwise the raw `Intersection` (kept unsimplified — the algebra's
-/// `disjoint`/`subcontract` do the reasoning the walk needs).
+/// Adapter for the canonical simplifying conjunction (Tier-4: one implementation).
 fn intersect(a: Contract, b: Contract, i: &mut Interner) -> Contract {
-    match (a, b) {
-        (Contract::Top, x) | (x, Contract::Top) => x,
-        (a, b) => Contract::intersection(a, b, i),
-    }
+    Contract::intersect(a, b, i)
 }
 
 // ── §5 — the argument-tuple projection (multi-parameter rows) ─────────────────
@@ -731,83 +770,90 @@ pub(crate) fn remaining_multi(
     domains: &[Contract],
     i: &mut Interner,
 ) -> Vec<Contract> {
+    walk_rows_multi(table, domains, i, |_, _| {})
+}
+
+/// The multi-parameter walk step — positionwise remainder, same discipline.
+pub(crate) struct VisitN<'a> {
+    pub row: &'a RowN,
+    pub remaining: &'a [Contract],
+    /// Some position's candidate is proven empty (the row is not selected).
+    pub empty: bool,
+    pub definite_prior: bool,
+}
+
+/// The multi-parameter walk engine (§5): consumption is positionwise, set-exact
+/// only when a row constrains at most one position — an unconditional exact row
+/// takes everything, a one-position exact row consumes at its position, wider
+/// rows select but never consume.
+pub(crate) fn walk_rows_multi(
+    table: &[RowN],
+    domains: &[Contract],
+    i: &mut Interner,
+    mut visit: impl FnMut(&mut Interner, VisitN),
+) -> Vec<Contract> {
     let mut remaining: Vec<Contract> = domains.to_vec();
+    let mut definite = true;
     for row in table {
-        if remaining
+        let empty = remaining
             .iter()
             .zip(&row.regions)
-            .any(|(rem, reg)| disjoint(rem, reg))
-        {
-            continue;
-        }
+            .any(|(rem, reg)| disjoint(rem, reg));
+        visit(
+            i,
+            VisitN {
+                row,
+                remaining: &remaining,
+                empty,
+                definite_prior: definite,
+            },
+        );
         if row.exact && row.constrained == 0 {
-            for rem in &mut remaining {
-                *rem = Contract::Bottom;
+            if !empty {
+                for rem in &mut remaining {
+                    *rem = Contract::Bottom; // the unconditional arm takes everything left
+                }
             }
         } else if row.exact && row.constrained == 1 {
-            let p = row
-                .regions
-                .iter()
-                .position(|r| !matches!(r, Contract::Top))
-                .expect("one constrained position");
-            remaining[p] = if matches!(
-                subcontract(&remaining[p], &row.regions[p], i),
-                Verdict::Proven
-            ) {
-                Contract::Bottom
-            } else {
-                Contract::difference(remaining[p].clone(), row.regions[p].clone(), i)
-            };
+            if !empty {
+                let p = row
+                    .regions
+                    .iter()
+                    .position(|r| !matches!(r, Contract::Top))
+                    .expect("one constrained position");
+                remaining[p] = if matches!(
+                    subcontract(&remaining[p], &row.regions[p], i),
+                    Verdict::Proven
+                ) {
+                    Contract::Bottom
+                } else {
+                    Contract::difference(remaining[p].clone(), row.regions[p].clone(), i)
+                };
+            }
+        } else if !empty {
+            definite = false;
         }
     }
     remaining
 }
 
 pub fn select_multi(table: &[RowN], domains: &[Contract], i: &mut Interner) -> Vec<SelectedN> {
-    let mut remaining: Vec<Contract> = domains.to_vec();
     let mut out = Vec::new();
-    let mut definite = true;
-    for row in table {
-        if remaining
-            .iter()
-            .zip(&row.regions)
-            .any(|(rem, reg)| disjoint(rem, reg))
-        {
-            continue;
-        }
-        let effective: Vec<Contract> = remaining
-            .iter()
-            .zip(&row.regions)
-            .map(|(rem, reg)| intersect(rem.clone(), reg.clone(), i))
-            .collect();
-        out.push(SelectedN {
-            regions: effective,
-            exact: row.exact,
-            result: row.result.clone(),
-            definite: definite && row.exact,
-        });
-        if !row.exact {
-            definite = false;
-        }
-        if row.exact && row.constrained == 0 {
-            for rem in &mut remaining {
-                *rem = Contract::Bottom; // the unconditional arm takes everything left
-            }
-        } else if row.exact && row.constrained == 1 {
-            let p = row
-                .regions
+    walk_rows_multi(table, domains, i, |i, v| {
+        if !v.empty {
+            let effective: Vec<Contract> = v
+                .remaining
                 .iter()
-                .position(|r| !matches!(r, Contract::Top))
-                .expect("one constrained position");
-            remaining[p] = if matches!(
-                subcontract(&remaining[p], &row.regions[p], i),
-                Verdict::Proven
-            ) {
-                Contract::Bottom
-            } else {
-                Contract::difference(remaining[p].clone(), row.regions[p].clone(), i)
-            };
+                .zip(&v.row.regions)
+                .map(|(rem, reg)| intersect(rem.clone(), reg.clone(), i))
+                .collect();
+            out.push(SelectedN {
+                regions: effective,
+                exact: v.row.exact,
+                result: v.row.result.clone(),
+                definite: v.definite_prior && v.row.exact,
+            });
         }
-    }
+    });
     out
 }

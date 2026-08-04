@@ -5722,3 +5722,57 @@ the recursive-contract structural matches kept their green through the new compl
 **Verification:** 466 lib passed / 1 ignored; 168 conformance passed / 2 ignored (+10
 `region_rows`); 10 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
 Oracle ground truth pinned in-row: the exact-guard gap program traps ExpectingSeat at `f(3)`.
+
+## 2026-08-05 — Tier 4: the parallel implementations reconcile; one law-carrier per discipline
+
+**The consumption discipline has one home.** The ordered remainder walk — candidate,
+proven-emptiness, exact consumption with the collapse rule, and RT-14's prior-arrival
+definiteness — had grown six copies (`select`, `select_multi`, `remaining_multi`, both guard
+walks, the unreachable-arm walk; the RT-14 defect *was* drift between two of them). It is now
+two engines, `region::walk_rows` / `walk_rows_multi`, with every former copy a thin visitor:
+`select`/`select_multi` collect selections (the denotational point fast path stays, deliberate
+and documented), `remaining_multi` is the engine's return value, the guard demands analyze
+seats, and `source_unreachable_arms` reports empty candidates. One refinement rode in: the
+guard walks now use the engine's precise definiteness (an *unselected* row no longer breaks
+it) instead of their over-conservative row-by-row AND — the direction RT-14's pin licenses.
+The scan's "two row-selection walks" note predates recovery: the second walk (bodycheck's)
+died in the rebaseline; this closes the copies that accreted since.
+
+**The four verdict enums are one shape.** `subcontract::Verdict`, `OpSafety`, `ClaimVerdict`,
+and `SeatVerdict` were structurally identical three-voice enums differing only in refutation
+payload. They are now aliases of one generic law-carrier — `contract::Voice<W>` (`Proven /
+Refuted(W) / Unproven`, with the three-voice doctrine in its doc) — at `W` = counterexample
+point, operand tuple, realized witness, joint application witness respectively. Variant paths
+resolve through the aliases, so **no consumer changed**. The two deliberate divergences are
+now documented as such at their definitions: `grounding::Verdict` keeps `Grounded` (GR
+vocabulary), `BodySafety` carries evidence in its unproven voice.
+
+**The two completion tri-states are a boundary, not a duplicate — verified, named, kept.**
+`Completion` (expression layer; three witness classes) and `CompletionWithoutValue` (§1.5;
+application witnesses only) encode AP-29's witness discipline in the type system; merging
+them would move that discipline into runtime checks. The accidental part — two hand-rolled
+conversions, drifted — is consolidated: `CompletionWithoutValue::of` is the canonical
+narrowing (application witness crosses; match-remainder/write witnesses become the third
+voice), the driver uses it, and the coarse instance path's realized-witness re-derivation is
+kept as an explicitly-documented *policy* (its completion evidence lacks per-execution
+provenance, so it re-derives per AP-30 rather than trusting the structural witness).
+
+**The three `intersect` copies are one conjunction.** `Contract::intersect` (Top-elision +
+same-arity elementwise tuple distribution) now sits beside the raw constructor; the region
+and analyzer locals are one-line adapters; `intersect_a`'s leaf routes through it. The region
+walk thereby gains the tuple rule (sound, strictly more precise); no test moved.
+
+**Phase-3 superseded set — measured, then acted per the plan's own gate** ("nothing is
+deleted until its replacement passes what the current tests encode"): `kind_abstraction`
+**deleted** — zero consumers outside its own recursion, no pins; its purpose (bounding the
+reaching-domain state universe, Archive9 §13–16) died with bodycheck in the recovery.
+`summarize_instance`'s per-call role — **already gone** (the application driver owns call
+seats since T2.3); its induction-side coarse role is live and stays. `accepted_domain` —
+**live, kept**: it is the argument-obligation judgment (C§12 witness discipline) and the
+interim group-domain derivation whose named replacement (call-edge-derived domains, v0.8.1
+§5) is not yet built; deleting it now would violate the gate. **`// [ask-author]`: none —
+every action is the completion plan's own list executed under its own safety rule.**
+
+**Verification:** 466 lib passed / 1 ignored; 168 conformance passed / 2 ignored; 10
+machinery gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK. Zero
+behavioral movement across all suites.

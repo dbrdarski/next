@@ -47,15 +47,11 @@ pub struct RealizedWitness {
     pub produced: ValueRef,
 }
 
-/// A three-voiced verdict on a return claim (§6). `Refuted` is **permanent
-/// in-namespace** (a realized witness); `Unproven` is **per-compilation** (the
-/// inductive proof did not close, but no counterexample was found).
-#[derive(Clone, Debug)]
-pub enum ClaimVerdict {
-    Proven,
-    Refuted(RealizedWitness),
-    Unproven,
-}
+/// The declared-claim verdict — `Refuted` carries the realized witness (the
+/// represented arguments and what they actually produced; an inductive proof that
+/// did not close with no counterexample found stays `Unproven`). An alias of the
+/// family shape [`crate::contract::Voice`].
+pub type ClaimVerdict = crate::contract::Voice<RealizedWitness>;
 
 /// Search for a realized-witness refutation of "`callee` over `args` returns ⊑ `claim`".
 /// Samples genuine argument tuples from `args`, runs each through the oracle under the

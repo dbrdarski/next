@@ -105,6 +105,11 @@ pub fn summarize_instance(
     interner: &mut Interner,
 ) -> Option<ApplicationOutcome> {
     let a = analyze_instance_body(callee, arg_contracts, cenv, interner)?;
+    // Deliberately NOT `CompletionWithoutValue::of`: this is the coarse instance
+    // path, whose completion evidence lacks per-execution provenance — so any
+    // fall-through is re-derived as a **realized** witness (AP-30) or stays the
+    // third voice. The structural narrowing would trust a witness this summary
+    // cannot vouch for.
     let completion = match &a.completion {
         Completion::Produces => CompletionWithoutValue::ProvenAbsent,
         Completion::MayFallThrough | Completion::FallsThrough(_) => {

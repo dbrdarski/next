@@ -39,6 +39,29 @@ pub use subcontract::{RecGroupGuard, Verdict, rec_group_guard, subcontract};
 
 /// Whether two contracts are provably disjoint (`⟦a⟧ ∩ ⟦b⟧ = ∅`) — sound, so
 /// `true` only when provable. Used by the analyzer's access demands (E6).
+/// The **three-voice verdict shape** (Tier-4 reconciliation of the former four
+/// structurally-identical enums): a claim is `Proven`, `Refuted(witness)` with the
+/// witness the refuting seat is required to represent, or honestly `Unproven` —
+/// imprecision never manufactures either strong voice. The witness type `W` is the
+/// per-domain payload: a counterexample point (`subcontract::Verdict`), an operand
+/// tuple (`OpSafety`), a realized execution (`ClaimVerdict`), a joint application
+/// witness (`SeatVerdict`). Two family members stay deliberate divergences:
+/// `grounding::Verdict` names its proven voice `Grounded` (a statement about the
+/// program, GR vocabulary), and `safety::BodySafety` carries evidence in its
+/// unproven voice.
+#[derive(Clone, Debug)]
+pub enum Voice<W> {
+    Proven,
+    Refuted(W),
+    Unproven,
+}
+
+impl<W> Voice<W> {
+    pub fn is_proven(&self) -> bool {
+        matches!(self, Voice::Proven)
+    }
+}
+
 pub fn disjoint(a: &Contract, b: &Contract) -> bool {
     subcontract::disjoint(a, b)
 }
@@ -87,6 +110,27 @@ impl Contract {
 
     pub fn intersection(a: Contract, b: Contract, i: &mut Interner) -> Contract {
         Contract::Intersection(i.contract(a), i.contract(b))
+    }
+
+    /// The **simplifying conjunction** — the one implementation behind every walk's
+    /// `remaining ∩ region` (Tier-4 consolidation of the former region/analyzer
+    /// copies). `Top` elides; same-arity tuples distribute elementwise (sound:
+    /// `(a₁,a₂) ∩ (b₁,b₂) = (a₁∩b₁, a₂∩b₂)`); everything else is the raw
+    /// [`Contract::intersection`] — the algebra's `disjoint`/`subcontract` do the
+    /// remaining reasoning.
+    pub fn intersect(a: Contract, b: Contract, i: &mut Interner) -> Contract {
+        match (a, b) {
+            (Contract::Top, x) | (x, Contract::Top) => x,
+            (Contract::Tuple(pa), Contract::Tuple(pb)) if pa.len() == pb.len() => {
+                let elems: Vec<Contract> = pa
+                    .iter()
+                    .zip(pb.iter())
+                    .map(|(x, y)| Contract::intersect((**x).clone(), (**y).clone(), i))
+                    .collect();
+                Contract::tuple(elems, i)
+            }
+            (a, b) => Contract::intersection(a, b, i),
+        }
     }
 
     pub fn difference(a: Contract, b: Contract, i: &mut Interner) -> Contract {
@@ -246,43 +290,6 @@ impl Contract {
                 (ga, gb) => Contract::union(ga, gb, i),
             },
             other => other.clone(),
-        }
-    }
-
-    /// The contract's abstraction into the **finite Kind basis** — a *total* widening
-    /// (`self ⊑ kind_abstraction(self)` always) whose range is the seven `Kind`s plus
-    /// `Top`/`Bottom`/`Indeterminate(F)`. Unlike [`Contract::generalize`] (which only widens
-    /// singletons) this is defined on every form, so iterating it reaches a fixed point
-    /// in one step — the property that bounds the analyzer's recursive state universe
-    /// when a *computed* domain escapes the program's finite literal vocabulary
-    /// (Archive9 §13–§16). Sound in one direction only: it may admit values the original
-    /// did not, so it can never be used to *refute* the narrower domain.
-    pub fn kind_abstraction(&self) -> Contract {
-        let num = Contract::Kind(Kind::Number);
-        match self {
-            Contract::Top | Contract::Bottom | Contract::Kind(_) | Contract::Indeterminate(_) => {
-                self.clone()
-            }
-            Contract::Equals(v) => value_kind(v)
-                .map(Contract::Kind)
-                .unwrap_or_else(|| self.clone()),
-            Contract::Range(..)
-            | Contract::Greater(_)
-            | Contract::GreaterEq(_)
-            | Contract::Less(_)
-            | Contract::LessEq(_)
-            | Contract::Mod { .. }
-            | Contract::Geo { .. } => num,
-            Contract::Tuple(_) | Contract::Concat(_) | Contract::LengthRestricted(..) => {
-                Contract::Kind(Kind::Tuple)
-            }
-            Contract::Record(_) | Contract::HasField(_) => Contract::Kind(Kind::Record),
-            Contract::Union(a, b) => {
-                let (ka, kb) = (a.kind_abstraction(), b.kind_abstraction());
-                if ka == kb { ka } else { Contract::Top }
-            }
-            // Difference/Intersection/Ref: `Top` is always a sound widening.
-            _ => Contract::Top,
         }
     }
 

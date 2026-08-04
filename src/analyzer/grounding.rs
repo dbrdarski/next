@@ -104,6 +104,8 @@ pub struct Refutation {
 pub enum Verdict {
     /// Well-founded descent **and** landing proven — the recursion terminates on this domain.
     /// (This is a statement about the *program*; it does not license any analyzer cutoff.)
+    /// A deliberate divergence from the [`crate::contract::Voice`] family shape: the
+    /// proven voice keeps its GR vocabulary.
     Grounded,
     /// A represented-exact witness forces nontermination (§7), carrying its [`Refutation`]
     /// certificate — minted by the constant-drift certificate (GR-23a drift-away, its
