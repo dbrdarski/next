@@ -908,11 +908,26 @@ mod phase3 {
     }
 
     #[test]
-    #[ignore = "DIVERGES verdicts need a fuel-limited harness (staged); M-04 activates with it"]
     fn m04_diverging_outer_publishes_nothing() {
-        // Expected: outer mutator diverges after inner completed → DIVERGES; σ
-        // unchanged — never-completed publishes nothing.
-        unreachable!("fuel harness pending");
+        // The outer mutator diverges after the inner completed: the inner's write
+        // joined the outer transaction, the outer never completes, so nothing
+        // publishes — DIVERGES with σ unchanged (zero commits).
+        let src = "
+            @state x = 0
+            spin = (n) => spin(n)
+            @mutate inner = () => { x := 1 }
+            @mutate outer = () => {
+             inner()
+             spin(0)
+            }
+            outer()
+        ";
+        match next::oracle::run_program_bounded(src, 10_000) {
+            next::oracle::BoundedRun::Diverged { commits } => {
+                assert_eq!(commits, 0, "a never-completed mutator publishes nothing");
+            }
+            other => panic!("expected DIVERGES, got {other:?}"),
+        }
     }
 
     #[test]

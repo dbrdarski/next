@@ -445,7 +445,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **447 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **127 passed, 0 failed, 7 ignored** (Phase GR live; module linking released P-27b + MOD-03/04/05) |
+| `cargo test --test conformance` | **128 passed, 0 failed, 6 ignored** (module linking + M-04 released; six broad Phase A rows remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

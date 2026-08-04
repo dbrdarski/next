@@ -4872,3 +4872,16 @@ targets only; dotted module names parse and join with `.`.
 **Verification:** 447 lib passed / 1 ignored; 127 conformance passed / 7 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-04 — The bounded run harness: M-04 DIVERGES released
+
+**Built (T3.5):** `oracle::run_program_bounded(src, fuel) → Completed | Trapped | Diverged` — the
+whole-program fuel harness over the existing `new_fueled`/`out_of_fuel` machinery. Divergence is
+the machine-limit reading of exhaustion (Part A's trap clause): a harness verdict for the suite,
+never a semantic one, and fuel stays out of every normative path. `commits` rides along so M-04's
+σ-unchanged claim is directly observable: the outer mutator diverges after the inner completed, the
+inner's write joined the outer transaction, nothing ever publishes — DIVERGES with zero commits.
+Conformance ignores drop 7 → 6 (the six broad Phase A rows only). **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 128 conformance passed / 6 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

@@ -73,6 +73,46 @@ pub fn eval_expr_bounded(expr: &Expr, fuel: u64, interner: &mut Interner) -> Bou
     }
 }
 
+/// A fuel-bounded whole-program run (the M-04 harness verdict). `Diverged` is the
+/// **machine-limit** reading of fuel exhaustion (Part A's trap clause — a harness
+/// verdict, never a semantic one; fuel stays out of all normative analysis).
+/// `commits` counts actual slot publishes, so the row's σ-unchanged claim — a
+/// never-completed outer mutator publishes nothing, its joined inner included — is
+/// directly observable.
+#[derive(Debug)]
+pub enum BoundedRun {
+    Completed { value: ValueRef, commits: usize },
+    Trapped(Trap),
+    Diverged { commits: usize },
+}
+
+/// Run an entry program under a `fuel`-step bound (the test-suite's DIVERGES
+/// harness — T3.5). Panics on front-end errors; test-only by design.
+pub fn run_program_bounded(src: &str, fuel: u64) -> BoundedRun {
+    use crate::desugar::Desugarer;
+    use crate::lex::lex;
+    use crate::parse::parse_program;
+
+    let mut interner = Interner::new();
+    let toks = lex(src).expect("lex ok");
+    let sprogram = parse_program(toks).expect("parse ok");
+    let module = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .expect("desugar ok");
+
+    let env = super::harness::prelude_env(&mut interner);
+    let mut oracle = Oracle::new_fueled(&mut interner, fuel);
+    let result = oracle.run_module_in(&module, &env);
+    let commits = oracle.store.commits;
+    if oracle.out_of_fuel {
+        return BoundedRun::Diverged { commits };
+    }
+    match result {
+        Ok(value) => BoundedRun::Completed { value, commits },
+        Err(trap) => BoundedRun::Trapped(trap),
+    }
+}
+
 /// Like [`run_program_value`], but also returns the number of *actual* slot
 /// commits — test-observable evidence of the interning-exact equality guard.
 pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
