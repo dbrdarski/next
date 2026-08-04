@@ -200,15 +200,37 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
         return false;
     }
     match point_value(base) {
-        // Point base `b`: grid-aligned only for the clean single unit step over `≥ b`.
-        // A wider or non-unit step may straddle the point (specimen 12) — deferred.
+        // Point base `b` — GR-18's grid: when every step is the same constant `−d`,
+        // the forced chain from any admitted start stays on the lattice `b + d·k`, so
+        // it lands exactly when the whole domain sits on that lattice at or above `b`
+        // (`6 → 4 → 2 → 0` lands; `5 → 3 → 1 → −1` is the drift-away's business,
+        // specimen 12). The unit step is the `d = 1` case. Mixed step sizes may
+        // straddle the point and stay out.
         Some(b) => {
-            drifts.len() == 1
-                && drifts[0] == Rational::from(-1)
-                && matches!(
-                    subcontract(domain, &Contract::GreaterEq(b), interner),
-                    Sub::Proven
-                )
+            let Some(first) = drifts.first() else {
+                return false;
+            };
+            if !drifts.iter().all(|d| d == first) || !b.is_integer() {
+                return false;
+            }
+            let step = -first.clone();
+            if !step.is_integer() {
+                return false;
+            }
+            let above = matches!(
+                subcontract(domain, &Contract::GreaterEq(b.clone()), interner),
+                Sub::Proven
+            );
+            let n = step.as_ratio().numer().clone();
+            let r = {
+                let base_n = b.as_ratio().numer().clone();
+                ((base_n % &n) + &n) % &n
+            };
+            let aligned = matches!(
+                subcontract(domain, &Contract::Mod { n, r }, interner),
+                Sub::Proven
+            );
+            above && aligned
         }
         // Downward half-line base (`k <= b`): a strictly-decreasing integer chain must
         // eventually enter it, from any start (structural landing).
@@ -271,7 +293,8 @@ pub(crate) fn derived_orbit_domain(
         .max()
         .expect("at least one drift");
     let floor = match point_value(base) {
-        // `lands` admits a point base only for the single unit step: grid-exact.
+        // `lands` admits a point base only when the chain is grid-aligned with it, so
+        // the chain stops exactly on `b`.
         Some(b) => b,
         None => match base {
             Contract::LessEq(c) | Contract::Less(c) => c.clone() - max_step,
@@ -1333,16 +1356,17 @@ mod tests {
     }
 
     #[test]
-    fn even_witness_of_the_same_function_is_not_refuted() {
-        // From 2 the lattice 2, 0, … *hits* the base 0 → terminates → not refuted (and the
-        // non-unit descent isn't proved either) → Unproven. Same function, opposite fate by
-        // witness parity.
+    fn even_witness_of_the_same_function_grounds_on_the_grid() {
+        // From 2 the lattice 2, 0 *hits* the base 0 → terminates. Pre-grid this was the
+        // conservative Unproven; GR-18's grid now proves it (2 ≡ 0 mod 2, at or above
+        // the base). Same function, opposite fate by witness parity — and never, in
+        // either era, a refutation.
         let mut i = Interner::new();
         let step2 = f("f = (n) => n == 0 ? 0 : f(n - 2)\nf", &mut i);
         let two = Contract::Equals(i.integer(2));
         assert_eq!(
             ground(&step2, &two, &ContractEnv::new(), &mut i),
-            Verdict::Unproven
+            Verdict::Grounded
         );
     }
 

@@ -1294,3 +1294,154 @@ mod phase_a {
         unreachable!("verification awaits the remaining recursion arc");
     }
 }
+
+// ── Phase GR — grounding verdicts under the stamped Principle 9 ─────────────────
+//
+// First measured batch (suite spec Phase GR; specimen numbers from
+// `next-grounding-specification-v0-5.md` §15). Under the stamp [user, 2026-08-03]
+// unproven termination is an error, so every "unproven" specimen is a rejection row.
+mod phase_gr {
+    use super::*;
+
+    /// GR-05 / specimen 9: constant unit drift with landing — proven. The concrete
+    /// call needs no contracts: the derived orbit envelope closes it.
+    #[test]
+    fn gr05_unit_descent_grounds_bare_and_declared() {
+        let bare =
+            check_source("countDown = (n) => n == 0 ? 0 : countDown(n - 1)\nx = countDown(5)\n")
+                .expect("parses and checks")
+                .0;
+        assert!(bare.accepted(), "the orbit envelope closes it: {bare:#?}");
+
+        let declared = check_source(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\n\
+             countDown where (Nat) => Number\n\
+             countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n\
+             x = countDown(5)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            declared.accepted(),
+            "coverage resolves the call: {declared:#?}"
+        );
+    }
+
+    /// GR-18: the step-2 grid — an aligned start lands (6 → 4 → 2 → 0); a misaligned
+    /// start misses the base forever and stays rejected.
+    #[test]
+    fn gr18_point_base_grid() {
+        let aligned = check_source("f = (n) => n == 0 ? 0 : f(n - 2)\nx = f(6)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            aligned.accepted(),
+            "6 sits on the base's lattice: {aligned:#?}"
+        );
+
+        let misaligned = check_source("f = (n) => n == 0 ? 0 : f(n - 2)\nx = f(5)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            !misaligned.accepted(),
+            "5 misses the base forever: {misaligned:#?}"
+        );
+    }
+
+    /// GR-11 (period-1) and GR-23a's ascending mirror: refuted with the written start
+    /// as witness — including divergence hidden behind a helper.
+    #[test]
+    fn gr11_gr23a_refutations() {
+        let period1 = check_source("loop = (n) => loop(n)\nx = loop(1)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            !period1.accepted(),
+            "the period-1 orbit refutes: {period1:#?}"
+        );
+
+        let ascending = check_source("up = (n) => n == 0 ? 0 : up(n + 1)\nx = up(5)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            !ascending.accepted(),
+            "drift away from the base refutes: {ascending:#?}"
+        );
+
+        let transitive = check_source("g = (m) => g(m)\nf = (n) => g(n)\nx = f(1)\n")
+            .expect("parses and checks")
+            .0;
+        assert!(
+            !transitive.accepted(),
+            "a helper does not hide divergence: {transitive:#?}"
+        );
+    }
+
+    /// GR-04 / specimen 6: collatz admits no candidate — honestly unproven, and under
+    /// the stamp unproven termination is an error.
+    #[test]
+    fn gr04_collatz_unproven_rejects() {
+        let collatz = check_source(
+            "collatz = (n) => n == 1 ? 1 : (n % 2 == 0 ? collatz(n / 2) : collatz(3 * n + 1))\n\
+             x = collatz(27)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !collatz.accepted(),
+            "no candidate source — unproven rejects: {collatz:#?}"
+        );
+    }
+
+    /// GR-15a/16: the program-expressed compound measure `2a + b` grounds the
+    /// two-parameter recursion, and the concrete call resolves through the declared
+    /// fact by coverage.
+    #[test]
+    fn gr15a_compound_measure_grounds() {
+        let pair = check_source(
+            "f where (Number, Number) => Number\n\
+             f = (a, b) => 2 * a + b <= 0 ? 0 : f(a - 1, b + 1)\n\
+             x = f(5, 0)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            pair.accepted(),
+            "the compound measure descends and lands: {pair:#?}"
+        );
+    }
+
+    /// Specimen 2: factorial over its natural domain — safety, return, termination,
+    /// and the concrete call all compose.
+    #[test]
+    fn gr02_factorial_composes() {
+        let fact = check_source(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\n\
+             fact where (Nat) => Number\n\
+             fact = (n) => n == 0 ? 1 : n * fact(n - 1)\n\
+             x = fact(5)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(fact.accepted(), "the whole pipeline composes: {fact:#?}");
+    }
+
+    /// GR-07 (mutual): honestly unproven today, so it rejects — the orbit derivation
+    /// reads self-calls only, and mutual return induction across the group (the owed
+    /// domain-indexed SCC induction across functions) is not yet implemented. Flip
+    /// this row's expectation when that lands.
+    #[test]
+    fn gr07_mutual_pair_is_honestly_unproven_today() {
+        let mutual = check_source(
+            "isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
+             isOdd = (n) => n <= 0 ? false : isEven(n - 1)\n\
+             x = isEven(4)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !mutual.accepted(),
+            "unproven rejects until mutual induction lands: {mutual:#?}"
+        );
+    }
+}

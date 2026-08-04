@@ -1003,6 +1003,38 @@ mod tests {
         );
     }
 
+    /// GR-18's grid: a constant step of −2 lands exactly when the start sits on the
+    /// base's lattice — `6 → 4 → 2 → 0` lands and accepts; `5 → 3 → 1 → −1 …` misses
+    /// forever and keeps its refutation; a declared broad domain grounds through the
+    /// same divisibility question.
+    #[test]
+    fn a_non_unit_step_lands_on_its_grid() {
+        let (aligned, _) = check("f = (n) => n == 0 ? 0 : f(n - 2)\nx = f(6)\n");
+        assert!(
+            aligned.accepted(),
+            "6 is on the base's step-2 lattice: {:#?}",
+            aligned.findings
+        );
+
+        let (misaligned, _) = check("f = (n) => n == 0 ? 0 : f(n - 2)\nx = f(5)\n");
+        assert!(
+            !misaligned.accepted(),
+            "5 misses the base forever and must stay rejected: {:#?}",
+            misaligned.findings
+        );
+
+        let (declared, _) = check(
+            "Ev = Intersection(GreaterEq(0), Mod(2, 0))\n\
+             f where (Ev) => Number\n\
+             f = (n) => n == 0 ? 0 : f(n - 2)\n",
+        );
+        assert!(
+            declared.accepted(),
+            "the declared lattice grounds through the same grid: {:#?}",
+            declared.findings
+        );
+    }
+
     /// [author, 2026-08-03] **The drift is what closes** — a concrete call to a
     /// terminating recursion needs no contracts. At the shape-repeat stop the checker
     /// reads the drift (5 → 4 = −1), the certificate derives the orbit envelope

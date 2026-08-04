@@ -4713,3 +4713,40 @@ honest judgment stands. Termination at the seat rides the existing measure certi
 **Verification:** 443 lib passed / 1 ignored; 115 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-04 — Termination coverage begins: GR-18's point-base grid, and Phase GR exists
+
+**Directed [user, 2026-08-03: "what about the termination, isn't that next?"]:** termination
+coverage is the next block — every gap is now a rejection under the stamp, so proving power is
+what determines which terminating programs compile.
+
+**Measured red before implementation:** `f = (n) => n == 0 ? 0 : f(n - 2)` with `x = f(6)` —
+6 → 4 → 2 → 0 lands on the base — rejected: `lands` admitted a point base only for the single unit
+step. The misaligned start `f(5)` (5 → 3 → 1 → −1 …) correctly rejected and had to stay rejected.
+
+**Built — GR-18's grid in `lands`:** when every step is the same constant `−d`, the forced chain
+stays on the lattice `base + d·k`, so landing is a divisibility question: the domain must sit at or
+above the base **and** inside `Mod(d, base mod d)`. The unit step is the `d = 1` case; mixed step
+sizes may straddle the point and stay out (specimen 12's parity split is untouched: the odd start
+still refutes by drift-away, and the even start of the same function now **grounds** — its lib test
+re-expected from the pre-grid conservative Unproven to the true verdict, its
+never-a-refutation purpose intact). The derived orbit envelope composes unchanged
+(`f(6)` → `Range(0,6) ∧ Mod(2,0)`), so the aligned concrete call closes end-to-end with no
+contracts.
+
+**Phase GR exists:** the suite's Phase GR register had zero tests; the first measured batch is
+seven conformance rows over the built certificates — GR-05 (bare + declared unit descent), GR-18
+(grid pair), GR-11/GR-23a (period-1, ascending, helper-hidden refutations), GR-04 (collatz
+unproven → rejects under the stamp), GR-15a/16 (the `2a + b` compound measure with coverage
+resolution), specimen 2 (factorial composing end-to-end), and GR-07 recorded honestly: the bare
+mutual pair **rejects today** — the orbit derivation reads self-calls only, and mutual return
+induction across the group (the owed domain-indexed SCC induction across functions) is
+unimplemented; the row's expectation flips when that lands. Measured this session and worth
+recording: the *declared* mutual pair fails too — `where isEven`/`where isOdd` over Nat cannot
+prove their returns through the mutual cycle, the same owed item from the C§17 list. That, and the
+GR-24 WorldDecided classifier (until it lands, every effect-world polling loop rejects under the
+stamp), are the next two termination slices. **`// [ask-author]`: none.**
+
+**Verification:** 444 lib passed / 1 ignored; 122 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.
