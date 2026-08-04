@@ -445,7 +445,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **447 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **137 passed, 0 failed, 6 ignored** (gcd released via §5 rows + modulo descent; 6 pins remain) |
+| `cargo test --test conformance` | **138 passed, 0 failed, 5 ignored** (threading lattices released; 3 hard certificates + 2 Part-D gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

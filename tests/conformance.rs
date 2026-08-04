@@ -1584,8 +1584,11 @@ mod phase_a {
         assert!(v.accepted(), "{:#?}", v.findings);
     }
 
+    /// Grid 7's different-bases variant, released: the threading lattices — after k
+    /// unit hops the state is (member_k, n − k), so each member's admitted starts sit
+    /// on a parity lattice anchored at an exit; off both lattices the recursion
+    /// threads between the bases forever and rejects.
     #[test]
-    #[ignore = "A-WRK pin: grid 7's different-bases variant (0⇒true / 1⇒true) awaits the per-exit parity grids — the threading example derives isEven: GE(0) ∧ Mod(2,0), isOdd: GE(1) ∧ Mod(2,1)"]
     fn a_wrk_threading_variant() {
         const PAIR: &str = "isEven = (n) => n :: {\n 0 => true\n _ => isOdd(n - 1)\n}\n\
             isOdd = (n) => n :: {\n 1 => true\n _ => isEven(n - 1)\n}\n";

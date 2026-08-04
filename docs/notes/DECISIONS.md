@@ -5091,3 +5091,24 @@ termination. Register: 137 passed / 6 pins (3 A-NEG certs · threading grids · 
 
 **Verification:** 447 lib passed / 1 ignored; 137 conformance passed / 6 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The threading lattices: grid 7's different-bases pair compiles
+
+**Built:** the group orbit's point-base arm now handles two recursive members with **different**
+base values on unit hops — grid 7's own derivation implemented as written. After `k` hops the state
+is `(member_k, n − k)`, so each member's admitted starts sit on a parity lattice anchored at an
+exit: wholly on the callee's own lattice (`n ≡ b_self (mod 2)`, `n ≥ b_self`) it exits through its
+own base; wholly on the partner-parity lattice through the partner's. The per-member envelope is
+that lattice bounded by the start — and the congruence transfer threads it across the hop
+(`Mod(2,0) − 1 = Mod(2,1)`), so the partner's node lands exactly on *its* lattice and the joint
+induction closes. Off both lattices the recursion threads between the bases forever: no envelope,
+honest cutoff, and the seat rejects — `isEven(3)` names precisely the grid's expected error. The
+grid's derived contracts (`isEven: GE(0) ∧ Mod(2,0)`, `isOdd: GE(1) ∧ Mod(2,1)`) fall out as the
+lattices themselves. `group_orbit_domain` now takes the callee (whose base anchors "self").
+
+**Released:** `a_wrk_threading_variant`. Register: 138 passed / 5 pins — 3 A-NEG certificates
+(collatz-Pow2 · McCarthy 91 · Ackermann, each a genuine grounding-theory piece) + the 2 Part-D
+adoption gates (the author's). **`// [ask-author]`: none.**
+
+**Verification:** 447 lib passed / 1 ignored; 138 conformance passed / 5 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

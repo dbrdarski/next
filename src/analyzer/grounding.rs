@@ -145,7 +145,7 @@ pub fn ground(
         if group
             .iter()
             .any(|g| g != callee && callee_targets(g).contains(callee))
-            && group_orbit_domain(&group, domain, interner).is_some()
+            && group_orbit_domain(callee, &group, domain, interner).is_some()
         {
             return Verdict::Grounded;
         }
@@ -274,7 +274,7 @@ pub(crate) fn derived_orbit_domain(
         .iter()
         .any(|g| g != callee && callee_targets(g).contains(callee))
     {
-        return group_orbit_domain(&group, start, interner);
+        return group_orbit_domain(callee, &group, start, interner);
     }
 
     // `lands` requires the start on the integer lattice; the envelope handles point
@@ -377,6 +377,7 @@ fn envelope(
 /// Half-line bases only in v1 — a point base's grid alignment across members is the
 /// parity ping-pong, deferred. The derivation proposes; the joint induction proves.
 fn group_orbit_domain(
+    callee: &ValueRef,
     group: &[ValueRef],
     start: &Contract,
     interner: &mut Interner,
@@ -384,6 +385,8 @@ fn group_orbit_domain(
     let mut steps: Vec<Rational> = Vec::new();
     let mut half_line_boundaries: Vec<Rational> = Vec::new();
     let mut point_bases: Vec<Rational> = Vec::new();
+    let mut callee_point_base: Option<Rational> = None;
+    let mut partner_point_base: Option<Rational> = None;
     for f in group {
         let closure = f.as_closure()?;
         let param = single_param(&closure.lambda.params)?;
@@ -429,7 +432,13 @@ fn group_orbit_domain(
             half_line_boundaries.push(b);
         } else {
             // A recursive member with no readable stop derives nothing.
-            point_bases.push(member_points.into_iter().min()?);
+            let b = member_points.into_iter().min()?;
+            if f == callee {
+                callee_point_base = Some(b.clone());
+            } else {
+                partner_point_base = Some(b.clone());
+            }
+            point_bases.push(b);
         }
     }
     if steps.is_empty() {
@@ -450,6 +459,60 @@ fn group_orbit_domain(
             }
             let first = point_bases[0].clone();
             if !point_bases.iter().all(|b| *b == first) {
+                // **The threading lattices** (grid 7's different-bases pair): with two
+                // recursive members on unit hops, after `k` hops the state is
+                // `(member_k, n − k)`, so an exit needs `n − k = b_target` with the
+                // hop parity selecting the member. A start wholly on the callee's own
+                // lattice (`n ≡ b_self (mod 2)`, `n ≥ b_self`) exits through its own
+                // base; wholly on the partner-parity lattice
+                // (`n ≡ b_other + 1 (mod 2)`, `n ≥ b_other + 1`) through the
+                // partner's. Either way the member's visited values stay on that
+                // lattice down to its floor — the per-member envelope. Off both
+                // lattices the recursion threads between the bases forever
+                // (`isEven(3)`), and no envelope exists.
+                if point_bases.len() != 2 {
+                    return None;
+                }
+                let (b_self, b_other) = (callee_point_base?, partner_point_base?);
+                if !b_self.is_integer() || !b_other.is_integer() {
+                    return None;
+                }
+                let hi = upper_bound(start)?;
+                let two = BigInt::from(2);
+                let lattice = |anchor: &Rational, interner: &mut Interner| {
+                    let r = {
+                        let n = anchor.as_ratio().numer().clone();
+                        ((n % &two) + &two) % &two
+                    };
+                    Contract::intersection(
+                        Contract::GreaterEq(anchor.clone()),
+                        Contract::Mod { n: two.clone(), r },
+                        interner,
+                    )
+                };
+                let own = lattice(&b_self, interner);
+                if matches!(subcontract(start, &own, interner), Sub::Proven) {
+                    return Some(Contract::intersection(
+                        Contract::Range(b_self, hi),
+                        match own {
+                            Contract::Intersection(_, m) => (*m).clone(),
+                            _ => unreachable!("built as an intersection"),
+                        },
+                        interner,
+                    ));
+                }
+                let partner_entry = b_other.clone() + Rational::from(1);
+                let partner = lattice(&partner_entry, interner);
+                if matches!(subcontract(start, &partner, interner), Sub::Proven) {
+                    return Some(Contract::intersection(
+                        Contract::Range(partner_entry, hi),
+                        match partner {
+                            Contract::Intersection(_, m) => (*m).clone(),
+                            _ => unreachable!("built as an intersection"),
+                        },
+                        interner,
+                    ));
+                }
                 return None;
             }
             // A point base is entered only from at-or-above on the integer lattice:
