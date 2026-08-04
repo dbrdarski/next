@@ -1003,6 +1003,39 @@ mod tests {
         );
     }
 
+    /// A half-line guard's remainder tightens like a point guard's: `n ∈ Nat` minus
+    /// `n <= 0` is `n ≥ 1`, so `n − 1` lands back inside the declared domain. This was
+    /// F0's recorded "non-singleton exclusion dropped" gap, and it blocked every
+    /// `<=`-guarded recursion — including all mutual pairs, whose bases idiomatically
+    /// read `n <= 0`.
+    #[test]
+    fn a_half_line_guard_remainder_tightens() {
+        let (le, _) = check(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\n\
+             f where (Nat) => Number\n\
+             f = (n) => n <= 0 ? 0 : f(n - 1)\n",
+        );
+        assert!(
+            le.accepted(),
+            "the `<=` remainder lands the step back inside the domain: {:#?}",
+            le.findings
+        );
+
+        let (mutual, _) = check(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\n\
+             isEven where (Nat) => Boolean\n\
+             isOdd where (Nat) => Boolean\n\
+             isEven = (n) => n <= 0 ? true : isOdd(n - 1)\n\
+             isOdd = (n) => n <= 0 ? false : isEven(n - 1)\n\
+             x = isEven(4)\n",
+        );
+        assert!(
+            mutual.accepted(),
+            "the declared mutual pair closes jointly and covers the call: {:#?}",
+            mutual.findings
+        );
+    }
+
     /// GR-18's grid: a constant step of −2 lands exactly when the start sits on the
     /// base's lattice — `6 → 4 → 2 → 0` lands and accepts; `5 → 3 → 1 → −1 …` misses
     /// forever and keeps its refutation; a declared broad domain grounds through the

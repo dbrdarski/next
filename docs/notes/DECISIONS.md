@@ -4750,3 +4750,30 @@ stamp), are the next two termination slices. **`// [ask-author]`: none.**
 **Verification:** 444 lib passed / 1 ignored; 122 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-04 — The mutual blocker was one abstraction gap: half-line exclusions now tighten
+
+**Measured before implementation:** the declared mutual pair (`isEven`/`isOdd where (Nat) =>
+Boolean`) failed both safety and returns — and so did the *single-function* countdown the moment its
+guard was spelled `n <= 0` instead of `n == 0`. Not a mutual-machinery gap at all: F0's module doc
+records "`Difference` with a non-singleton exclusion — the exclusion is dropped", so the `<=`
+guard's remainder `Nat ∖ LessEq(0)` never tightened to `≥ 1`, `n − 1` escaped to `≥ −1`, and no
+hypothesis covered the recursive edge. The `n == 0` spelling worked only because the point-exclusion
+endpoint bump existed.
+
+**Built — half-line exclusions in `num_abs`'s `Difference` arm:** whatever survives `∖ {x ≤ c}` is
+`> c` (and dually for `<`, `≥`, `>`), so the abstraction meets the complement half-line —
+unconditionally sound, no endpoint condition. The existing `snap_to_lattice` then turns `> 0` into
+`≥ 1` on an integer lattice, exactly as the point case does. One arm extended; no new machinery.
+
+**What it unlocked, measured:** the `<=`-guarded countdown declaration proves; the declared mutual
+pair proves **jointly** (safety and returns through the existing vector pass — the "mutual return
+induction" I had reported as unimplemented was implemented all along, starved of a tight enough
+domain) and the concrete call `isEven(4)` resolves through the published facts by coverage. The
+bare mutual pair stays honestly rejected (no declared facts; the orbit derivation reads self-calls
+only) — the GR-07 conformance row's reject-today expectation holds unchanged, its flip now waiting
+only on a mutual orbit derivation, not on induction. Zero suite flips. **`// [ask-author]`: none.**
+
+**Verification:** 445 lib passed / 1 ignored; 122 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.

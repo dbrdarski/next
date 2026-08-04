@@ -310,6 +310,34 @@ pub(crate) fn num_abs(c: &Contract) -> Option<NumAbs> {
                     x.iv.high = Bound::Excl(q);
                 }
             }
+            // A **half-line exclusion** bounds the remainder outright: whatever
+            // survives `∖ {x ≤ c}` is `> c` (and dually), so the abstraction meets the
+            // complement half-line — unconditionally sound, no endpoint condition
+            // needed. `snap_to_lattice` then turns `> 0` into `≥ 1` on an integer
+            // lattice: the `n <= 0` guard's remainder landing `n - 1` back inside its
+            // domain, exactly as the point guard's does.
+            let complement = match &**b {
+                Contract::LessEq(c) => Some(Interval {
+                    low: Bound::Excl(c.clone()),
+                    high: Bound::Unbounded,
+                }),
+                Contract::Less(c) => Some(Interval {
+                    low: Bound::Incl(c.clone()),
+                    high: Bound::Unbounded,
+                }),
+                Contract::GreaterEq(c) => Some(Interval {
+                    low: Bound::Unbounded,
+                    high: Bound::Excl(c.clone()),
+                }),
+                Contract::Greater(c) => Some(Interval {
+                    low: Bound::Unbounded,
+                    high: Bound::Incl(c.clone()),
+                }),
+                _ => None,
+            };
+            if let Some(complement) = complement {
+                x.iv = meet(x.iv, complement);
+            }
             snap_to_lattice(x)
         }
         _ => return None,
