@@ -3430,4 +3430,45 @@ mod region_instantiation {
         assert!(!rows[0].exact);
         assert_eq!(rows[0].region, Contract::Top);
     }
+
+    /// The projection-through-intersection repair (Tier 5, measured): `intersect_a`
+    /// of a point record against a record-pattern contract is a `Leaf(Intersection)`,
+    /// and field projection must see through it — either side's projection is sound;
+    /// the informative side wins. Before the arm, `v` bound `Top` and `v + 1` raised
+    /// a false unproven-Add at the partition seat.
+    #[test]
+    fn leaf_intersection_projects_fields_and_indices() {
+        let mut i = Interner::new();
+        let rec = run_source_in("r = {value: 4, next: null}\nr", &mut i)
+            .unwrap()
+            .0;
+        let pat_c = Contract::Record(vec![
+            ("value".to_string(), i.contract(Contract::Top)),
+            ("next".to_string(), i.contract(Contract::Top)),
+        ]);
+        let leaf = AnalysisContract::of_contract(Contract::intersection(
+            Contract::Equals(rec),
+            pat_c,
+            &mut i,
+        ));
+        let v = leaf.project_field("value").expect("projects through ∩");
+        let four = i.integer(4);
+        assert!(
+            matches!(&v, AnalysisContract::Leaf { contract: Contract::Equals(p), .. } if *p == four),
+            "the point side is the informative projection: {v:?}"
+        );
+
+        let tup = run_source_in("t = [7, 8]\nt", &mut i).unwrap().0;
+        let tleaf = AnalysisContract::of_contract(Contract::intersection(
+            Contract::Equals(tup),
+            Contract::Kind(crate::contract::Kind::Tuple),
+            &mut i,
+        ));
+        let e = tleaf.project_index(1).expect("projects through ∩");
+        let eight = i.integer(8);
+        assert!(
+            matches!(&e, AnalysisContract::Leaf { contract: Contract::Equals(p), .. } if *p == eight),
+            "{e:?}"
+        );
+    }
 }

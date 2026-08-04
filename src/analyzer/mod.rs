@@ -2112,7 +2112,11 @@ pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut
 
 /// Annotated pattern binding. Structural tuple/record positions and correlated
 /// alternatives survive into the bound names; an untracked position widens to Top.
-fn bind_pattern_annotated(pat: &crate::ast::Pat, narrowed: &AnalysisContract, env: &mut TypeEnv) {
+pub(crate) fn bind_pattern_annotated(
+    pat: &crate::ast::Pat,
+    narrowed: &AnalysisContract,
+    env: &mut TypeEnv,
+) {
     use crate::ast::{Pat, PatElem, PatField};
     match pat {
         Pat::Bind(name) => {

@@ -26,6 +26,12 @@ use crate::rational::Rational;
 /// A region-table row (§1): where an input may go, its exactness, and the arm's result.
 #[derive(Clone, Debug)]
 pub struct Row {
+    /// The arm's pattern with whether it regionalizes the parameter (the scrutinee
+    /// *is* the parameter). Carried so partition consumers can bind the pattern's
+    /// **field binders** into row environments (E9: the pattern binds, then the
+    /// guard and result evaluate) — against the arriving region when on-param,
+    /// against `Top` (sound coarse) otherwise.
+    pub pattern: Option<(Pat, bool)>,
     /// The forward-read region over the parameter (pattern ∩ guard).
     pub region: Contract,
     /// `true` iff every contributing leaf is exact — only exact rows consume (§3).
@@ -61,6 +67,8 @@ pub struct GuardSeat {
 /// is at most unproven.
 #[derive(Clone, Debug)]
 pub struct Selected {
+    /// See [`Row::pattern`] — carried through selection for env binding.
+    pub pattern: Option<(Pat, bool)>,
     pub region: Contract,
     pub exact: bool,
     pub result: Expr,
@@ -224,6 +232,7 @@ pub fn region_table_in(
             region_rows(m, param, caps, cenv, i)
         }
         other => vec![Row {
+            pattern: None,
             binder: None,
             region: Contract::Top,
             exact: true,
@@ -266,6 +275,7 @@ fn region_rows(
             None => (Contract::Top, true),
         };
         rows.push(Row {
+            pattern: arm.pattern.as_ref().map(|p| (p.clone(), patterns_on_param)),
             region: intersect(pr.clone(), gr, i),
             exact: pe && ge,
             result: arm.result.clone(),
@@ -362,6 +372,7 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
         for row in table {
             if row.region.contains(v) {
                 out.push(Selected {
+                    pattern: row.pattern.clone(),
                     binder: row.binder.clone(),
                     region: Contract::Equals(v.clone()),
                     exact: row.exact,
@@ -383,6 +394,7 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
     walk_rows(table, arg_domain, i, |_, v| {
         if !v.empty {
             out.push(Selected {
+                pattern: v.row.pattern.clone(),
                 binder: v.row.binder.clone(),
                 region: v.candidate,
                 exact: v.row.exact,

@@ -389,6 +389,22 @@ already gone (induction role live); `accepted_domain` kept — live argument-obl
 interim group domains (replacement v0.8.1 §5 unbuilt; the plan's deletion gate forbids).
 Detail in `DECISIONS.md` (2026-08-05).
 
+**Tier 5 opened (2026-08-05): the A-SND discharge battery is live** (conformance
+`tier5_discharge` — evidence, not proof; §13.5's supplement discipline). Five batteries +
+one recorded stub: layer (1) at family breadth (= the semantics theorem's executable
+face), §13.1–3 sampled certificate termination (zone/lex/multigraph grids), GR-23a witness
+validity (refutation witnesses diverge), layer (3) under the stamped uniform law (no
+call-seat gray class; rejected programs run trap-free; world-decided runner stubbed),
+recursive-contract membership vs the oracle; layer (2) was already
+`operation_soundness_sweep`. **Two defects caught on arrival:** the bounded runner wore
+the sampler's depth calibration (48) and called it divergence — it now runs on a dedicated
+256 MiB thread with its own allowance (4096), `Completed` carrying the canonical literal
+form; and record-pattern binders never bound in the partition paths (false
+UnboundEvaluation) — rows carry their pattern, both partition consumers bind per E9, and
+the projectors see through `Leaf(Intersection)` (sound either-side rule, no construction).
+Still owed: the γ-per-world battery, the world-decided runner, all paper-proof halves.
+Detail in `DECISIONS.md` (2026-08-05).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -606,8 +622,8 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **466 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **168 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
+| `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **173 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

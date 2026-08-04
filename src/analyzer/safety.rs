@@ -303,6 +303,22 @@ fn verify_by_partition(
         if let Some(alias) = &sel.binder {
             env.insert(alias.clone(), sel.region.clone());
         }
+        // E9: the pattern binds before the result evaluates. On-param patterns
+        // project the arriving region; off-param patterns bind their names at
+        // `Top` (sound coarse — narrower would be invented evidence).
+        match &sel.pattern {
+            Some((p, true)) => crate::analyzer::bind_pattern_annotated(
+                p,
+                &crate::analyzer::domain::AnalysisContract::of_contract(sel.region.clone()),
+                &mut env,
+            ),
+            Some((p, false)) => crate::analyzer::bind_pattern_annotated(
+                p,
+                &crate::analyzer::domain::AnalysisContract::of_contract(Contract::Top),
+                &mut env,
+            ),
+            None => {}
+        }
         let analysis = analyze_in_world(
             &sel.result,
             &env,
@@ -346,7 +362,20 @@ fn guard_demands(
         let mut env = base.clone();
         env.insert(param.to_string(), arrivals.clone());
         if let Some(alias) = &v.row.binder {
-            env.insert(alias.clone(), arrivals);
+            env.insert(alias.clone(), arrivals.clone());
+        }
+        match &v.row.pattern {
+            Some((p, true)) => crate::analyzer::bind_pattern_annotated(
+                p,
+                &crate::analyzer::domain::AnalysisContract::of_contract(arrivals),
+                &mut env,
+            ),
+            Some((p, false)) => crate::analyzer::bind_pattern_annotated(
+                p,
+                &crate::analyzer::domain::AnalysisContract::of_contract(Contract::Top),
+                &mut env,
+            ),
+            None => {}
         }
         let mut analysis = analyze_in_world(&seat.expr, &env, cenv, world_for_act(act), interner);
         crate::analyzer::check_tested_seat(&analysis.contract, &mut analysis.findings, interner);

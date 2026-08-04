@@ -275,6 +275,14 @@ impl AnalysisContract {
                     AnalysisContract::of_contract((**right).clone()),
                 ])
                 .project_index(index),
+                // A member of `A ∩ B` lies in both sides, so **either side's**
+                // projection alone is a sound over-approximation of the element —
+                // no construction needed (these projectors carry no interner).
+                // Prefer an informative side over a `Top` one.
+                Contract::Intersection(left, right) => pick_projection(
+                    AnalysisContract::of_contract((**left).clone()).project_index(index),
+                    AnalysisContract::of_contract((**right).clone()).project_index(index),
+                ),
                 _ => None,
             },
             AnalysisContract::Record(_) => None,
@@ -312,6 +320,11 @@ impl AnalysisContract {
                     AnalysisContract::of_contract((**right).clone()),
                 ])
                 .project_field(name),
+                // See `project_index`'s Intersection arm — either side is sound.
+                Contract::Intersection(left, right) => pick_projection(
+                    AnalysisContract::of_contract((**left).clone()).project_field(name),
+                    AnalysisContract::of_contract((**right).clone()).project_field(name),
+                ),
                 _ => None,
             },
             AnalysisContract::Tuple(_) => None,
@@ -499,6 +512,30 @@ pub fn gamma_contains(ac: &AnalysisContract, v: &ValueRef, interner: &mut Intern
 /// distribute); leaf∩leaf uses the coverage-normalized metadata meet; a mixed
 /// structural/leaf pair falls back to a leaf over the erased intersection (sound,
 /// coarse). No lower-bound or idempotence reasoning may rest on the result.
+/// Choose between two sound projections of the same element (see the
+/// `Intersection` arms of `project_index`/`project_field`): both over-approximate,
+/// so either may be returned — prefer one that carries information over a bare
+/// `Top` leaf.
+fn pick_projection(
+    a: Option<AnalysisContract>,
+    b: Option<AnalysisContract>,
+) -> Option<AnalysisContract> {
+    let top = |c: &AnalysisContract| {
+        matches!(
+            c,
+            AnalysisContract::Leaf {
+                contract: Contract::Top,
+                ..
+            }
+        )
+    };
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if top(&a) && !top(&b) { b } else { a }),
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
+}
+
 pub fn intersect_a(
     a: &AnalysisContract,
     b: &AnalysisContract,

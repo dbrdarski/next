@@ -5776,3 +5776,76 @@ every action is the completion plan's own list executed under its own safety rul
 **Verification:** 466 lib passed / 1 ignored; 168 conformance passed / 2 ignored; 10
 machinery gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK. Zero
 behavioral movement across all suites.
+
+## 2026-08-05 — Tier 5 opens: the A-SND discharge battery, and the two defects it caught on arrival
+
+**The executable face of C§16 lands as conformance `tier5_discharge`** — evidence, not
+proof: grounding §13.5's own words ("property testing supplements §16; it never replaces
+it") govern, and the paper-proof half of every obligation stays owed on the ledger. Five
+live batteries + one recorded stub:
+
+- **snd1** — layer (1) at family breadth, doubling as the **semantics theorem's**
+  executable face (*every evaluated reference is bound*): one accepted program per green
+  family (zone, joint lex, gcd, mutual multigraph, modulo descent, factory instance,
+  recursive-contract pattern with record binders, both pin flavors, graphemes + the
+  exactness flagship, `?.`/`??`, tuple rest) — analyzer accepts ⇒ bounded oracle completes,
+  zero traps, per class.
+- **snd_certificates** — §13.1–13.3 sampled: McCarthy across the zone's regions (below,
+  inside, above, fractional), Ackermann and gcd across grids — every Grounded call
+  completes.
+- **snd_gr23a** — §13.4's witness validity: the drift-away and closed-orbit refutation
+  witnesses are denotationally forced — the refuted calls diverge in the bounded oracle
+  (never complete, never trap).
+- **snd3** — layer (3) under the stamped law: Principle 9 binds recursion **uniformly** (a
+  statement-seat call of an unproven callee rejects — no call-seat gray class exists), and
+  the bounded oracle doubles as conservatism evidence: the rejected collatz/structural-sum
+  programs run trap-free (honest unproven voices, not suppressed traps). The one surviving
+  gray class — world-decided Effect recursion — is an `#[ignore]` stub with its expectation
+  recorded (the bounded runner installs no host effects yet).
+- **snd_recursive_contract_membership** — recursive-contract discharge sampled: oracle
+  match agrees with the E9 membership route on inside/boundary/outside values.
+- Layer (2) per-rule operation soundness was already discharged by
+  `operation_soundness_sweep` (all 13 PrimOps, three C§16 facets); μ obligations' evidence
+  = the μ package's own six tests + the layer-2 α-variant pins — named here, not
+  duplicated.
+
+**Defect 1 (the battery's first catch): `run_program_bounded` wore the sampler's
+calibration.** countDown(50) "Diverged" at 20M fuel — the T3.5 harness inherited
+`FUELED_MAX_CALL_DEPTH = 48` and reported depth exhaustion as divergence. The runner now
+executes on a dedicated 256 MiB thread with its own allowance (4096 ≈ 86 MiB at the
+measured 21 KiB/level — 3× margin), via `new_fueled_with_depth`; the sampler's 48 is
+untouched (its procedure-shape ruling stays open). `BoundedRun::Completed` now carries the
+value's **canonical literal form** (the total B2 renderer) across the thread — values are
+thread-local by design. `Diverged` is documented as what it is: resource exhaustion, never
+a semantic verdict.
+
+**Defect 2 (the battery's second catch): record-pattern binders never bound in the
+partition paths** — `{value: v, next: n} => v + sum(n)` raised **false UnboundEvaluation
+errors** at `v`/`n` (every earlier test's arm ignored its binders; the body walk binds
+them, the partition walk didn't). Rows now carry their pattern (`Row.pattern:
+Option<(Pat, bool)>` — the bool is on-param), selection propagates it, and both
+`verify_by_partition` and the guard walk bind it per E9 (pattern binds, then guard and
+result evaluate): against the arriving region when on-param, against `Top` (sound coarse)
+otherwise. The residue was a **projection gap**: `intersect_a(point-record, pattern-
+contract)` is a `Leaf(Intersection)` and the projectors had no Intersection arm → binders
+degraded to `Top` → false unproven-Add. `project_field`/`project_index` gain the sound
+arm — a member of `A ∩ B` lies in both sides, so either side's projection alone
+over-approximates; the informative side wins; **no construction** (the projectors carry no
+interner — a first draft with a throwaway interner was rejected for breaking the universal
+interning discipline before it ever built). Lib-pinned
+(`leaf_intersection_projects_fields_and_indices`).
+
+**Also measured, recorded as expected:** the recursive structural sum is
+grounding-unproven (structural descent is GR-10(3), **deferred by ruling**) — pinned as a
+snd3 reject, not "fixed". **`// [ask-author]`: none — the batteries implement §13's stated
+patterns; both defect fixes implement stated semantics (T3.5's resource verdict; E9's
+binding order).**
+
+**Still owed on the Tier-5 queue:** the application package's four γ obligations as a
+sampled joint-operand battery per world; the world-decided gray runner (host effects in
+the bounded runner); the paper-proof halves (§13.1–4, μ laws, the semantics theorem)
+— author-side or later sessions.
+
+**Verification:** 467 lib passed / 1 ignored (+1 projection pin); 173 conformance passed /
+3 ignored (+5 live batteries, +1 recorded stub); 10 machinery gates; clippy `-D warnings`
+clean; fmt clean; manifest 19/19 OK.

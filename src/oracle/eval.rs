@@ -81,14 +81,45 @@ pub fn eval_expr_bounded(expr: &Expr, fuel: u64, interner: &mut Interner) -> Bou
 /// directly observable.
 #[derive(Debug)]
 pub enum BoundedRun {
-    Completed { value: ValueRef, commits: usize },
+    /// Completed with a value, carried as its **canonical literal form** (the total
+    /// B2 renderer) — the runner executes on a dedicated big-stack thread, and the
+    /// printed form is what crosses it (values are thread-local by design).
+    Completed {
+        value: String,
+        commits: usize,
+    },
     Trapped(Trap),
-    Diverged { commits: usize },
+    Diverged {
+        commits: usize,
+    },
 }
 
+/// The bounded runner's recursion allowance, paired with [`BOUNDED_RUN_STACK`]:
+/// ≈21 KiB of interpreter stack per call level (measured 2026-08-04, debug build)
+/// × 4096 ≈ 86 MiB — a 3× margin under the 256 MiB dedicated thread stack. This is
+/// the **harness** calibration; the refutation sampler keeps its own far-lower cap
+/// ([`super::FUELED_MAX_CALL_DEPTH`]) on ordinary test threads.
+const BOUNDED_RUN_MAX_CALL_DEPTH: u32 = 4096;
+const BOUNDED_RUN_STACK: usize = 256 * 1024 * 1024;
+
 /// Run an entry program under a `fuel`-step bound (the test-suite's DIVERGES
-/// harness — T3.5). Panics on front-end errors; test-only by design.
+/// harness — T3.5). Panics on front-end errors; test-only by design. Runs on a
+/// dedicated big-stack thread so recursion depth up to
+/// [`BOUNDED_RUN_MAX_CALL_DEPTH`] is real evidence; `Diverged` means **resource
+/// exhaustion** (fuel or depth) — not completed, not trapped — never a semantic
+/// verdict.
 pub fn run_program_bounded(src: &str, fuel: u64) -> BoundedRun {
+    let src = src.to_string();
+    std::thread::Builder::new()
+        .name("bounded-oracle".into())
+        .stack_size(BOUNDED_RUN_STACK)
+        .spawn(move || run_program_bounded_here(&src, fuel))
+        .expect("spawn bounded-oracle thread")
+        .join()
+        .expect("bounded-oracle thread completes")
+}
+
+fn run_program_bounded_here(src: &str, fuel: u64) -> BoundedRun {
     use crate::desugar::Desugarer;
     use crate::lex::lex;
     use crate::parse::parse_program;
@@ -101,14 +132,17 @@ pub fn run_program_bounded(src: &str, fuel: u64) -> BoundedRun {
         .expect("desugar ok");
 
     let env = super::harness::prelude_env(&mut interner);
-    let mut oracle = Oracle::new_fueled(&mut interner, fuel);
+    let mut oracle = Oracle::new_fueled_with_depth(&mut interner, fuel, BOUNDED_RUN_MAX_CALL_DEPTH);
     let result = oracle.run_module_in(&module, &env);
     let commits = oracle.store.commits;
     if oracle.out_of_fuel {
         return BoundedRun::Diverged { commits };
     }
     match result {
-        Ok(value) => BoundedRun::Completed { value, commits },
+        Ok(value) => BoundedRun::Completed {
+            value: render_value(&value, false),
+            commits,
+        },
         Err(trap) => BoundedRun::Trapped(trap),
     }
 }

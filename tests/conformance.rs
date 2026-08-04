@@ -1818,6 +1818,267 @@ mod region_instantiation_multi {
     }
 }
 
+// TIER 5 — the C§16 discharge, executable face (A-SND v2). **Evidence, not proof**:
+// grounding §13.5 states "property testing supplements §16; it never replaces it" —
+// these batteries are the executable supplements, one per named obligation. The
+// paper-proof half of each obligation stays owed on the C§16 ledger.
+mod tier5_discharge {
+    use super::*;
+    use next::oracle::{BoundedRun, run_program_bounded};
+
+    const FUEL: u64 = 200_000;
+
+    /// The soundness harness's layer (1) at family breadth, and the executable face
+    /// of C§16's **semantics theorem** (*every evaluated reference is bound*): every
+    /// analyzer-accepted corpus program — one per green feature family — runs
+    /// trap-free in the bounded oracle; an `UnboundEvaluation` trap in particular
+    /// would refute the theorem's claim on the accepted subset.
+    #[test]
+    fn snd1_accepted_corpus_runs_trap_free_per_family() {
+        let corpus: &[&str] = &[
+            // zone certificate (GR-24/26): McCarthy 91 over the reals
+            "m where (Number) => Number
+m = (n) => n > 100 ? n - 10 : m(m(n + 11))
+x = m(0.5)
+x
+",
+            // joint lexicographic (GR-13/14): Ackermann, gcd
+            "ack = (m, n) => m == 0 ? n + 1 : (n == 0 ? ack(m - 1, 1) : ack(m - 1, ack(m, n - 1)))
+x = ack(2, 2)
+x
+",
+            "gcd = (a, b) => b == 0 ? a : gcd(b, a % b)
+x = gcd(48, 18)
+x
+",
+            // mutual recursion — the multigraph walk (GR-07)
+            "isEven = (n) => n <= 0 ? true : isOdd(n - 1)
+isOdd = (n) => n <= 0 ? false : isEven(n - 1)
+x = isEven(9)
+x
+",
+            // modulo descent + parity lattice
+            "f = (n) => n == 0 ? 0 : f(n - 2)
+x = f(10)
+x
+",
+            // factory instance at its seat (RT-09/C§12.3)
+            "makeCounter = (limit) => (n) => n <= limit ? n : limit
+c = makeCounter(5)
+x = c(3)
+x
+",
+            // recursive contract as runtime pattern + record-binder consumption
+            // (C§9/E9; the recursive sum itself is grounding-unproven — structural
+            // descent is GR-10(3), deferred — and is pinned as a reject in snd3)
+            "IntList = Union(Null, {value: Number, next: IntList})\nhead = (l) => l :: { Null => 0\n {value: v, next: n} => v + 1 }\nx = head({value: 4, next: null})\nx\n",
+            // pins, both flavors (RT-12/13)
+            "y = 5
+f = (x) => x :: { ^y => 1
+ _ => 2 }
+a = f(5)
+b = f(7)
+b
+",
+            // grapheme strings (E8) + exactness flagship (B2)
+            "s = \"héllo\"
+x = 0.1 + 0.2 == 0.3 ? 1 : 2
+x
+",
+            // ?? vs ~ || (the false-vs-null split) and ?. one-step totals
+            "r = {a: 1}
+v = r?.b ?? 9
+v
+",
+            // tuple patterns with rest (E9)
+            "p = [1, 2, 3, 4]
+[_, x, ...rest] = p
+x
+",
+        ];
+        for src in corpus {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(
+                v.accepted(),
+                "corpus member must be accepted: {src}
+{:#?}",
+                v.findings
+            );
+            match run_program_bounded(src, FUEL) {
+                BoundedRun::Trapped(t) => panic!(
+                    "an accepted program trapped ({:?}): {src}
+{t:?}",
+                    t.class
+                ),
+                BoundedRun::Diverged { .. } => {
+                    panic!("an accepted (grounded) corpus member must complete: {src}")
+                }
+                BoundedRun::Completed { .. } => {}
+            }
+        }
+    }
+
+    /// §13.1 (GR-12, evidence): the certificate families terminate **throughout a
+    /// sampled domain grid**, not just at one demo point — every analyzer-accepted
+    /// call completes in the bounded oracle. Zone (McCarthy: below, inside, above
+    /// and fractional), joint lex (Ackermann small grid; gcd including zero and
+    /// coprime pairs), and modulo descent.
+    #[test]
+    fn snd_certificates_terminate_across_sampled_domains() {
+        let mut cases: Vec<String> = Vec::new();
+        for n in ["-40", "0", "0.5", "87", "99.25", "111", "205"] {
+            cases.push(format!(
+                "m where (Number) => Number
+m = (n) => n > 100 ? n - 10 : m(m(n + 11))
+x = m({n})
+x
+"
+            ));
+        }
+        for (m, n) in [(0, 0), (1, 3), (2, 2), (3, 2)] {
+            cases.push(format!(
+                "ack = (m, n) => m == 0 ? n + 1 : (n == 0 ? ack(m - 1, 1) : ack(m - 1, ack(m, n - 1)))
+x = ack({m}, {n})
+x
+"
+            ));
+        }
+        for (a, b) in [(48, 18), (17, 5), (0, 4), (9, 0), (270, 192)] {
+            cases.push(format!(
+                "gcd = (a, b) => b == 0 ? a : gcd(b, a % b)
+x = gcd({a}, {b})
+x
+"
+            ));
+        }
+        for case in &cases {
+            let v = check_source(case).expect("parses and checks").0;
+            assert!(
+                v.accepted(),
+                "{case}
+{:#?}",
+                v.findings
+            );
+            assert!(
+                matches!(
+                    run_program_bounded(case, FUEL),
+                    BoundedRun::Completed { .. }
+                ),
+                "a Grounded call must complete: {case}"
+            );
+        }
+    }
+
+    /// §13.4 / GR-23a (witness validity, evidence): a termination **refutation's
+    /// witness is denotationally forced** — running the refuted call at its own
+    /// written argument diverges in the bounded oracle (never completes, never
+    /// traps). The drift-away and closed-orbit certificate shapes.
+    #[test]
+    fn snd_gr23a_refutation_witnesses_diverge() {
+        for (src, call) in [
+            (
+                "g = (n) => n == 0 ? 0 : g(n + 1)
+x = g(1)
+",
+                "g = (n) => n == 0 ? 0 : g(n + 1)
+g(1)
+x = 1
+x
+",
+            ),
+            (
+                "h = (n) => n == 0 ? 0 : h(n)
+x = h(3)
+",
+                "h = (n) => n == 0 ? 0 : h(n)
+h(3)
+x = 1
+x
+",
+            ),
+        ] {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(!v.accepted(), "the refuted call must reject: {src}");
+            match run_program_bounded(call, FUEL) {
+                BoundedRun::Diverged { .. } => {}
+                other => panic!(
+                    "the refutation witness must be denotationally forced to diverge, got {other:?}: {call}"
+                ),
+            }
+        }
+    }
+
+    /// A-SND layer (3), under the stamped law. Principle 9 binds **all recursion
+    /// uniformly — no seat exemption**: even a statement-seat call of an
+    /// unproven-termination callee rejects (pinned here), so no call-seat gray
+    /// class exists. The bounded oracle doubles as conservatism evidence: the
+    /// rejected programs run without trapping — the rejections are honest unproven
+    /// voices, not suppressed traps.
+    #[test]
+    fn snd3_unproven_recursion_rejects_uniformly_and_never_traps() {
+        let collatz = "collatz = (n) => n == 1 ? 1 : (n % 2 == 0 ? collatz(n / 2) : collatz(3 * n + 1))\ncollatz(27)\nx = 1\nx\n";
+        let sum = "IntList = Union(Null, {value: Number, next: IntList})\nsum = (l) => l :: { Null => 0\n {value: v, next: n} => v + sum(n) }\nx = sum({value: 1, next: {value: 2, next: null}})\nx\n";
+        let ascending = "g = (n) => n == 0 ? 0 : g(n + 1)\ng(1)\nx = 1\nx\n";
+        for (src, completes) in [(collatz, true), (sum, true), (ascending, false)] {
+            let v = check_source(src).expect("parses and checks").0;
+            assert!(
+                !v.accepted(),
+                "Principle 9 is uniform — unproven recursion rejects at every seat: {src}"
+            );
+            match run_program_bounded(src, FUEL) {
+                BoundedRun::Trapped(t) => {
+                    panic!("a conservatively-rejected program must not trap: {src}\n{t:?}")
+                }
+                BoundedRun::Completed { .. } => assert!(completes, "{src}"),
+                BoundedRun::Diverged { .. } => assert!(!completes, "{src}"),
+            }
+        }
+    }
+
+    /// The one surviving gray class under the stamped law: **world-decided Effect
+    /// recursion** (GR-26's SCC-world-decided certificate — Unproven + the label,
+    /// compiling by the world's decision). Layer (3)'s obligation for it — may
+    /// diverge, must not trap — awaits host effects in the bounded runner.
+    #[test]
+    #[ignore = "world-decided gray runner: the bounded oracle installs no host effects yet; expectation recorded — may diverge, must never trap"]
+    fn snd3_world_decided_gray_runner() {
+        unreachable!("pending bounded-runner host effects");
+    }
+
+    /// Recursive-contract discharge (evidence): analyzer-side membership
+    /// (`recursive::contains`, the E9 runtime pattern route) and the oracle's own
+    /// match agree on sampled values — inside, boundary, and outside the shape.
+    #[test]
+    fn snd_recursive_contract_membership_agrees_with_oracle() {
+        for (literal, expected) in [
+            ("null", "1"),
+            ("{value: 1, next: null}", "1"),
+            ("{value: 1, next: {value: 2, next: null}}", "1"),
+            ("{value: \"s\", next: null}", "2"),
+            ("{value: 1}", "2"),
+            ("7", "2"),
+        ] {
+            let src = format!(
+                "IntList = Union(Null, {{value: Number, next: IntList}})
+                 f = (l) => l :: {{ IntList => 1
+ _ => 2 }}
+x = f({literal})
+x
+"
+            );
+            match run_program_bounded(&src, FUEL) {
+                BoundedRun::Completed { value, .. } => {
+                    assert_eq!(
+                        value, expected,
+                        "membership of {literal} must be {expected}"
+                    );
+                }
+                other => panic!("membership probe must complete: {literal} → {other:?}"),
+            }
+        }
+    }
+}
+
 // The RT-01…14 suite obligations (region spec §10) not already pinned at the lib
 // layer (RT-05 ladder, RT-09 cache identity) or by `region_instantiation` (RT-01,
 // both arities). Table-level rows assert the spec's (region, exact) facets; the

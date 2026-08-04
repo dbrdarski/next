@@ -191,8 +191,20 @@ impl<'a> Oracle<'a> {
     }
 
     /// An oracle bounded to `fuel` evaluation steps and [`FUELED_MAX_CALL_DEPTH`]
-    /// recursion depth (see [`Oracle::fuel`]).
+    /// recursion depth (see [`Oracle::fuel`]) — the refutation sampler's shape.
     pub fn new_fueled(interner: &'a mut Interner, fuel: u64) -> Oracle<'a> {
+        Oracle::new_fueled_with_depth(interner, fuel, FUELED_MAX_CALL_DEPTH)
+    }
+
+    /// A fueled oracle with an explicit recursion-depth allowance. The bounded
+    /// program runner uses this with a **large dedicated thread stack** so harness
+    /// evidence is not capped at the sampler's calibration; the depth limit stays a
+    /// machine bound either way — exhaustion is a resource verdict, never semantic.
+    pub fn new_fueled_with_depth(
+        interner: &'a mut Interner,
+        fuel: u64,
+        max_depth: u32,
+    ) -> Oracle<'a> {
         Oracle {
             interner,
             store: Store::default(),
@@ -200,7 +212,7 @@ impl<'a> Oracle<'a> {
             fuel: Some(fuel),
             out_of_fuel: false,
             call_depth: 0,
-            max_call_depth: Some(FUELED_MAX_CALL_DEPTH),
+            max_call_depth: Some(max_depth),
             pending_values: Vec::new(),
             cenv: crate::contract::ContractEnv::new(),
         }
