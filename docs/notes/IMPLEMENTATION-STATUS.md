@@ -183,6 +183,15 @@ its first consumer is the stamped law itself: the program checker adjudicates a 
 The compendium's Principle 9 text still carries the pre-stamp wording — the normative stamp record
 is an author-owned edit; `DECISIONS.md` (2026-08-03) is the provenance record until it lands.
 
+**The WorldDecided classifier landed, v1 (2026-08-04):** `grounding::world_decided` is GR-24's
+sound recognizer for self-recursive Effect instances (fresh observation on every cycle by syntax +
+dataflow; completing arm as the seed; stale-carried, decorative, unguarded, and mutual shapes all
+refused), consumed at seats per GR-26's order (refutation dominates; all-Grounded keeps ordinary
+completion; only honest Unproven is excused, recorded as `world_decided` on the typed demand).
+Effect-world polling loops compile; mode-dependent domains (specimens 15/21/27) stay honestly
+unproven pending the per-region closure. Downstream world-conditioned sequencing metadata is not
+yet propagated — nothing consumes it today.
+
 **Coverage is resolution [author, 2026-08-03]:** a demanded fact is answered by any settled
 proven fact of the same instance/environment/claim whose domain **contains** the demanded one —
 `factcache::covering`, consulted in the same resolution step as the exact-pointer hit (its trivial
@@ -421,8 +430,8 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **445 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **122 passed, 0 failed, 11 ignored** (Failure-overlap subset + the first Phase GR batch) |
+| `cargo test --lib` | **446 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **123 passed, 0 failed, 11 ignored** (Failure-overlap subset + Phase GR incl. GR-24) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

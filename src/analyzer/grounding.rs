@@ -73,11 +73,11 @@
 
 use num_bigint::BigInt;
 
-use crate::analyzer::bodywalk::reachable_closures;
+use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
 use crate::analyzer::region::region_table;
 use crate::ast::{
-    AccessForm, Arg, Bind, BindingRef, Element, Expr, Field, MatchItem, Pat, PatElem, PrimOp, Ref,
-    TemplatePart,
+    AccessForm, ActKind, Arg, Bind, BindingRef, Element, Expr, Field, Match, MatchItem, Pat,
+    PatElem, PrimOp, Ref, TemplatePart,
 };
 use crate::contract::{Contract, ContractEnv, Verdict as Sub, subcontract};
 use crate::env::Binding;
@@ -945,6 +945,346 @@ fn peel_binding(pat: &Pat) -> Option<String> {
         }
     }
     if peeled >= 1 { rest } else { None }
+}
+
+// ── The WorldDecided classifier (§8 GR-24, v1 subset) ────────────────────────
+
+/// The **WorldDecided certificate**, v1 (GR-24) — the sound recognizer the D-α/D-β
+/// rulings owe. Effect-world recursion is excused from **exactly one** obligation — a
+/// bound on the number of world-driven iterations — when every recursive cycle
+/// observes the world afresh and every observation has a represented completing
+/// alternative to select. Judged per self-recursive Effect instance; the seat
+/// **consumes** the certificate (GR-26's row), never establishes it.
+///
+/// v1 admission (GR-24(c): syntax plus dataflow already read; no taint metadata):
+/// - the callee is an **Effect** closure whose recursion is direct self-recursion —
+///   mutual world-driven groups stay unclassified, honestly unproven;
+/// - a parameter position is **refreshed** when every self-call passes a direct
+///   effect application there (`loop(read())`);
+/// - every self-call site is **world-guarded**: a test on its selection path (match
+///   scrutinee, or a guard at or before its arm) contains a current-activation
+///   effect application (`readFile(q) :: { … }`) or reads refreshed parameters
+///   only — a stale-carried parameter (`loop(msg)` tested on `msg`) qualifies
+///   nothing (specimen 13);
+/// - every match that guards recursion owns a **completing arm** — an arm whose
+///   result contains no self-call — GR-24(b)'s seed; the decorative branch
+///   (`bit ? loop() : loop()`) seeds nothing and dies (specimen 16).
+pub(crate) fn world_decided(callee: &ValueRef) -> bool {
+    let Some(closure) = callee.as_closure() else {
+        return false;
+    };
+    if closure.lambda.act_kind != ActKind::Effect {
+        return false;
+    }
+    // Direct self-recursion only: no other reachable closure may close a cycle back.
+    let group = reachable_closures(callee.clone());
+    if group
+        .iter()
+        .any(|g| g != callee && callee_targets(g).contains(callee))
+    {
+        return false;
+    }
+    if !callee_targets(callee).contains(callee) {
+        return false; // not recursive — nothing to classify
+    }
+
+    let mut sites: Vec<Vec<Expr>> = Vec::new();
+    collect_self_calls(&closure.lambda.body, &closure, callee, &mut sites);
+    let params = param_names(&closure.lambda.params).unwrap_or_default();
+    let refreshed: Vec<String> = params
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            !sites.is_empty()
+                && sites.iter().all(|args| {
+                    args.get(*i)
+                        .is_some_and(|a| is_effect_application(a, &closure))
+                })
+        })
+        .map(|(_, name)| name.clone())
+        .collect();
+
+    let mut w = WorldWalk {
+        closure: &closure,
+        callee,
+        params: &params,
+        refreshed: &refreshed,
+        ok: true,
+    };
+    w.expr(&closure.lambda.body, false);
+    w.ok
+}
+
+struct WorldWalk<'a> {
+    closure: &'a Closure,
+    callee: &'a ValueRef,
+    params: &'a [String],
+    refreshed: &'a [String],
+    ok: bool,
+}
+
+impl WorldWalk<'_> {
+    /// Walk `e`; `guarded` means this position's selection already depends on a
+    /// current-activation world observation.
+    fn expr(&mut self, e: &Expr, guarded: bool) {
+        if !self.ok {
+            return;
+        }
+        match e {
+            Expr::Const(_) | Expr::Ref(_) => {}
+            Expr::Lambda(_) => {} // a distinct instance — not this body's recursion
+            Expr::Apply { callee, args } => {
+                if !guarded
+                    && resolves_to_target(callee, self.closure, std::slice::from_ref(self.callee))
+                {
+                    self.ok = false; // an unguarded cycle — the internal graph cycles
+                    return;
+                }
+                self.expr(callee, guarded);
+                for a in args {
+                    let (Arg::Expr(x) | Arg::Spread(x)) = a;
+                    self.expr(x, guarded);
+                }
+            }
+            Expr::Match(m) => self.match_node(m, guarded),
+            Expr::PrimOp { args, .. } => {
+                for a in args {
+                    self.expr(a, guarded);
+                }
+            }
+            Expr::TupleCons(els) => {
+                for el in els {
+                    let (Element::Expr(x) | Element::Spread(x)) = el;
+                    self.expr(x, guarded);
+                }
+            }
+            Expr::RecordCons(fs) => {
+                for f in fs {
+                    match f {
+                        Field::Field { value, .. } | Field::Spread(value) => {
+                            self.expr(value, guarded)
+                        }
+                        Field::Computed { key, value } => {
+                            self.expr(key, guarded);
+                            self.expr(value, guarded);
+                        }
+                    }
+                }
+            }
+            Expr::Access { target, form, .. } => {
+                self.expr(target, guarded);
+                match form {
+                    AccessForm::Field(_) => {}
+                    AccessForm::Index(x) => self.expr(x, guarded),
+                    AccessForm::Slice { lo, hi } => {
+                        if let Some(x) = lo {
+                            self.expr(x, guarded);
+                        }
+                        if let Some(x) = hi {
+                            self.expr(x, guarded);
+                        }
+                    }
+                }
+            }
+            Expr::Template(parts) => {
+                for p in parts {
+                    if let TemplatePart::Interp(x) = p {
+                        self.expr(x, guarded);
+                    }
+                }
+            }
+            Expr::Write { value, .. } => self.expr(value, guarded),
+        }
+    }
+
+    fn match_node(&mut self, m: &Match, guarded: bool) {
+        let scrutinee_q = m
+            .scrutinee
+            .as_deref()
+            .is_some_and(|s| self.qualifying_test(s));
+        if let Some(s) = m.scrutinee.as_deref() {
+            self.expr(s, guarded); // a self-call in the scrutinee is not arm-selected
+        }
+        // First-match semantics: arm `k` is selected under its own guard *and* the
+        // negations of the earlier ones, so any earlier qualifying guard makes the
+        // later arms' selection world-dependent too.
+        let mut seen_qualifying_guard = false;
+        let mut guards_recursion = false;
+        let mut completing_arm = false;
+        for item in &m.items {
+            match item {
+                MatchItem::Bind(Bind { value, .. }) => self.expr(value, guarded),
+                MatchItem::Stmt(x) => self.expr(x, guarded),
+                MatchItem::Arm(arm) => {
+                    let guard_q = arm.guard.as_ref().is_some_and(|g| self.qualifying_test(g));
+                    if let Some(g) = &arm.guard {
+                        self.expr(g, guarded);
+                    }
+                    let world_selected = scrutinee_q || guard_q || seen_qualifying_guard;
+                    seen_qualifying_guard |= guard_q;
+                    let recursive_arm = contains_self_call(&arm.result, self.closure, self.callee);
+                    if recursive_arm {
+                        if world_selected {
+                            guards_recursion = true;
+                        }
+                        // An unguarded recursive arm fails inside `expr` below.
+                    } else {
+                        completing_arm = true;
+                    }
+                    self.expr(&arm.result, guarded || world_selected);
+                }
+            }
+        }
+        if guards_recursion && !completing_arm {
+            self.ok = false; // decorative: no completing transition seeds the closure
+        }
+    }
+
+    /// A test qualifies as a current-activation world observation when it contains an
+    /// effect application outright, or reads refreshed parameters (and no stale ones,
+    /// and no other bindings — captures could carry stale world data).
+    fn qualifying_test(&self, e: &Expr) -> bool {
+        if contains_effect_application(e, self.closure) {
+            return true;
+        }
+        let mut refreshed = false;
+        let mut stale = false;
+        self.read_refs(e, &mut refreshed, &mut stale);
+        refreshed && !stale
+    }
+
+    fn read_refs(&self, e: &Expr, refreshed: &mut bool, stale: &mut bool) {
+        if let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = e {
+            if self.refreshed.contains(n) {
+                *refreshed = true;
+            } else if self.params.contains(n) || self.closure.env.lookup(n).is_some() {
+                *stale = true;
+            }
+            return;
+        }
+        for_each_child(e, &mut |c| self.read_refs(c, refreshed, stale));
+    }
+}
+
+/// Whether `e` **is** a direct effect application (`read()` in `loop(read())`) — the
+/// refreshed-parameter form's syntactic admission.
+fn is_effect_application(e: &Expr, closure: &Closure) -> bool {
+    let Expr::Apply { callee, .. } = e else {
+        return false;
+    };
+    let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = &**callee else {
+        return false;
+    };
+    let Some(Binding::Value(v)) = closure.env.lookup(n) else {
+        return false;
+    };
+    v.as_native().is_some()
+        || v.as_closure()
+            .is_some_and(|c| c.lambda.act_kind == ActKind::Effect)
+}
+
+/// Whether `e` contains an application of an effect-kind callee resolvable through
+/// `closure`'s environment — an `@effect` closure, or a native (every current native is
+/// an effect primitive; B6's total-return column is theirs).
+fn contains_effect_application(e: &Expr, closure: &Closure) -> bool {
+    if let Expr::Apply { callee, .. } = e
+        && let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = &**callee
+        && let Some(Binding::Value(v)) = closure.env.lookup(n)
+        && (v.as_native().is_some()
+            || v.as_closure()
+                .is_some_and(|c| c.lambda.act_kind == ActKind::Effect))
+    {
+        return true;
+    }
+    let mut found = false;
+    for_each_child(e, &mut |c| {
+        found = found || contains_effect_application(c, closure);
+    });
+    found
+}
+
+/// Whether `e` contains a call to `callee` (outside nested lambdas).
+fn contains_self_call(e: &Expr, closure: &Closure, callee: &ValueRef) -> bool {
+    let mut sites = Vec::new();
+    collect_self_calls(e, closure, callee, &mut sites);
+    !sites.is_empty()
+}
+
+/// Structural recursion over an expression's immediate children, skipping nested
+/// lambdas (distinct instances).
+fn for_each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    match e {
+        Expr::Const(_) | Expr::Ref(_) | Expr::Lambda(_) => {}
+        Expr::Apply { callee, args } => {
+            f(callee);
+            for a in args {
+                let (Arg::Expr(x) | Arg::Spread(x)) = a;
+                f(x);
+            }
+        }
+        Expr::PrimOp { args, .. } => {
+            for a in args {
+                f(a);
+            }
+        }
+        Expr::Match(m) => {
+            if let Some(s) = &m.scrutinee {
+                f(s);
+            }
+            for item in &m.items {
+                match item {
+                    MatchItem::Bind(Bind { value, .. }) => f(value),
+                    MatchItem::Stmt(x) => f(x),
+                    MatchItem::Arm(arm) => {
+                        if let Some(g) = &arm.guard {
+                            f(g);
+                        }
+                        f(&arm.result);
+                    }
+                }
+            }
+        }
+        Expr::TupleCons(els) => {
+            for el in els {
+                let (Element::Expr(x) | Element::Spread(x)) = el;
+                f(x);
+            }
+        }
+        Expr::RecordCons(fs) => {
+            for fld in fs {
+                match fld {
+                    Field::Field { value, .. } | Field::Spread(value) => f(value),
+                    Field::Computed { key, value } => {
+                        f(key);
+                        f(value);
+                    }
+                }
+            }
+        }
+        Expr::Access { target, form, .. } => {
+            f(target);
+            match form {
+                AccessForm::Field(_) => {}
+                AccessForm::Index(x) => f(x),
+                AccessForm::Slice { lo, hi } => {
+                    if let Some(x) = lo {
+                        f(x);
+                    }
+                    if let Some(x) = hi {
+                        f(x);
+                    }
+                }
+            }
+        }
+        Expr::Template(parts) => {
+            for p in parts {
+                if let TemplatePart::Interp(x) = p {
+                    f(x);
+                }
+            }
+        }
+        Expr::Write { value, .. } => f(value),
+    }
 }
 
 // ── Mutual recursion (GR-07) ──────────────────────────────────────────────────

@@ -96,6 +96,12 @@ pub struct GroundingDemand {
     pub callee: ValueRef,
     pub domain: Vec<Contract>,
     pub verdict: grounding::Verdict,
+    /// GR-24's SCC certificate, consumed at the seat per GR-26's row: the recursion's
+    /// every cycle observes the world afresh, so completion is the world's decision
+    /// and the iteration bound is excused (D-α/D-β). Only ever `true` alongside
+    /// `Unproven` — an all-`Grounded` call keeps ordinary proven completion, and a
+    /// witnessed refutation is never swallowed.
+    pub world_decided: bool,
 }
 
 /// The result of analyzing a whole module.
@@ -684,6 +690,13 @@ fn ground_demand(
         _ => Contract::Top,
     };
     let verdict = grounding::ground(callee, &domain, cenv, interner);
+    // GR-26's aggregation order: a witnessed refutation is never swallowed; an
+    // all-Grounded call keeps ordinary proven completion; only the honest Unproven
+    // may be excused by GR-24's world-decided certificate — and only for an Effect
+    // callee (at pure/mutation seats such a callee is already a world-admission
+    // error, so the callee's act kind is the seat condition).
+    let world_decided =
+        matches!(verdict, grounding::Verdict::Unproven) && grounding::world_decided(callee);
     match &verdict {
         grounding::Verdict::Grounded => {}
         grounding::Verdict::Refuted(refutation) => findings.push(Finding {
@@ -695,6 +708,7 @@ fn ground_demand(
                 refutation.witness
             ),
         }),
+        grounding::Verdict::Unproven if world_decided => {}
         grounding::Verdict::Unproven => findings.push(Finding {
             class: TrapClass::ArgumentObligation,
             severity: Severity::Error,
@@ -707,6 +721,7 @@ fn ground_demand(
         callee: callee.clone(),
         domain: arguments.to_vec(),
         verdict,
+        world_decided,
     });
 }
 
@@ -1000,6 +1015,59 @@ mod tests {
             !outside.accepted(),
             "a String argument is not covered by the Number fact: {:#?}",
             outside.findings
+        );
+    }
+
+    /// GR-24's WorldDecided classifier, v1 (the D-α/D-β rulings): effect-world
+    /// recursion whose every cycle observes the world afresh, with a completing arm
+    /// for the observation to select, is the **world's** decision — not a
+    /// termination bug — and compiles. The stale-carried and decorative
+    /// counter-specimens stay rejected.
+    #[test]
+    fn a_world_driven_polling_loop_is_world_decided() {
+        // Specimen 14's polling idiom: fresh observation, completing arm.
+        let (poll, _) = check(
+            "@effect poll = () => {\n\
+              readFile(\"q\") :: {\n\
+               Failure => poll()\n\
+               data => data\n\
+              }\n\
+             }\n\
+             poll()\n",
+        );
+        assert!(
+            poll.accepted(),
+            "the world decides this loop: {:#?}",
+            poll.findings
+        );
+
+        // Specimen 13: a carried parameter is stale — no cycle sees the world.
+        let (stale, _) = check(
+            "@effect loop = (msg) => {\n\
+              msg == \"quit\" ? 0 : loop(msg)\n\
+             }\n\
+             loop(\"go\")\n",
+        );
+        assert!(
+            !stale.accepted(),
+            "stale-carried is not world-decided: {:#?}",
+            stale.findings
+        );
+
+        // Specimen 16: every arm recurses — no completing transition to seed.
+        let (decorative, _) = check(
+            "@effect flip = () => {\n\
+              readFile(\"b\") :: {\n\
+               Failure => flip()\n\
+               _ => flip()\n\
+              }\n\
+             }\n\
+             flip()\n",
+        );
+        assert!(
+            !decorative.accepted(),
+            "the decorative branch seeds nothing: {:#?}",
+            decorative.findings
         );
     }
 

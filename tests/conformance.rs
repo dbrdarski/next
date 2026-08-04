@@ -1445,3 +1445,57 @@ mod phase_gr {
         );
     }
 }
+
+// GR-24 rows appended with the WorldDecided landing (2026-08-04).
+mod phase_gr_world {
+    use super::*;
+
+    /// GR-24 (specimens 13/14/16 shapes): the polling loop classifies world-decided —
+    /// every cycle observes the world afresh and a completing arm exists for the
+    /// observation to select — while the stale-carried and decorative variants stay
+    /// honestly rejected.
+    #[test]
+    fn gr24_world_decided_polling_and_its_counterexamples() {
+        let poll = check_source(
+            "@effect poll = () => {\n\
+              readFile(\"q\") :: {\n\
+               Failure => poll()\n\
+               data => data\n\
+              }\n\
+             }\n\
+             poll()\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(poll.accepted(), "the world decides this loop: {poll:#?}");
+
+        let stale = check_source(
+            "@effect loop = (msg) => {\n\
+              msg == \"quit\" ? 0 : loop(msg)\n\
+             }\n\
+             loop(\"go\")\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !stale.accepted(),
+            "stale-carried is not world-decided: {stale:#?}"
+        );
+
+        let decorative = check_source(
+            "@effect flip = () => {\n\
+              readFile(\"b\") :: {\n\
+               Failure => flip()\n\
+               _ => flip()\n\
+              }\n\
+             }\n\
+             flip()\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !decorative.accepted(),
+            "the decorative branch seeds nothing: {decorative:#?}"
+        );
+    }
+}

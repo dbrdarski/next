@@ -4777,3 +4777,39 @@ only on a mutual orbit derivation, not on induction. Zero suite flips. **`// [as
 **Verification:** 445 lib passed / 1 ignored; 122 conformance passed / 11 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
 19/19 OK.
+
+## 2026-08-04 — The WorldDecided classifier, v1: polling loops compile
+
+**The last structural hole under the stamp:** every effect-world polling loop rejected, because the
+D-α/D-β exemption — recursion whose continuation genuinely waits on the world is excused from the
+iteration bound, and from **exactly that** — had its classifier (grounding §8, GR-24) unbuilt.
+Measured red first: the specimen-14 polling idiom rejected "not proven to finish".
+
+**Built — `grounding::world_decided`, the v1 sound recognizer:** admitted per self-recursive
+**Effect** instance, by syntax plus dataflow already read (GR-24(c); no taint metadata). A
+parameter position is *refreshed* when every self-call passes a direct effect application there
+(`loop(read())`). Every self-call must be *world-guarded* — a test on its selection path (match
+scrutinee, or any guard at or before its arm under first-match negation) contains a
+current-activation effect application or reads refreshed parameters only. Every match guarding
+recursion must own a *completing arm* (GR-24(b)'s seed). The walker returns false for: a
+stale-carried parameter (specimen 13 — `loop(msg)` tested on `msg`), the decorative branch
+(specimen 16 — every arm recurses, nothing seeds), an unguarded self-call anywhere, mutual
+world-driven groups, and non-Effect callees.
+
+**Consumed, never established, at the seat (GR-26's order):** `ground_demand` consults the
+certificate only on the honest `Unproven` — a witnessed refutation is never swallowed (stage 1),
+an all-`Grounded` effect call keeps ordinary proven completion with no label (stage 2, specimen
+30's discipline), and the certificate excuses only the iteration bound (stage 3). The typed
+`GroundingDemand` record carries `world_decided` so policy retains the distinction. Keying on the
+callee's act kind is the seat condition: at pure/mutation seats an Effect callee is already a
+world-admission error.
+
+**v1 scope, stated:** single-region classification — the closure/propagation machinery for
+mode-dependent domains (specimens 15/21/27, per-region universal seed over the domain/control
+graph) remains owed; those shapes stay honestly unproven and reject. Downstream world-conditioned
+sequencing is metadata the current program checker does not yet propagate; nothing consumes it
+today. Phase GR gains the specimen 13/14/16 rows. **`// [ask-author]`: none.**
+
+**Verification:** 446 lib passed / 1 ignored; 123 conformance passed / 11 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; `cargo fmt --all -- --check` clean; normative manifest
+19/19 OK.
