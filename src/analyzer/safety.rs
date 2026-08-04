@@ -285,6 +285,16 @@ fn verify_by_partition(
         return SafetyReport::default();
     };
     let mut out = SafetyReport::default();
+    guard_demands(
+        &table,
+        param,
+        domain,
+        &base,
+        closure.lambda.act_kind,
+        cenv,
+        &mut out,
+        interner,
+    );
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
         env.insert(param.to_string(), sel.region.clone());
@@ -301,6 +311,67 @@ fn verify_by_partition(
         out.extend_analysis(analysis, sel.exact);
     }
     out
+}
+
+/// The **guards' own path demands** (T3.1): a guard is evaluated for every arrival
+/// at its row, so its operations and its strict Boolean tested seat (E10) are body
+/// demands like any other. Arrivals are the walk's remaining domain intersected
+/// with the row's own pattern region — an over-approximation as soon as any earlier
+/// row is non-exact, so evidence from later guards is weakened through the ordinary
+/// RT-14 discipline (`extend_analysis`'s non-exact path): refutations need a
+/// definitely-reached seat.
+#[allow(clippy::too_many_arguments)]
+fn guard_demands(
+    table: &[crate::analyzer::region::Row],
+    param: &str,
+    domain: &Contract,
+    base: &TypeEnv,
+    act: crate::ast::ActKind,
+    cenv: &ContractEnv,
+    out: &mut SafetyReport,
+    interner: &mut Interner,
+) {
+    let mut remaining = domain.clone();
+    let mut definite = true;
+    for row in table {
+        if let Some(seat) = &row.guard {
+            let arrivals = if matches!(seat.pattern_region, Contract::Top) {
+                remaining.clone()
+            } else {
+                Contract::intersection(remaining.clone(), seat.pattern_region.clone(), interner)
+            };
+            let empty = matches!(
+                subcontract(&arrivals, &Contract::Bottom, interner),
+                Verdict::Proven
+            );
+            if !empty {
+                let mut env = base.clone();
+                env.insert(param.to_string(), arrivals.clone());
+                if let Some(alias) = &row.binder {
+                    env.insert(alias.clone(), arrivals);
+                }
+                let mut analysis =
+                    analyze_in_world(&seat.expr, &env, cenv, world_for_act(act), interner);
+                crate::analyzer::check_tested_seat(
+                    &analysis.contract,
+                    &mut analysis.findings,
+                    interner,
+                );
+                out.extend_analysis(analysis, definite && seat.pattern_exact);
+            }
+        }
+        if row.exact {
+            remaining = if matches!(
+                subcontract(&remaining, &row.region, interner),
+                Verdict::Proven
+            ) {
+                Contract::Bottom
+            } else {
+                Contract::difference(remaining, row.region.clone(), interner)
+            };
+        }
+        definite = definite && row.exact;
+    }
 }
 
 /// A may-region row cannot refute (RT-14): an `Error` becomes advisory.
@@ -989,6 +1060,67 @@ pub(crate) fn verify_completes(
     )
 }
 
+/// The multi-parameter twin of [`guard_demands`] — arrivals are the per-position
+/// remaining vector; multi arms are guard-only, so the pattern facet is absent.
+#[allow(clippy::too_many_arguments)]
+fn guard_demands_multi(
+    table: &[crate::analyzer::region::RowN],
+    params: &[String],
+    domains: &[Contract],
+    base: &TypeEnv,
+    act: crate::ast::ActKind,
+    cenv: &ContractEnv,
+    out: &mut SafetyReport,
+    interner: &mut Interner,
+) {
+    let mut remaining: Vec<Contract> = domains.to_vec();
+    let mut definite = true;
+    for row in table {
+        if let Some(guard) = &row.guard {
+            let empty = remaining.iter().any(|rem| {
+                matches!(
+                    subcontract(rem, &Contract::Bottom, interner),
+                    Verdict::Proven
+                )
+            });
+            if !empty {
+                let mut env = base.clone();
+                for (p, rem) in params.iter().zip(&remaining) {
+                    env.insert(p.clone(), rem.clone());
+                }
+                let mut analysis =
+                    analyze_in_world(guard, &env, cenv, world_for_act(act), interner);
+                crate::analyzer::check_tested_seat(
+                    &analysis.contract,
+                    &mut analysis.findings,
+                    interner,
+                );
+                out.extend_analysis(analysis, definite);
+            }
+        }
+        if row.exact && row.constrained == 0 {
+            for rem in &mut remaining {
+                *rem = Contract::Bottom;
+            }
+        } else if row.exact && row.constrained == 1 {
+            let p = row
+                .regions
+                .iter()
+                .position(|r| !matches!(r, Contract::Top))
+                .expect("one constrained position");
+            remaining[p] = if matches!(
+                subcontract(&remaining[p], &row.regions[p], interner),
+                Verdict::Proven
+            ) {
+                Contract::Bottom
+            } else {
+                Contract::difference(remaining[p].clone(), row.regions[p].clone(), interner)
+            };
+        }
+        definite = definite && row.exact;
+    }
+}
+
 /// Verify one member under the currently-assumed facts (the partition rule).
 pub(crate) fn verify(
     callee: &ValueRef,
@@ -1027,6 +1159,16 @@ fn verify_inner(
             {
                 let base = capture_env(callee);
                 let mut out = SafetyReport::default();
+                guard_demands_multi(
+                    &table,
+                    &params,
+                    args,
+                    &base,
+                    closure.lambda.act_kind,
+                    cenv,
+                    &mut out,
+                    interner,
+                );
                 for sel in crate::analyzer::region::select_multi(&table, args, interner) {
                     let mut env = base.clone();
                     for (p, region) in params.iter().zip(&sel.regions) {

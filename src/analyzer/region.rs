@@ -34,6 +34,24 @@ pub struct Row {
     /// A bare-binder pattern's name (`x :: { k when … => … }` — `k` aliases the
     /// parameter in this row); consumers bind it beside the parameter.
     pub binder: Option<String>,
+    /// The arm's guard, as written, with what its **arrival set** needs: the guard
+    /// runs for every input that reaches this row and matches its pattern, so its
+    /// own operation demands and its strict Boolean tested seat (E10) are body
+    /// demands like any other — the T3.1 "guards' own path demands".
+    pub guard: Option<GuardSeat>,
+}
+
+/// A guard expression's demand seat (see [`Row::guard`]).
+#[derive(Clone, Debug)]
+pub struct GuardSeat {
+    pub expr: Expr,
+    /// The pattern's region alone (`Top` for a guard-only / bare-binder arm) —
+    /// the guard's arrivals are `remaining ∩ pattern`, not the combined row region.
+    pub pattern_region: Contract,
+    /// Whether the pattern alone is exact — with the walk's cumulative exactness,
+    /// this gates refutation evidence (RT-14: an over-approximate arrival set
+    /// authorizes no refutation).
+    pub pattern_exact: bool,
 }
 
 /// A selected row's **effective** candidate region (`remaining ∩ region` at selection),
@@ -203,6 +221,7 @@ pub fn region_table_in(
             region: Contract::Top,
             exact: true,
             result: other.clone(),
+            guard: None,
         }],
     }
 }
@@ -240,13 +259,18 @@ fn region_rows(
             None => (Contract::Top, true),
         };
         rows.push(Row {
-            region: intersect(pr, gr, i),
+            region: intersect(pr.clone(), gr, i),
             exact: pe && ge,
             result: arm.result.clone(),
             binder: match (&arm.pattern, patterns_on_param) {
                 (Some(Pat::Bind(alias)), true) => Some(alias.clone()),
                 _ => None,
             },
+            guard: arm.guard.as_ref().map(|g| GuardSeat {
+                expr: g.clone(),
+                pattern_region: pr,
+                pattern_exact: pe,
+            }),
         });
     }
     rows
@@ -555,6 +579,9 @@ pub struct RowN {
     pub exact: bool,
     pub result: Expr,
     pub constrained: usize,
+    /// The arm's guard, as written (multi-parameter arms are guard-only) — see
+    /// [`Row::guard`].
+    pub guard: Option<Expr>,
 }
 
 /// A selected multi-parameter row: the per-position **effective** regions
@@ -622,6 +649,7 @@ pub fn region_table_multi_in(
             exact,
             result: arm.result.clone(),
             constrained,
+            guard: arm.guard.clone(),
         });
     }
     Some(rows)

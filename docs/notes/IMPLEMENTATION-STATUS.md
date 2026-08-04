@@ -350,6 +350,16 @@ spelling- and interner-independent, pinned by α-variant groups in separate inte
 captures excluded; ambiguous naming falls back soundly to the per-lambda shape. Law 2/4 and
 symbolic-instance keys stay deferred. Detail in `DECISIONS.md` (2026-08-04).
 
+**The guards' own path demands landed (2026-08-04) — a measured false accept closed.** The
+partition verify paths analyzed only row results; a guard that traps (mixed `+`) or tests a
+non-Boolean seat was invisible, accepting programs the oracle traps on. Region rows now carry
+their guard seats, and both verify paths (single and multi) run a guard-demand walk: arrivals =
+remaining ∩ pattern region, guard analyzed under its arriving domain, `check_tested_seat` (E10
+strict Boolean), evidence through RT-14's weakening (`definite && pattern_exact` — may-region
+guards advise, never refute). Both false-accept programs now reject; all guard-bearing green
+rows (countDown, McCarthy, Ackermann, gcd) unchanged. Conformance `guard_demands` pins both
+directions. Detail in `DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -568,7 +578,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **466 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **156 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
+| `cargo test --test conformance` | **158 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

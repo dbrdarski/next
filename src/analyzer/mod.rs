@@ -2188,7 +2188,11 @@ fn analyze_bind(
 }
 
 /// A guard occupies a strict tested seat (E10): it must be a Boolean.
-fn check_tested_seat(guard: &Contract, findings: &mut Vec<Finding>, interner: &mut Interner) {
+pub(crate) fn check_tested_seat(
+    guard: &Contract,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) {
     let boolean = Contract::Kind(Kind::Boolean);
     if matches!(subcontract(guard, &boolean, interner), Verdict::Proven) {
         return;

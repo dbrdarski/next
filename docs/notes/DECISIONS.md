@@ -5639,3 +5639,34 @@ design-closed μ package's own serialization through its stated identity.**
 
 **Verification:** 466 lib passed / 1 ignored; 156 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The guards' own path demands: a measured false accept closes
+
+**This one was a soundness hole, not a sharpening — the dangerous direction.** The
+red-first probe proved it against the oracle before any fix: under `where (Number) =>
+Number`, `f = (n) => n + "s" == 0 ? 1 : 2` (guard traps on mixed `+`) and
+`g = (n) => n + 1 ? 1 : 2` (non-Boolean tested seat, E10) were both **accepted** while
+the oracle traps on every call — the partition paths (`verify_by_partition` and the
+multi-parameter block) analyzed only **row results**, never the guard expressions that
+route to them.
+
+**The fix makes guards body seats.** Region rows now carry their guard seat (`Row.guard:
+Option<GuardSeat>` — expr + pattern region + pattern exactness; `RowN.guard` for the
+guard-only multi arms), and both verify paths run a **guard-demand walk** mirroring the
+selector's remaining-domain computation (including the subcontract collapse): for each
+guarded row, arrivals = remaining ∩ pattern region; when arrivals are non-empty the guard
+is analyzed under capture base + param→arrivals (+ binder alias), its result passes
+`check_tested_seat` (strict Boolean, E10), and the evidence feeds through
+`extend_analysis(…, definite && pattern_exact)` — the ordinary **RT-14 discipline**, so a
+guard behind a may-region row can only advise, never refute. Both probe programs now
+reject; G2/G4 oracle ground truth unchanged.
+
+**Pinned** as conformance `guard_demands`: the two false-accept programs reject, and the
+sound converse — countDown's `n == 0` comparison guard over `Nat` — still proves, as do
+all existing guard-bearing green rows (McCarthy `n > 100`, Ackermann's `== 0` pair, gcd
+`b == 0`): zero regressions across every suite. **`// [ask-author]`: none — the demand is
+E10's own reading (a tested seat is strict and Boolean for every arrival) plus RT-14's
+stated weakening.**
+
+**Verification:** 466 lib passed / 1 ignored; 158 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

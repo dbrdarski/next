@@ -1818,6 +1818,54 @@ mod region_instantiation_multi {
     }
 }
 
+// The guards' own path demands (T3.1): a guard is a body seat like any other —
+// its operations and its strict Boolean tested seat (E10) fire for every arrival.
+mod guard_demands {
+    use super::*;
+
+    /// The measured false accept this slice closed: the partition path analyzed
+    /// only row results, so a guard that traps (mixed `+`) — or a non-Boolean
+    /// tested seat — slipped through while the oracle traps. Both reject now.
+    #[test]
+    fn gd_trapping_and_non_boolean_guards_reject() {
+        let v = check_source(
+            "f where (Number) => Number\n\
+             f = (n) => n + \"s\" == 0 ? 1 : 2\n\
+             x = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(!v.accepted(), "the guard's Add traps on every arrival");
+
+        let w = check_source(
+            "g where (Number) => Number\n\
+             g = (n) => n + 1 ? 1 : 2\n\
+             x = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(
+            !w.accepted(),
+            "a tested seat demands Boolean on arrival (E10)"
+        );
+    }
+
+    /// The sound converse: ordinary comparison guards keep proving — the demand
+    /// machinery adds no false rejections to the day's green families.
+    #[test]
+    fn gd_ordinary_guards_still_prove() {
+        let v = check_source(
+            "Nat = Intersection(GreaterEq(0), Mod(1, 0))\n\
+             countDown where (Nat) => Number\n\
+             countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n\
+             x = countDown(5)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+}
+
 // Recursive named contracts (C§9 / plan T2.4): ordinary named bindings mentioning
 // themselves or their group — no special form, source order immaterial at the static
 // layer. Admissibility violations are definition errors; membership at a runtime
