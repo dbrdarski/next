@@ -544,6 +544,16 @@ fn collect(
                     cenv.insert(name.clone(), c);
                     contract_names.insert(name.clone());
                 } else {
+                    // A literal constant binding is a module value the sibling
+                    // closures capture (`limit = 5`; `f = (n) => n <= limit ? …`).
+                    // Defining it into the shared late-binding scope here is what
+                    // lets `capture_env` — and through it the *instantiated* region
+                    // table (C§12.3) — see the capture during the `where` pre-pass,
+                    // whose source position is immaterial. Computed bindings stay
+                    // runtime-only and their captures honestly opaque.
+                    if let Expr::Const(v) = value {
+                        scope.define(name, Binding::Value(v.clone()));
+                    }
                     // Deferred to the C§9 second pass: a recursive named contract
                     // fails in-order evaluation only because it mentions itself or
                     // its group.

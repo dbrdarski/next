@@ -303,6 +303,16 @@ pattern rows exposed. Structural matches over recursive unions prove exhaustive 
 wildcards; contract patterns consume their domains and kill later arms. Detail in
 `DECISIONS.md` (2026-08-04).
 
+**T3.1 first cut landed (2026-08-04): instantiated region tables.** `region_table_in` reads
+guards after capture substitution — case (a) singleton captures exact (constant-parameter
+extraction), case (b) bounded captures through the spec's finite operator transfer (may-regions,
+never exact), cases (c)/(d) unchanged. `collect` now defines literal-constant module bindings
+into the shared scope so `capture_env` sees them at `where`-pre-pass time (computed bindings
+stay honestly opaque). W-1 flips at module level; W-2/W-3 pinned at lib level. Remaining T3.1:
+the RT-09 annotated-tuple instance cache, the guards' own path demands, multi-parameter capture
+substitution, and the factory-product instance flow (C§13.2 plumbing, separately owed). Detail
+in `DECISIONS.md` (2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -520,8 +530,8 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **461 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **149 passed, 0 failed, 2 ignored** (McCarthy + Ackermann + recursive contracts live; only the 2 Part-D adoption gates remain) |
+| `cargo test --lib` | **464 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **150 passed, 0 failed, 2 ignored** (McCarthy + Ackermann + recursive contracts + region instantiation live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

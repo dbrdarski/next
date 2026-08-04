@@ -1631,6 +1631,42 @@ mod phase_a {
 // First measured batch (suite spec Phase GR; specimen numbers from
 // `next-grounding-specification-v0-5.md` §15). Under the stamp [user, 2026-08-03]
 // unproven termination is an error, so every "unproven" specimen is a rejection row.
+// Instantiated region tables (region-table spec §2, cases (a)/(b) over captures —
+// plan T3.1): guards read after substituting the instance's capture contracts.
+mod region_instantiation {
+    use super::*;
+
+    /// W-1's shape at module level: a captured constant threshold instantiates the
+    /// table, `n <= limit` is case (a) exact, and the `LessEq(5)` return claim
+    /// proves — with the `where` *preceding* the binding (the pre-pass makes source
+    /// position immaterial). The wrong claim stays rejected (`n` at 5 escapes
+    /// `LessEq(4)`).
+    #[test]
+    fn rt_w1_singleton_capture_instantiates_exact_rows() {
+        let v = check_source(
+            "f where (Number) => LessEq(5)
+             limit = 5
+             f = (n) => n <= limit ? n : 0
+             x = 1
+",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+
+        let wrong = check_source(
+            "limit = 5
+             f where (Number) => LessEq(4)
+             f = (n) => n <= limit ? n : 0
+             x = 1
+",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(!wrong.accepted(), "n = 5 escapes LessEq(4)");
+    }
+}
+
 // Recursive named contracts (C§9 / plan T2.4): ordinary named bindings mentioning
 // themselves or their group — no special form, source order immaterial at the static
 // layer. Admissibility violations are definition errors; membership at a runtime

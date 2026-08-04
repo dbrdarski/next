@@ -41,7 +41,7 @@ use std::cell::Cell;
 
 use crate::analyzer::factcache;
 use crate::analyzer::induction::{self, Candidate, Claim};
-use crate::analyzer::region::{region_table, select};
+use crate::analyzer::region::{region_table_in, select};
 use crate::analyzer::{
     Analysis, Finding, SafetyDemand, Severity, TypeEnv, analyze_in_world, bind_pattern,
     world_for_act,
@@ -280,8 +280,8 @@ fn verify_by_partition(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> SafetyReport {
-    let table = region_table(&closure.lambda.body, param, cenv, interner);
     let base = capture_env(callee);
+    let table = region_table_in(&closure.lambda.body, param, &base, cenv, interner);
     let mut out = SafetyReport::default();
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();
@@ -435,7 +435,7 @@ fn classify(report: SafetyReport) -> BodySafety {
 }
 
 /// The captured environment as contracts — each free variable bound to `Equals(value)`.
-fn capture_env(callee: &ValueRef) -> TypeEnv {
+pub(crate) fn capture_env(callee: &ValueRef) -> TypeEnv {
     let mut env = TypeEnv::new();
     let (Some(f), Some(closure)) = (callee.as_fn(), callee.as_closure()) else {
         return env;
@@ -810,7 +810,7 @@ fn calls_of(
     // Per-row walk (single parameter), else one whole-body walk.
     match (single_param(&closure.lambda.params), node.input.as_slice()) {
         (Some(param), [domain]) => {
-            let table = region_table(&closure.lambda.body, &param, cenv, interner);
+            let table = region_table_in(&closure.lambda.body, &param, &base, cenv, interner);
             for sel in select(&table, domain, interner) {
                 let mut env = base.clone();
                 env.insert(param.clone(), sel.region.clone());
@@ -892,8 +892,8 @@ pub(crate) fn verify_completes(
         return false;
     };
     if let (Some(param), [domain]) = (single_param(&closure.lambda.params), args) {
-        let table = region_table(&closure.lambda.body, &param, cenv, interner);
         let base = capture_env(callee);
+        let table = region_table_in(&closure.lambda.body, &param, &base, cenv, interner);
         for sel in select(&table, domain, interner) {
             let mut env = base.clone();
             env.insert(param.clone(), sel.region.clone());
@@ -1124,8 +1124,8 @@ pub(crate) fn produced_by_partition(
             };
         }
     };
-    let table = region_table(&closure.lambda.body, &param, cenv, interner);
     let base = capture_env(callee);
+    let table = region_table_in(&closure.lambda.body, &param, &base, cenv, interner);
     let mut parts = Vec::new();
     for sel in select(&table, domain, interner) {
         let mut env = base.clone();

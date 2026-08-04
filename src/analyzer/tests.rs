@@ -3300,3 +3300,95 @@ mod region {
         assert_eq!(select(&rows, &nine, &mut i).len(), 1);
     }
 }
+
+/// The instantiated region table's capture cases (region-table spec §2 — plan T3.1).
+#[cfg(test)]
+mod region_instantiation {
+    use crate::analyzer::domain::AnalysisContract;
+    use crate::analyzer::{TypeEnv, region};
+    use crate::contract::{Contract, ContractEnv};
+    use crate::interner::Interner;
+    use crate::oracle::harness::run_source_in;
+
+    /// Case (a) with substitution: a singleton capture reads as its constant — the
+    /// row is exact, C§12.3's constant-parameter extraction.
+    #[test]
+    fn a_singleton_capture_is_case_a_exact() {
+        let mut i = Interner::new();
+        let f = run_source_in("limit = 5\nf = (n) => n <= limit ? n : 0\nf", &mut i)
+            .unwrap()
+            .0;
+        let caps = crate::analyzer::safety::capture_env(&f);
+        let closure = f.as_closure().unwrap();
+        let rows = region::region_table_in(
+            &closure.lambda.body,
+            "n",
+            &caps,
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert!(rows[0].exact, "{rows:?}");
+        assert_eq!(rows[0].region, Contract::LessEq(5.into()), "{rows:?}");
+    }
+
+    /// Case (b), W-2's shape: a bounded non-singleton capture reads through the
+    /// finite operator transfer to a **may-region** — never exact, so the walk
+    /// consumes nothing and the else row stays live.
+    #[test]
+    fn a_bounded_capture_is_case_b_may_region() {
+        let mut i = Interner::new();
+        let f = run_source_in("cap = 0\nf = (n) => n <= cap ? 1 : 2\nf", &mut i)
+            .unwrap()
+            .0;
+        let closure = f.as_closure().unwrap();
+        // Hand-instantiate: `cap ⊑ LE(100)` — the factory-product contract shape.
+        let mut caps = TypeEnv::new();
+        caps.insert(
+            "cap".to_string(),
+            AnalysisContract::of_contract(Contract::LessEq(100.into())),
+        );
+        let rows = region::region_table_in(
+            &closure.lambda.body,
+            "n",
+            &caps,
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert!(!rows[0].exact, "case (b) is never exact: {rows:?}");
+        assert_eq!(rows[0].region, Contract::LessEq(100.into()), "{rows:?}");
+
+        // The walk over `Number`: the may-region row consumes nothing, so the else
+        // row's effective region is still the whole domain.
+        let selected = region::select(
+            &rows,
+            &Contract::Kind(crate::contract::Kind::Number),
+            &mut i,
+        );
+        assert_eq!(selected.len(), 2, "both rows stay live: {selected:?}");
+        assert_eq!(
+            selected[1].region,
+            Contract::Kind(crate::contract::Kind::Number),
+            "an uncertain row consumed nothing: {selected:?}"
+        );
+    }
+
+    /// Case (c): a sibling parameter stays opaque even with zero captures (W-3) —
+    /// the relation is real but not a unary contract.
+    #[test]
+    fn a_two_parameter_guard_stays_opaque() {
+        let mut i = Interner::new();
+        let f = run_source_in("f = (n, limit) => n <= limit ? 1 : 2\nf", &mut i)
+            .unwrap()
+            .0;
+        let closure = f.as_closure().unwrap();
+        let rows = region::region_table_in(
+            &closure.lambda.body,
+            "n",
+            &TypeEnv::new(),
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert!(!rows[0].exact);
+        assert_eq!(rows[0].region, Contract::Top);
+    }
+}

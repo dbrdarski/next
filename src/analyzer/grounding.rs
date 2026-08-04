@@ -74,7 +74,7 @@
 use num_bigint::BigInt;
 
 use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
-use crate::analyzer::region::region_table;
+use crate::analyzer::region::region_table_in;
 use crate::ast::{
     AccessForm, ActKind, Arg, Bind, BindingRef, Element, Expr, Field, Match, MatchItem, Pat,
     PatElem, PrimOp, Ref, TemplatePart,
@@ -169,7 +169,8 @@ fn numeric_descent(
 ) -> Option<Verdict> {
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
-    let rows = region_table(&closure.lambda.body, &param, cenv, interner);
+    let caps = crate::analyzer::safety::capture_env(callee);
+    let rows = region_table_in(&closure.lambda.body, &param, &caps, cenv, interner);
 
     // Split arms: a row whose result contains a self-call is *recursive* (read each call's
     // drift on the parameter); the rest are *base* rows.
@@ -307,7 +308,8 @@ pub(crate) fn derived_orbit_domain(
     // and non-point starts (a declared `GreaterEq` domain derives `GreaterEq(floor)`).
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
-    let rows = region_table(&closure.lambda.body, &param, cenv, interner);
+    let caps = crate::analyzer::safety::capture_env(callee);
+    let rows = region_table_in(&closure.lambda.body, &param, &caps, cenv, interner);
 
     let mut drifts: Vec<Rational> = Vec::new();
     let mut bases: Vec<Contract> = Vec::new();
@@ -626,7 +628,8 @@ fn drift_away(
 ) -> Option<Refutation> {
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
-    let rows = region_table(&closure.lambda.body, &param, cenv, interner);
+    let caps = crate::analyzer::safety::capture_env(callee);
+    let rows = region_table_in(&closure.lambda.body, &param, &caps, cenv, interner);
 
     let mut bases = Vec::new();
     let mut drift = None;

@@ -25,7 +25,7 @@ use crate::value::{IndeterminateFormTag, ValueData, ValueRef};
 mod expr;
 pub mod grapheme;
 pub mod length;
-mod numeric;
+pub(crate) mod numeric;
 mod operation;
 pub mod recursive;
 mod subcontract;

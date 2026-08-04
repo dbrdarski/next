@@ -5475,3 +5475,39 @@ applies E9's consumption law where the walkers had left it spelled un-collapsed.
 
 **Verification:** 461 lib passed / 1 ignored; 149 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — T3.1 (first cut): the region table instantiates over captures
+
+**Cases (a)/(b) of the regionalization law land** (region-table spec §2, patch 0.3.1).
+`region_table_in` / `regionalize_guard_in` read guards **after substituting the instance's
+capture contracts** (C§12.3 layer 3): a singleton capture is case (a)'s constant — `n <= limit`
+with `limit = Equals(5)` reads `LE(5)`, **exact**, the constant-parameter extraction — and a
+bounded non-singleton capture feeds case (b)'s **finite operator transfer** verbatim from the
+spec's fixed lookup (`n < limit` governed by the capture's upper endpoint, `n > limit` by its
+lower, `n == limit` projecting the capture's own contract, `n != limit` → `Top`; all
+**may-regions, never exact**, so the walk consumes nothing through them — W-2's discipline).
+Case (c) (a sibling parameter — relational, opaque even with zero captures) and case (d) keep
+their total fallback. The capture environment is threaded explicitly through every region-table
+caller — no ambient state, since wrong captures would make exactness unsound.
+
+**The check-mode gap this exposed:** `collect` never defined constant module bindings into the
+shared scope, so `capture_env` found nothing at `where`-pre-pass time and every captured
+threshold was case-(d) opaque — the instantiated table existed only for oracle-built closures.
+A literal `Const` binding now defines into the scope during collect (computed bindings stay
+runtime-only and their captures honestly opaque), which is what makes the pre-pass's
+source-position-immaterial rule hold for capture-bearing `where`s too.
+
+**Measured flip (W-1 at module level):** `limit = 5; f = (n) => n <= limit ? n : 0` proves
+`where (Number) => LessEq(5)` — including with the `where` written *before* the binding — and
+`LessEq(4)` still rejects. Pinned: the conformance `region_instantiation` row plus three lib
+pins (case-(a) exact row; case-(b) may-region with the walk keeping the else row live over the
+whole domain; case-(c) opacity). **Honest residue, named:** the factory product at a live call
+seat (`c = makeCounter(5); c(3)`) still fails to resolve — that is C§13.2's instance-metadata
+plumbing, separately owed, not a region-table gap (the instantiated table itself is pinned at
+lib level with hand-built capture contracts); and the live-match narrowing
+(`single_var_guard_region`) deliberately stays caps-free to preserve its single-hit
+consumption discipline. **`// [ask-author]`: none — both cases implement the spec's stated
+inventory; the operator table is transcribed, not derived.**
+
+**Verification:** 464 lib passed / 1 ignored; 150 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

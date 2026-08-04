@@ -8,16 +8,16 @@
 //! (§6 — dissolved: the safe-input set is the outcome of the body check that *consumes*
 //! this table, errata E-6/E-7/E-8).
 //!
-//! Scope of this increment: the **capture-free, single-parameter** fragment — guards
-//! mention only the parameter and constants. Case (a) (a supported comparison against a
-//! constant → exact) and case (d) (the total `Top`/non-exact fallback) are here; case
-//! (b) (comparison against a non-singleton capture) and case (c) (two-variable relation)
-//! land with instantiation over captures. Kernel-desugar note: `&&`/`||`/`!` are
+//! Scope: the single-parameter fragment with **instantiation over captures**
+//! ([`region_table_in`]): case (a) — a supported comparison against a constant *or a
+//! singleton capture* — is exact; case (b) — a bounded non-singleton capture — is the
+//! finite operator transfer's may-region, never exact; case (c) (two-variable
+//! relation) and case (d) are the total `Top`/non-exact fallback. Kernel-desugar note: `&&`/`||`/`!` are
 //! *Matches*, not operators, so compound and negated guards currently read as case (d)
 //! (`Top`, non-exact — sound); a `?:` chain nests, so its else-arm result is a `Match`
 //! the body check recurses into rather than a flattened row.
 
-use crate::analyzer::pattern_contract;
+use crate::analyzer::{TypeEnv, pattern_contract};
 use crate::ast::{BindingRef, Expr, Match, MatchItem, Pat, PatElem, PatField, PrimOp, Ref};
 use crate::contract::{Contract, ContractEnv, Verdict, disjoint, subcontract};
 use crate::interner::Interner;
@@ -56,9 +56,24 @@ pub struct Selected {
 /// only its arm results would erase that executable prefix and analyze those results in
 /// an environment where the local names were never bound.
 pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv, i: &mut Interner) -> Vec<Row> {
+    region_table_in(body, param, &TypeEnv::new(), cenv, i)
+}
+
+/// The **instantiated** region table (C§12.3 layer 3): guards are read after
+/// substituting the instance's capture contracts — `caps` — per the regionalization
+/// law. A singleton capture is case (a)'s constant (exact); a bounded non-singleton
+/// capture feeds case (b)'s finite operator transfer (may-reach, never exact);
+/// everything else stays the total case-(d) fallback.
+pub fn region_table_in(
+    body: &Expr,
+    param: &str,
+    caps: &TypeEnv,
+    cenv: &ContractEnv,
+    i: &mut Interner,
+) -> Vec<Row> {
     match body {
         Expr::Match(m) if m.items.iter().all(|item| matches!(item, MatchItem::Arm(_))) => {
-            region_rows(m, param, cenv, i)
+            region_rows(m, param, caps, cenv, i)
         }
         other => vec![Row {
             binder: None,
@@ -69,7 +84,13 @@ pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv, i: &mut Intern
     }
 }
 
-fn region_rows(m: &Match, param: &str, cenv: &ContractEnv, i: &mut Interner) -> Vec<Row> {
+fn region_rows(
+    m: &Match,
+    param: &str,
+    caps: &TypeEnv,
+    cenv: &ContractEnv,
+    i: &mut Interner,
+) -> Vec<Row> {
     // Patterns match the scrutinee; they regionalize the parameter only when the
     // scrutinee *is* the parameter (or is absent — a `?:`/tested match carries guards,
     // not patterns). Otherwise the pattern is opaque on the parameter.
@@ -92,7 +113,7 @@ fn region_rows(m: &Match, param: &str, cenv: &ContractEnv, i: &mut Interner) -> 
             _ => param,
         };
         let (gr, ge) = match &arm.guard {
-            Some(g) => regionalize_guard(g, guard_param, i),
+            Some(g) => regionalize_guard_in(g, guard_param, caps, i),
             None => (Contract::Top, true),
         };
         rows.push(Row {
@@ -168,6 +189,17 @@ pub fn select(table: &[Row], arg_domain: &Contract, i: &mut Interner) -> Vec<Sel
 /// supported comparison of `param` against a constant number → exact. Case (d):
 /// anything else → `Top`, non-exact (total fallback).
 pub(crate) fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Contract, bool) {
+    regionalize_guard_in(g, param, &TypeEnv::new(), i)
+}
+
+/// [`regionalize_guard`] with the instance's capture contracts substituted (the
+/// regionalization law's cases (a)/(b); see [`region_table_in`]).
+pub(crate) fn regionalize_guard_in(
+    g: &Expr,
+    param: &str,
+    caps: &TypeEnv,
+    i: &mut Interner,
+) -> (Contract, bool) {
     let opaque = (Contract::Top, false);
     // The desugared conjunction `a && b` — `Match(∅, [Arm(guard: a, b), Arm(false)])`
     // (E10) — regionalizes to the intersection, exact iff both conjuncts are.
@@ -180,8 +212,8 @@ pub(crate) fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Con
         && matches!(&second.result, Expr::Const(v) if v.as_boolean() == Some(false))
         && let Some(a) = &first.guard
     {
-        let (ra, ea) = regionalize_guard(a, param, i);
-        let (rb, eb) = regionalize_guard(&first.result, param, i);
+        let (ra, ea) = regionalize_guard_in(a, param, caps, i);
+        let (rb, eb) = regionalize_guard_in(&first.result, param, caps, i);
         return (intersect(ra, rb, i), ea && eb);
     }
     let Expr::PrimOp { op, args } = g else {
@@ -198,12 +230,121 @@ pub(crate) fn regionalize_guard(g: &Expr, param: &str, i: &mut Interner) -> (Con
     {
         return (region, true);
     }
-    let Some((v, flipped)) = param_vs_const(&args[0], &args[1], param) else {
+    // The leaf reading, after capture substitution. Case (a): the operand is a
+    // literal, or a capture whose contract is a singleton number — exact. Case (b):
+    // a capture with a bounded numeric contract — the finite operator transfer,
+    // never exact. Anything else — including a sibling parameter (case (c)) — is
+    // the total case-(d) fallback.
+    let (operand, flipped) = if is_param(&args[0], param) {
+        (guard_operand(&args[1], caps, i), false)
+    } else if is_param(&args[1], param) {
+        (guard_operand(&args[0], caps, i), true)
+    } else {
         return opaque;
     };
-    match cmp_region(*op, &v, flipped, i) {
-        Some(region) => (region, true),
-        None => opaque,
+    match operand {
+        GuardOperand::Const(v) => match cmp_region(*op, &v, flipped, i) {
+            Some(region) => (region, true),
+            None => opaque,
+        },
+        GuardOperand::Bounded(c) => (bounded_capture_region(*op, &c, flipped, i), false),
+        GuardOperand::Opaque => opaque,
+    }
+}
+
+/// A guard operand after capture substitution (the regionalization law).
+enum GuardOperand {
+    /// A literal, or a capture proven to be exactly this number — case (a).
+    Const(Rational),
+    /// A capture with a (possibly bounded) numeric contract — case (b).
+    Bounded(Contract),
+    /// Everything else — cases (c)/(d).
+    Opaque,
+}
+
+fn guard_operand(e: &Expr, caps: &TypeEnv, i: &mut Interner) -> GuardOperand {
+    if let Some(v) = const_num(e) {
+        return GuardOperand::Const(v);
+    }
+    if let Expr::Ref(Ref::Immutable(BindingRef::Name(name))) = e
+        && let Some(annotated) = caps.get(name)
+    {
+        let c = annotated.erase(i);
+        if let Contract::Equals(v) = &c
+            && let Some(n) = v.as_number()
+        {
+            return GuardOperand::Const(n.clone());
+        }
+        return GuardOperand::Bounded(c);
+    }
+    GuardOperand::Opaque
+}
+
+/// Case (b)'s **finite operator transfer** (region-table spec §2, patch 0.3.1 — a
+/// fixed lookup, not a solver): for a capture with `≤/≥/Range`-shaped numeric
+/// bounds, `n < limit` is governed by the capture's **upper** endpoint, `n > limit`
+/// by its **lower**, `n == limit` projects the capture's own possible-value
+/// contract onto `n`, and `n != limit` is `Top` (for any `n` some represented
+/// `limit` may differ). All results are may-regions — never exact — and an
+/// endpoint the contract does not expose widens to `Top` (case (d)'s outcome).
+fn bounded_capture_region(
+    op: PrimOp,
+    capture: &Contract,
+    flipped: bool,
+    i: &mut Interner,
+) -> Contract {
+    use crate::contract::numeric::{Bound, num_abs};
+    let Some(abs) = num_abs(capture) else {
+        return Contract::Top;
+    };
+    // `v OP limit` mirrors to `limit OP' v` — reuse the comparison mirror.
+    let op = if flipped { mirror(op) } else { op };
+    let upper = || match &abs.iv.high {
+        Bound::Incl(u) => Some((u.clone(), true)),
+        Bound::Excl(u) => Some((u.clone(), false)),
+        Bound::Unbounded => None,
+    };
+    let lower = || match &abs.iv.low {
+        Bound::Incl(l) => Some((l.clone(), true)),
+        Bound::Excl(l) => Some((l.clone(), false)),
+        Bound::Unbounded => None,
+    };
+    let _ = i;
+    match op {
+        PrimOp::Lt => match upper() {
+            Some((u, _)) => Contract::Less(u),
+            None => Contract::Top,
+        },
+        PrimOp::Le => match upper() {
+            Some((u, true)) => Contract::LessEq(u),
+            Some((u, false)) => Contract::Less(u),
+            None => Contract::Top,
+        },
+        PrimOp::Gt => match lower() {
+            Some((l, _)) => Contract::Greater(l),
+            None => Contract::Top,
+        },
+        PrimOp::Ge => match lower() {
+            Some((l, true)) => Contract::GreaterEq(l),
+            Some((l, false)) => Contract::Greater(l),
+            None => Contract::Top,
+        },
+        // `n == limit`: the capture's own possible values, projected onto `n`.
+        PrimOp::Eq => capture.clone(),
+        // `n != limit`: for any `n`, some represented `limit` may differ.
+        PrimOp::Ne => Contract::Top,
+        _ => Contract::Top,
+    }
+}
+
+/// The comparison with its operands swapped (`v OP p` ⟺ `p OP' v`).
+fn mirror(op: PrimOp) -> PrimOp {
+    match op {
+        PrimOp::Lt => PrimOp::Gt,
+        PrimOp::Le => PrimOp::Ge,
+        PrimOp::Gt => PrimOp::Lt,
+        PrimOp::Ge => PrimOp::Le,
+        other => other,
     }
 }
 
@@ -220,18 +361,6 @@ fn integer_test(a: &Expr, b: &Expr, param: &str) -> Option<Contract> {
         n: num_bigint::BigInt::from(1),
         r: num_bigint::BigInt::from(0),
     })
-}
-
-/// `(value, flipped)` when exactly one operand is `param` and the other a constant
-/// number; `flipped` when the constant is on the left (`const OP param`).
-fn param_vs_const(a: &Expr, b: &Expr, param: &str) -> Option<(Rational, bool)> {
-    if is_param(a, param) {
-        return const_num(b).map(|v| (v, false));
-    }
-    if is_param(b, param) {
-        return const_num(a).map(|v| (v, true));
-    }
-    None
 }
 
 /// The region of `param OP v` (or `v OP param` when `flipped`), for the supported
