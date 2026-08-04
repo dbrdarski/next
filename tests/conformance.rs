@@ -1667,6 +1667,53 @@ mod region_instantiation {
     }
 }
 
+// The factory instance flow (C§13.2, the exact-singleton cut): a body-nested
+// lambda whose free variables are all singletons constructs its closure during
+// analysis (construction evaluates nothing), so factory products are known
+// instances at their call seats.
+mod factory_instances {
+    use super::*;
+
+    /// The chain the region-instantiation slice left as residue: the product of
+    /// `makeCounter(5)` is a constructed, interned closure with `limit = 5`, and
+    /// the call through it resolves — safety, regions, completion, the lot.
+    #[test]
+    fn fi_factory_product_resolves_at_its_seat() {
+        let v = check_source(
+            "makeCounter = (limit) => (n) => n <= limit ? n : 0
+             c = makeCounter(5)
+             y = c(3)
+             x = 1
+",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+
+    /// The sound direction: a product whose captured value makes the body trap is
+    /// caught at the product's seat with the precise operation error.
+    #[test]
+    fn fi_trapping_product_rejects() {
+        let v = check_source(
+            "make = (k) => (n) => n + k
+             g = make(\"s\")
+             y = g(1)
+             x = 1
+",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(!v.accepted());
+        assert!(
+            v.errors()
+                .any(|e| e.message.contains("two Numbers or two Strings")),
+            "{:#?}",
+            v.findings
+        );
+    }
+}
+
 // Recursive named contracts (C§9 / plan T2.4): ordinary named bindings mentioning
 // themselves or their group — no special form, source order immaterial at the static
 // layer. Admissibility violations are definition errors; membership at a runtime

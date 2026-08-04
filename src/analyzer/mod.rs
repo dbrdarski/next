@@ -333,14 +333,44 @@ pub(crate) fn analyze_in_world(
         Expr::Apply { callee, args } => analyze_apply(callee, args, env, cenv, world, interner),
         Expr::Write { slot, value } => analyze_write(slot, value, env, cenv, world, interner),
 
-        // A bare lambda expression has no first-class function contract here;
-        // enclosing source/program adapters construct and intern its closure.
-        Expr::Lambda(_) => exact(Contract::Top),
+        // A body-nested lambda (C§13.2's instance flow, the exact-singleton cut):
+        // when every free variable resolves to a singleton value in the current
+        // environment, the closure is **constructible** — building it evaluates
+        // nothing (the body is untouched; universal interning makes the value
+        // canonical) — and the produced contract is the exact function value, so a
+        // factory's product arrives at its call sites as a known instance. Any
+        // non-singleton capture keeps the coarse `Kind(Function)` (the annotated
+        // instance-metadata union is the owed general form).
+        Expr::Lambda(l) => analyze_lambda(l, env, interner),
     }
 }
 
 fn exact(contract: Contract) -> Analysis {
     Analysis::produced(contract, vec![])
+}
+
+/// Analyze a bare lambda expression (see the `Expr::Lambda` arm's note).
+fn analyze_lambda(l: &crate::ast::Lambda, env: &TypeEnv, interner: &mut Interner) -> Analysis {
+    let free = crate::oracle::lambda_free_vars(l, interner);
+    let mut captures: Vec<(String, ValueRef)> = Vec::with_capacity(free.len());
+    for name in &free {
+        let singleton = env
+            .get(name)
+            .and_then(|annotated| match annotated.erase(interner) {
+                Contract::Equals(v) => Some(v),
+                _ => None,
+            });
+        match singleton {
+            Some(v) => captures.push((name.clone(), v)),
+            None => return exact(Contract::Kind(Kind::Function)),
+        }
+    }
+    let scope = crate::env::Scope::root();
+    for (name, v) in captures {
+        scope.define(&name, crate::env::Binding::Value(v));
+    }
+    let value = crate::oracle::make_closure_in(l, &scope, interner);
+    Analysis::produced_annotated(AnalysisContract::of_value(value), vec![], interner)
 }
 
 /// The world a function body owns, independent of the world where its closure was

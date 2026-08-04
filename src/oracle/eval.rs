@@ -1256,6 +1256,13 @@ fn module_group_windows(module: &Module) -> Vec<mu::GroupWindow> {
 /// — and it must do so *without evaluating the module*, which would run the program at
 /// compile time. Building a closure evaluates nothing: the body is untouched and the
 /// environment is captured by reference under late binding.
+/// The canonical free-variable list of a lambda (the capture-slot order) — what a
+/// constructor must resolve before [`make_closure_in`] can take the closed fast
+/// path. Canonicalization is idempotent and interned, so this is cheap to ask.
+pub(crate) fn lambda_free_vars(lambda: &Lambda, interner: &mut Interner) -> Vec<String> {
+    canon::canonicalize(lambda, interner).free_vars
+}
+
 pub(crate) fn make_closure_in(lambda: &Lambda, env: &Env, interner: &mut Interner) -> ValueRef {
     let shape = canon::canonicalize(lambda, interner);
     let closure = Closure {

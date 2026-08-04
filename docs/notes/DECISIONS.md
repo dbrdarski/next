@@ -5511,3 +5511,31 @@ inventory; the operator table is transcribed, not derived.**
 
 **Verification:** 464 lib passed / 1 ignored; 150 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — The factory instance flow, exact-singleton cut: products are known instances
+
+**One arm, no new theory.** `analyze` of a body-nested `Expr::Lambda` — previously the coarse
+`Top` — now **constructs the closure** when every canonical free variable resolves to a
+singleton value in the current environment, through the same `make_closure_in` the program
+pass already uses: *building a closure evaluates nothing* (the body is untouched; the
+environment is captured under late binding; universal interning makes the value canonical, so
+the analyzer-built product and any oracle-built twin are one pointer). The produced contract is
+then the exact function value, and a factory's product arrives at its call seats as a **known
+instance** — safety, the instantiated region table (the captured threshold!), completion, and
+returns all light up through the existing machinery. Any non-singleton free variable keeps the
+sound coarse voice, now `Kind(Function)` rather than `Top`; the annotated instance-metadata
+union (C§13.2's general plumbing) remains the owed form for those.
+
+**Measured:** `makeCounter = (limit) => (n) => n <= limit ? n : 0; c = makeCounter(5);
+y = c(3)` **accepts end to end** — the residue named by the region-instantiation slice — and
+the sound direction holds: `make = (k) => (n) => n + k; g = make("s"); y = g(1)` rejects at the
+seat with the precise operation error (`+` requires two Numbers or two Strings — the captured
+`"s"` against the numeric argument). Two `factory_instances` conformance rows pin the pair.
+**Residue, named:** `c where (…)` on a product *binding* still errors "names no function
+binding" — the `where` pre-pass resolves module function bindings only; extending it to
+executable bindings holding proven-exact functions is its own small surface decision.
+**`// [ask-author]`: none — construction-without-evaluation is the program pass's own recorded
+license, applied at the expression layer.**
+
+**Verification:** 464 lib passed / 1 ignored; 152 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
