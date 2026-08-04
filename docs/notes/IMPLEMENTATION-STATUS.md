@@ -337,6 +337,12 @@ consolidating the seven call sites that rebuilt the instantiated table by hand. 
 share through canonical shape identity; different captures are different instances. Multi-param
 joins when its capture substitution lands. Detail in `DECISIONS.md` (2026-08-04).
 
+**Multi-parameter capture substitution landed (2026-08-04):** the positional regionalizer
+reads captures through the same case inventory (singleton exact per position; bounded
+may-region; sibling params stay case (c)); `instance_table_multi` joins the RT-09 cache — the
+three multi consumers share one derivation per instance. Detail in `DECISIONS.md`
+(2026-08-04).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -555,7 +561,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **465 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **155 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
+| `cargo test --test conformance` | **156 passed, 0 failed, 2 ignored** (all feature families live; only the 2 Part-D adoption gates remain) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

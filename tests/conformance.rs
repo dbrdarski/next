@@ -1787,6 +1787,37 @@ mod factory_instances {
     }
 }
 
+// Multi-parameter capture substitution (region-table spec §2 over flat params).
+mod region_instantiation_multi {
+    use super::*;
+
+    /// The single-parameter W-1 flip, at arity two: the captured threshold reads
+    /// exactly into position `a`'s row region, so the row narrows and the
+    /// `LessEq(5)` return claim proves; the wrong claim stays rejected.
+    #[test]
+    fn rt_multi_singleton_capture_instantiates() {
+        let v = check_source(
+            "limit = 5\n\
+             f where (Number, LessEq(0)) => LessEq(5)\n\
+             f = (a, b) => a <= limit ? a : b\n\
+             x = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+
+        let wrong = check_source(
+            "limit = 5\n\
+             f where (Number, LessEq(0)) => LessEq(4)\n\
+             f = (a, b) => a <= limit ? a : b\n\
+             x = 1\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(!wrong.accepted(), "a = 5 escapes LessEq(4)");
+    }
+}
+
 // Recursive named contracts (C§9 / plan T2.4): ordinary named bindings mentioning
 // themselves or their group — no special form, source order immaterial at the static
 // layer. Admissibility violations are definition errors; membership at a runtime

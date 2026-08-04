@@ -942,11 +942,9 @@ pub(crate) fn verify_completes(
     // regions, and coverage by the same single-position consumption walk. Without the
     // rows, the whole-body analysis loses each guard's narrowing and a nested
     // recursive call's completion cannot resolve through its own fact.
-    if let Some(params) = crate::analyzer::region::flat_params(&closure.lambda.params)
-        && params.len() >= 2
+    if let Some((params, table)) =
+        crate::analyzer::region::instance_table_multi(callee, cenv, interner)
         && params.len() == args.len()
-        && let Some(table) =
-            crate::analyzer::region::region_table_multi(&closure.lambda.body, &params, interner)
         && table.iter().any(|row| row.constrained > 0)
     {
         let base = capture_env(callee);
@@ -1022,14 +1020,9 @@ fn verify_inner(
             // guarded body partitions per position, so each row's guard narrowing
             // reaches every parameter (`b == 0 ? a : gcd(b, a % b)` verifies its else
             // row under `b ≠ 0`). Destructuring and pattern-arm bodies fall through.
-            if let Some(params) = crate::analyzer::region::flat_params(&closure.lambda.params)
-                && params.len() >= 2
+            if let Some((params, table)) =
+                crate::analyzer::region::instance_table_multi(callee, cenv, interner)
                 && params.len() == args.len()
-                && let Some(table) = crate::analyzer::region::region_table_multi(
-                    &closure.lambda.body,
-                    &params,
-                    interner,
-                )
                 && table.iter().any(|row| row.constrained > 0)
             {
                 let base = capture_env(callee);
@@ -1093,15 +1086,11 @@ pub(crate) fn produced_by_partition(
         _ => {
             // §5: the multi-parameter partition serves the produced contract too —
             // each row's result analyzed under its per-position effective regions.
-            let params = crate::analyzer::region::flat_params(&closure.lambda.params)?;
-            if params.len() < 2 || params.len() != args.len() {
+            let (params, table) =
+                crate::analyzer::region::instance_table_multi(callee, cenv, interner)?;
+            if params.len() != args.len() {
                 return None;
             }
-            let table = crate::analyzer::region::region_table_multi(
-                &closure.lambda.body,
-                &params,
-                interner,
-            )?;
             if !table.iter().any(|row| row.constrained > 0) {
                 return None; // uninformative — the whole-body path sees more (folds)
             }

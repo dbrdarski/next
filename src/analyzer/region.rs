@@ -126,6 +126,58 @@ pub(crate) fn instance_table(
     Some((param, table))
 }
 
+thread_local! {
+    /// RT-09's multi-parameter twin — same key discipline, its own value type.
+    static INSTANCE_TABLES_MULTI: std::cell::RefCell<
+        std::collections::HashMap<InstanceKey, std::rc::Rc<Vec<RowN>>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The instantiated **multi-parameter** table of a closure instance, through the
+/// RT-09 cache — flat plain parameters only (destructuring stays whole-body).
+pub(crate) fn instance_table_multi(
+    callee: &crate::value::ValueRef,
+    cenv: &ContractEnv,
+    i: &mut Interner,
+) -> Option<(Vec<String>, std::rc::Rc<Vec<RowN>>)> {
+    let closure = callee.as_closure()?;
+    let function = callee.as_fn()?;
+    let params = flat_params(&closure.lambda.params)?;
+    if params.len() < 2 {
+        return None;
+    }
+    let caps = crate::analyzer::safety::capture_env(callee);
+    let captures: Vec<crate::intern::Interned<Contract>> = function
+        .free_vars()
+        .iter()
+        .map(|name| {
+            let c = caps.get(name).map(|a| a.erase(i)).unwrap_or(Contract::Top);
+            i.contract(c)
+        })
+        .collect();
+    let mut named: Vec<(String, crate::intern::Interned<Contract>)> = cenv
+        .iter()
+        .map(|(name, c)| (name.clone(), i.contract(c.clone())))
+        .collect();
+    named.sort_by(|a, b| a.0.cmp(&b.0));
+    let key = InstanceKey {
+        shape: function.shape_rc(),
+        captures,
+        named,
+    };
+    if let Some(hit) = INSTANCE_TABLES_MULTI.with(|t| t.borrow().get(&key).cloned()) {
+        return Some((params, hit));
+    }
+    let table = std::rc::Rc::new(region_table_multi_in(
+        &closure.lambda.body,
+        &params,
+        &caps,
+        i,
+    )?);
+    INSTANCE_TABLES_MULTI.with(|t| t.borrow_mut().insert(key, table.clone()));
+    Some((params, table))
+}
+
 /// The **instantiated** region table (C§12.3 layer 3): guards are read after
 /// substituting the instance's capture contracts — `caps` — per the regionalization
 /// law. A singleton capture is case (a)'s constant (exact); a bounded non-singleton
@@ -528,6 +580,17 @@ pub fn flat_params(params: &Pat) -> Option<Vec<String>> {
 /// The §5 table for a guarded (scrutinee-less) multi-parameter body — the ternary/
 /// `when` chain shape. Pattern-arm bodies stay single-parameter territory (v1).
 pub fn region_table_multi(body: &Expr, params: &[String], i: &mut Interner) -> Option<Vec<RowN>> {
+    region_table_multi_in(body, params, &TypeEnv::new(), i)
+}
+
+/// [`region_table_multi`] with the instance's capture contracts substituted — the
+/// same regionalization law as the single-parameter [`region_table_in`].
+pub fn region_table_multi_in(
+    body: &Expr,
+    params: &[String],
+    caps: &TypeEnv,
+    i: &mut Interner,
+) -> Option<Vec<RowN>> {
     let Expr::Match(m) = body else {
         return None;
     };
@@ -543,7 +606,7 @@ pub fn region_table_multi(body: &Expr, params: &[String], i: &mut Interner) -> O
             return None;
         }
         let (regions, exact) = match &arm.guard {
-            Some(g) => regionalize_guard_positional(g, params, i),
+            Some(g) => regionalize_guard_positional(g, params, caps, i),
             None => (vec![Contract::Top; params.len()], true),
         };
         let constrained = regions
@@ -565,6 +628,7 @@ pub fn region_table_multi(body: &Expr, params: &[String], i: &mut Interner) -> O
 fn regionalize_guard_positional(
     g: &Expr,
     params: &[String],
+    caps: &TypeEnv,
     i: &mut Interner,
 ) -> (Vec<Contract>, bool) {
     // The desugared conjunction distributes positionwise.
@@ -577,8 +641,8 @@ fn regionalize_guard_positional(
         && matches!(&second.result, Expr::Const(v) if v.as_boolean() == Some(false))
         && let Some(a) = &first.guard
     {
-        let (ra, ea) = regionalize_guard_positional(a, params, i);
-        let (rb, eb) = regionalize_guard_positional(&first.result, params, i);
+        let (ra, ea) = regionalize_guard_positional(a, params, caps, i);
+        let (rb, eb) = regionalize_guard_positional(&first.result, params, caps, i);
         let regions = ra
             .into_iter()
             .zip(rb)
@@ -586,9 +650,10 @@ fn regionalize_guard_positional(
             .collect();
         return (regions, ea && eb);
     }
-    // A single-parameter form lands at the one position that mentions it.
+    // A single-parameter form lands at the one position that mentions it. Sibling
+    // parameters are not in `caps`, so a two-parameter relation stays case (c).
     for (idx, p) in params.iter().enumerate() {
-        let (region, exact) = regionalize_guard(g, p, i);
+        let (region, exact) = regionalize_guard_in(g, p, caps, i);
         if !matches!(region, Contract::Top) {
             let mut regions = vec![Contract::Top; params.len()];
             regions[idx] = region;

@@ -5591,3 +5591,23 @@ cache slice's whole obligation. **`// [ask-author]`: none.**
 
 **Verification:** 465 lib passed / 1 ignored; 155 conformance passed / 2 ignored; 10 machinery
 gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-04 — Multi-parameter capture substitution; the multi table joins the RT-09 cache
+
+**The instantiation story completes at arity ≥ 2.** `regionalize_guard_positional` threads the
+capture contracts into the same leaf reading as the single-parameter table — a singleton
+capture is case (a)'s exact constant at its position, a bounded capture is case (b)'s
+may-region, and sibling parameters (absent from the capture environment by construction) stay
+case (c) opaque. `region_table_multi_in` carries it, and `instance_table_multi` gives the
+multi table the same annotated `(shape, capture slot tuple, named contracts)` cache identity —
+the three multi consumers (safety verification, the produced contract, completion) now share
+one derivation per instance instead of rebuilding per query.
+
+**Measured flip:** `limit = 5; f = (a, b) => a <= limit ? a : b` proves
+`where (Number, LessEq(0)) => LessEq(5)` — position `a`'s row narrows through the captured
+threshold — and `LessEq(4)` still rejects. One conformance row pins the pair. **`//
+[ask-author]`: none — the positional reading delegates to the already-transcribed case
+inventory.**
+
+**Verification:** 465 lib passed / 1 ignored; 156 conformance passed / 2 ignored; 10 machinery
+gates passed; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
