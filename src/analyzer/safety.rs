@@ -969,7 +969,7 @@ pub(crate) fn verify_completes(
     // A realized completing-without-value execution permanently refutes the universal
     // completion claim. This is AP-30's positive witness path and is tried before the
     // abstract proof, just as realized return refutations are.
-    if crate::analyzer::refute::realized_completion(callee, args, interner).is_some() {
+    if crate::analyzer::refute::realized_completion(callee, args, cenv, interner).is_some() {
         return false;
     }
     let Some(closure) = callee.as_closure() else {

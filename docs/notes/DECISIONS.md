@@ -5865,3 +5865,46 @@ the suites. **`// [ask-author]`: none — the ruling is the author's, given in-s
 
 **Verification:** 467 lib passed / 1 ignored; 176 conformance passed / 3 ignored (+3 pins);
 10 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-05 — The sampler's license is revoked; completion evidence goes structural
+
+**Provenance, stated plainly (the author asked where the permission came from — there was
+none).** The application spec licenses the realized witness **shape** (AP-19 / the closure
+rule: a completing `(e, x, v)` with `v ∉ γ(C)`; AP-30's completing-without-value twin) — it
+never licenses **fueled analyzer-side evaluation as the procedure** for finding one. The
+procedure was an implementation invention (pre-recovery lineage); when its stack overflow
+surfaced on 2026-08-04 the depth cap was lowered instead of the license being questioned —
+a hard-rule-3 violation that should have been an `[ask-author]` at birth. It was flagged
+only when the author challenged the cap, and **ruled today [user, 2026-08-05]: fuel is not
+permitted in analysis. Revoked.**
+
+**What landed.** `realized_refutation` is closed — no witness is ever sampled; a false
+return claim adjudicates through the honest **Unproven** voice (still a rejection at its
+asking seat under the stamp; the `Refuted` arm and `RealizedWitness` remain as the spec's
+vocabulary, awaiting a fuel-free procedure if the author ever wants one — the recorded
+candidate: evaluate only under a certificate carrying a **proven concrete bound**, i.e.
+decline to run rather than truncate a run). `realized_completion` is **rebuilt rather than
+deleted**, because the completion pins protect real soundness (`partial(1)` at an expecting
+seat must stay an error): the new derivation is **structural and executes nothing** —
+candidate points come from the arguments' `proven_members` (contract membership, never
+evaluation), and a point whose instantiated row walk selects **no row** falls through
+denotationally (pattern membership on a point is decidable; the `(callee, arguments)` pair
+is represented by construction). Every completion-soundness pin passes unchanged through
+the structural route, both arities. Four return-claim pins re-recorded with revocation
+notes (`realized_refutation_is_revoked…`, the three-voiced claim test now lands Unproven on
+the false claim, the demand-record and program-boundary tests carry the honest voice — all
+still rejecting). The T3.5 bounded **test harness** (`run_program_bounded` /
+`eval_expr_bounded`) is unaffected: it is the suite's stopwatch for observing programs, not
+the analyzer proving contracts — flagged to the author as a named distinction, not smuggled.
+
+**Rulings recorded in the same session:** A2 — the §E9 unreachable-branch walk **from Top**
+is confirmed; A3 — the diagnostic-class borrowing (`ExpectingSeat` for unreachable arms,
+`ArgumentObligation` for malformed `where`) is blessed, the §6 catalog stays closed (both
+markers converted to RULED notes); A4(2) — the gray-acknowledgment mechanism is **allowed,
+for unproven recursion only** (never refuted recursion, never safety; the spelling remains
+a reserved statute for its own session); A7 — `where` **extends** to bindings proven to
+hold exact function values (queued as the next implementation slice); A5 — ruled and landed
+earlier today (the uncalled-unsafe lint).
+
+**Verification:** 467 lib passed / 1 ignored; 176 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

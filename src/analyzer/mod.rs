@@ -1284,13 +1284,13 @@ fn analyze_known_application_alternative(
             let produced = call_return(callee, arg_contracts, has_spread, cenv, interner);
             let completes = induction::completes_assumed(callee, arg_contracts, interner)
                 || safety::completes(callee, arg_contracts, cenv, interner);
-            let completion = callee_completion(callee, arg_contracts, completes, interner);
+            let completion = callee_completion(callee, arg_contracts, completes, cenv, interner);
             return application_contribution(findings, safety_demands, produced, completion);
         }
         let observed = outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
             .expect("a known closure has a body outcome");
         let completes = matches!(&observed.completion, Completion::Produces);
-        let completion = callee_completion(callee, arg_contracts, completes, interner);
+        let completion = callee_completion(callee, arg_contracts, completes, cenv, interner);
         return application_contribution(findings, safety_demands, observed.annotated, completion);
     }
 
@@ -1382,7 +1382,7 @@ fn analyze_known_application_alternative(
             completion: Completion::MayFallThrough,
         });
     let completes = safety::completes(callee, arg_contracts, cenv, interner);
-    let completion = callee_completion(callee, arg_contracts, completes, interner);
+    let completion = callee_completion(callee, arg_contracts, completes, cenv, interner);
     let produced = if induction::is_recursive(callee) {
         AnalysisContract::of_contract(call_return(
             callee,
@@ -1517,6 +1517,7 @@ fn callee_completion(
     cv: &ValueRef,
     args: &[Contract],
     completes: bool,
+    cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> Completion {
     if cv
@@ -1532,11 +1533,13 @@ fn callee_completion(
         return Completion::Produces;
     }
     // Failure to prove universal production is not itself a fall-through witness.
-    // AP-30 promotes the third voice only when the bounded oracle realizes one
-    // represented `(callee, arguments)` execution that completes without a value.
-    refute::realized_completion(cv, args, interner).map_or(Completion::MayFallThrough, |witness| {
-        Completion::FallsThrough(CompletionWitness::Application(witness))
-    })
+    // AP-30 promotes the third voice only on a **structurally proven** represented
+    // `(callee, arguments)` execution that completes without a value (no
+    // evaluation — the sampler is revoked).
+    refute::realized_completion(cv, args, cenv, interner)
+        .map_or(Completion::MayFallThrough, |witness| {
+            Completion::FallsThrough(CompletionWitness::Application(witness))
+        })
 }
 
 /// The inferred return contract for a call to the known closure `cv` over

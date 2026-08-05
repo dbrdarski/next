@@ -2431,17 +2431,18 @@ mod refute {
     }
 
     #[test]
-    fn realized_refutation_disproves_a_wrong_return_claim() {
-        // f does not return String: f(0) = 1 (a Number) ∉ String — a represented witness.
+    fn realized_refutation_is_revoked_and_returns_no_witness() {
+        // RE-RECORDED [user revocation, 2026-08-05]: the evaluation-based witness
+        // search is closed — even a genuinely wrong claim (f never returns String)
+        // yields no realized witness; the claim lands in the honest third voice at
+        // its seat. The witness *shape* (AP-19) remains spec vocabulary awaiting a
+        // fuel-free procedure ruling.
         let mut i = Interner::new();
         let f = factorial(&mut i);
-        let w =
-            realized_refutation(&f, &[num()], &string(), &mut i).expect("String claim is refuted");
         assert!(
-            !string().contains(&w.produced),
-            "the witness value is genuinely not a String"
+            realized_refutation(&f, &[num()], &string(), &mut i).is_none(),
+            "no analyzer-side evaluation — no sampled witness"
         );
-        assert_eq!(w.arguments.len(), 1, "a represented single-argument tuple");
     }
 
     #[test]
@@ -2471,7 +2472,7 @@ mod refute {
             .unwrap()
             .0;
         let one = i.integer(1);
-        let witness = realized_completion(&f, &[Contract::Equals(one.clone())], &mut i)
+        let witness = realized_completion(&f, &[Contract::Equals(one.clone())], &cenv(), &mut i)
             .expect("f(1) completes without a value");
         assert_eq!(witness.callee, f);
         assert_eq!(witness.arguments, vec![one]);
@@ -2491,7 +2492,7 @@ mod refute {
         let diverges = run_source_in("f = () => f()\nf", &mut i).unwrap().0;
         for callee in [produced, trapped, diverges] {
             assert!(
-                realized_completion(&callee, &[], &mut i).is_none(),
+                realized_completion(&callee, &[], &cenv(), &mut i).is_none(),
                 "only CompletedWithoutValue can mint an application witness"
             );
         }
@@ -2501,16 +2502,17 @@ mod refute {
     fn check_return_claim_is_three_voiced() {
         let mut i = Interner::new();
         let f = factorial(&mut i);
-        // Proven by induction; refuted by a realized witness (permanent); and true but
-        // neither provable (n could be negative → n·positive not provably positive) nor
-        // disprovable (no *completing* input yields a non-positive) → Unproven.
+        // Proven by induction; a false claim lands **Unproven** since the realized-
+        // witness search is revoked [user, 2026-08-05] — the Refuted arm remains the
+        // spec's vocabulary but currently has no minting procedure; and a true-but-
+        // unprovable claim is Unproven as ever.
         assert!(matches!(
             check_return_claim(&f, &[num()], &num(), &cenv(), &mut i),
             ClaimVerdict::Proven
         ));
         assert!(matches!(
             check_return_claim(&f, &[num()], &string(), &cenv(), &mut i),
-            ClaimVerdict::Refuted(_)
+            ClaimVerdict::Unproven
         ));
         let positive = Contract::Greater(Rational::from(0));
         assert!(matches!(

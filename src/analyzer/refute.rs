@@ -25,15 +25,9 @@
 use crate::analyzer::application::ApplicationWitness;
 use crate::analyzer::induction::Claim;
 use crate::analyzer::safety::{BodySafety, prove_claim};
-use crate::ast::{Arg, Expr};
 use crate::contract::{Contract, ContractEnv};
 use crate::interner::Interner;
-use crate::oracle::{BoundedOutcome, eval_expr_bounded};
 use crate::value::ValueRef;
-
-/// The step bound for a refutation run. Generous enough for the small concrete inputs
-/// the sampler produces to complete; a diverging input hits it and is skipped.
-const REFUTE_FUEL: u64 = 200_000;
 
 /// A cap on sampled argument tuples per refutation attempt — the sampler is finite, so
 /// this only bites on wide multi-argument products.
@@ -65,68 +59,66 @@ pub fn realized_refutation(
     claim: &Contract,
     interner: &mut Interner,
 ) -> Option<RealizedWitness> {
-    let closure = callee.as_closure()?;
-    if closure.lambda.act_kind != crate::ast::ActKind::Pure {
-        return None;
-    }
-    for tuple in argument_samples(args, interner) {
-        let node = Expr::Apply {
-            callee: Box::new(Expr::Const(callee.clone())),
-            args: tuple
-                .iter()
-                .cloned()
-                .map(|v| Arg::Expr(Expr::Const(v)))
-                .collect(),
-        };
-        // Only a *completing* run with an out-of-claim value is a witness; OutOfFuel
-        // (diverged), CompletedWithoutValue, and Trapped are all skipped (§6).
-        if let BoundedOutcome::Produced(v) = eval_expr_bounded(&node, REFUTE_FUEL, interner)
-            && !claim.contains(&v)
-        {
-            return Some(RealizedWitness {
-                arguments: tuple,
-                produced: v,
-            });
-        }
-    }
+    // REVOKED [user, 2026-08-05]. The specification licenses the witness *shape*
+    // (AP-19 / the closure rule: a realized completing `(e, x, v)` with `v ∉ γ(C)`)
+    // — it never licensed fueled analyzer-side evaluation as the *procedure* for
+    // finding one, and the author has ruled that fuel may not appear in analysis.
+    // Until a fuel-free procedure is ruled (candidate: evaluate only under a
+    // certificate carrying a proven concrete bound — decline to run, never truncate
+    // a run), this search is closed: the honest third voice stands where a sampled
+    // counterexample once landed. The witness types and the `Refuted` arm remain —
+    // they are the spec's vocabulary, not the sampler's.
+    let _ = (callee, args, claim, interner);
     None
 }
 
-/// Search for a represented application that genuinely completes without a value
-/// (application §1.5 / AP-30). The oracle is the evidence: contract membership alone
-/// can establish that a tuple is represented, but only a completed bounded run can
-/// establish the row's `CompletedWithoutValue` outcome. Traps, produced values, and
-/// fuel exhaustion are not completion witnesses.
-///
-/// This concrete refutation path is deliberately limited to `Pure` NEXT closures.
-/// Running an Effect body during analysis would perform host effects, and a Mutator
-/// may refer to store locations owned by another oracle. Those cases remain the
-/// honest third voice until their non-executing row evidence is wired.
+/// A represented application proven to complete without a value (application §1.5 /
+/// AP-30) — by **structural derivation only**: no analyzer-side evaluation exists
+/// [user revocation, 2026-08-05]. Candidate points come from the arguments'
+/// **proven members** (contract membership, never evaluation); a point whose row
+/// walk selects nothing falls through denotationally. Anything short of that
+/// certainty stays the honest third voice. `Pure` closures only.
 pub fn realized_completion(
     callee: &ValueRef,
     args: &[Contract],
+    cenv: &crate::contract::ContractEnv,
     interner: &mut Interner,
 ) -> Option<ApplicationWitness> {
+    // The evaluation-based search is REVOKED [user, 2026-08-05] — same ruling as
+    // `realized_refutation`. What remains is the **structural** derivation, which
+    // executes nothing: when every argument is a represented point (the call's own
+    // written constants — GR-22) and the instantiated row walk selects **no row**
+    // for that point vector, the match falls through denotationally — pattern
+    // membership on a point is decidable, so the fall-through is forced, and the
+    // `(callee, arguments)` pair is jointly represented by construction. Anything
+    // short of that certainty (a selectable row, a guard that might fire, a
+    // non-match body, a non-point argument) stays the honest third voice.
     let closure = callee.as_closure()?;
     if closure.lambda.act_kind != crate::ast::ActKind::Pure {
         return None;
     }
-    for tuple in argument_samples(args, interner) {
-        let node = Expr::Apply {
-            callee: Box::new(Expr::Const(callee.clone())),
-            args: tuple
-                .iter()
-                .cloned()
-                .map(|v| Arg::Expr(Expr::Const(v)))
-                .collect(),
+    let single = crate::analyzer::region::instance_table(callee, cenv, interner);
+    let multi = if single.is_none() {
+        crate::analyzer::region::instance_table_multi(callee, cenv, interner)
+    } else {
+        None
+    };
+    for points in argument_samples(args, interner) {
+        let forced = if let (Some((_, table)), [point]) = (&single, points.as_slice()) {
+            let domain = Contract::Equals(point.clone());
+            crate::analyzer::region::select(table, &domain, interner).is_empty()
+        } else if let Some((params, table)) = &multi
+            && params.len() == points.len()
+        {
+            let domains: Vec<Contract> = points.iter().cloned().map(Contract::Equals).collect();
+            crate::analyzer::region::select_multi(table, &domains, interner).is_empty()
+        } else {
+            false
         };
-        if matches!(
-            eval_expr_bounded(&node, REFUTE_FUEL, interner),
-            BoundedOutcome::CompletedWithoutValue
-        ) {
+        if forced {
             return Some(ApplicationWitness {
                 callee: callee.clone(),
-                arguments: tuple,
+                arguments: points,
             });
         }
     }

@@ -410,6 +410,16 @@ Detail in `DECISIONS.md` (2026-08-05).
 unreferenced function's body is proven to trap; seats keep the blocking judgment; three
 conformance pins. Detail in `DECISIONS.md` (2026-08-05).
 
+**The sampler's license revoked (2026-08-05) [user]:** fueled analyzer-side evaluation
+was never spec-licensed (AP-19/AP-30 define witness *shapes*, not an evaluation
+*procedure*) — `realized_refutation` is closed (false return claims land the honest
+Unproven voice; still rejections); `realized_completion` is rebuilt **structural**
+(proven-member points + the instantiated row walk; nothing executes) so all completion
+soundness holds. Four pins re-recorded. The T3.5 bounded harness is suite tooling and
+stands. Same session: A2 (walk-from-Top) and A3 (class borrowing) RULED and converted;
+A4(2) gray-acknowledgment allowed for unproven recursion only (spelling reserved); A7
+where-on-product-binding ruled EXTEND (queued). Detail in `DECISIONS.md` (2026-08-05).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return

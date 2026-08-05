@@ -122,7 +122,11 @@ mod tests {
     /// `f(0) = 1` is a represented completing execution, so the false String claim is
     /// refuted with that concrete evidence rather than collapsed into Unproven.
     #[test]
-    fn an_unsatisfied_return_demand_preserves_its_realized_refutation() {
+    fn an_unsatisfied_return_demand_is_the_third_voice_since_the_revocation() {
+        // RE-RECORDED [user revocation, 2026-08-05]: with the evaluation-based
+        // witness search closed, a false return claim adjudicates **Unproven** —
+        // still a rejection at the asking seat, carried by the honest voice. The
+        // demand record preserves whichever voice adjudication produced.
         let mut i = Interner::new();
         let g = f("f = (n) => n + 1\nf", &mut i);
         let v = returns(
@@ -133,13 +137,10 @@ mod tests {
             &ContractEnv::new(),
             &mut i,
         );
-        match v {
-            ClaimVerdict::Refuted(witness) => {
-                assert_eq!(witness.arguments.len(), 1);
-                assert!(!Contract::Kind(Kind::String).contains(&witness.produced));
-            }
-            other => panic!("the represented counterexample must survive adjudication: {other:?}"),
-        }
+        assert!(
+            matches!(v, ClaimVerdict::Unproven),
+            "no sampled counterexample exists; the third voice stands: {v:?}"
+        );
     }
 
     /// Factorial produces only positive values on the represented completing samples, but

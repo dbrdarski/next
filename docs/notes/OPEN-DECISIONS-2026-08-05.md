@@ -10,7 +10,17 @@ threads, and the session DECISIONS log. Three groups: **A** — decisions waitin
 
 ## Group A — decisions actively waiting on you
 
-### A1. The fueled refutation sampler (AP-30) — procedure shape
+### A1. The fueled refutation sampler — **REVOKED [user, 2026-08-05]**
+**Ruling: fuel was never licensed in analysis; the sampler is closed.** Landed same day:
+`realized_refutation` returns no witness (false return claims land the honest Unproven
+voice — still rejections at their seats); `realized_completion` is rebuilt as a
+**structural, non-executing derivation** (proven-member points + the instantiated row
+walk — pattern membership is decidable, nothing runs), so every completion-soundness pin
+holds. Four return-claim pins re-recorded with revocation notes. A fuel-free witness
+procedure (evaluate only under a certificate carrying a proven concrete bound — decline
+to run, never truncate) remains available for a future ruling if wanted.
+
+#### (original text, superseded)
 **What it is.** During analysis, when a claim cannot be settled symbolically, the sampler
 takes candidate inputs *from the program's own written arguments* (never synthesized), runs
 them through a **fueled** oracle (200k steps, depth 48), and — only if a run **completes** —
@@ -32,7 +42,9 @@ legitimate at all. Options recorded:
 **My read:** (b) is the principled middle — it derives the sampler's license from an
 already-proven fact instead of a budget.
 
-### A2. The §E9 unreachable-branch walk: from `Top`, or from the declared domain?
+### A2. **RULED [user, 2026-08-05]: walk-from-Top confirmed.** Marker converted in code.
+
+#### (original text, superseded)
 **What happened.** RT §4 mandates the unreachable-branch error for arms that are
 "source-domain-empty after consumption over the function's whole parameter domain." I first
 walked from the `where` domain; **your recovered grid refuted that reading**: the `Strict`
@@ -46,7 +58,9 @@ String => 2 }` under `where (Number)` (declared-domain narrowing is non-selectio
 deadness).
 **Decision:** confirm the walk-from-Top reading (marker at `src/analyzer/program.rs`).
 
-### A3. Diagnostic classes for non-trap authoring errors (two markers, one family)
+### A3. **RULED [user, 2026-08-05]: the borrowing is blessed.** Both markers converted.
+
+#### (original text, superseded)
 The §6 trap catalog is closed, and two static-only diagnostics had no row, so they borrow:
 - The **unreachable-branch error** reuses `TrapClass::ExpectingSeat` (the E9/E10
   match-coverage family).
@@ -56,7 +70,13 @@ The §6 trap catalog is closed, and two static-only diagnostics had no row, so t
 precedent), or mint a dedicated static-diagnostic class outside the trap concordance. The
 second is cleaner taxonomy but touches the closed catalog's periphery, so it's yours.
 
-### A4. Principle 9's two remaining policy picks (the stamp's leftovers)
+### A4. **PARTIALLY RULED [user, 2026-08-05]:** pick (2) — the acknowledgment mechanism
+is **allowed, for unproven recursion only** (never refuted recursion, never safety). The
+surface spelling stays a reserved statute for its own session; nothing is implementable
+until it is spelled. Pick (3) — the [permanent] family — still open (see the chat
+explanation of what it decides).
+
+#### (original text, superseded)
 The rejection polarity is stamped and implemented (unproven grounding = error; the A-NEG
 battery runs on it). The compendium's annotation leaves two picks:
 - **(2) hard vs acknowledgeable:** does the gray-acknowledgment mechanism survive as
@@ -80,7 +100,10 @@ cost grows multiplicatively per operand alternative); the hull gives `Range(2, 1
 constant cost — **implemented**). Purely a precision/cost dial on the operation rulebook;
 observable when a downstream match tests `== 6` (hull can't exclude it, distribution can).
 
-### A7. `where` on a product binding
+### A7. **RULED [user, 2026-08-05]: extend.** `where` may attach to a binding proven to
+hold an exact function value; queued as the next implementation slice.
+
+#### (original text, superseded)
 `c = makeCounter(5)` then `c where (Number) => Number` — errors today ("names no function
 binding"): the `where` pre-pass resolves module **function bindings** only. The instance
 machinery (RT-09) can already analyze the product; this is purely a *surface* decision —

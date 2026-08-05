@@ -739,25 +739,19 @@ fn verdict_findings(name: &str, v: &safety::BodySafety) -> Vec<Finding> {
 /// the declared input *is* the argument obligation — but no trap class names a malformed
 /// signature, because a `where` is analyzer-facing metadata with no evaluation behavior
 /// (AST `Where`), so it can never trap at runtime and the §6 concordance has no row for it.
-// [ask-author] Should a malformed/undischargeable `where` (unknown name, arity mismatch,
-// statically un-evaluable contract expression) carry its own diagnostic class rather than
-// borrowing `ArgumentObligation`? These are authoring errors in the signature itself, not
-// trap-class rejections, and the concordance has no row for them.
+// RULED [user, 2026-08-05]: borrowing `ArgumentObligation` is acceptable — the §6
+// catalog stays closed; the message text carries the authoring-error identity.
 /// Walk the callee's instantiated region table over the function's **whole**
 /// parameter domain (`Top` per position), mirroring the selection walk's
 /// consumption (exact rows consume; the collapse discipline included), and report
 /// any arm whose candidate is proven empty.
 ///
-/// // [ask-author] Two readings of RT §4's "over the function's whole parameter
-/// // domain" existed: the declared entry contract, or the function's own (Top).
-/// // The recovered grid's `f where (Strict)` factorial (guard `n == 0`, domain
-/// // ≥ 1, reached via the internal `f(n-1)`) refutes the declared-domain reading
-/// // — internal recursion lawfully arrives outside the entry contract — so this
-/// // walks from Top and only prior arms' consumption can kill an arm. Confirm.
-/// // [ask-author] The finding reuses `TrapClass::ExpectingSeat` (the E9/E10
-/// // match-coverage family) — the §6 trap catalog is closed, so no new class was
-/// // minted; the message carries the diagnostic identity, per the recursive-
-/// // contract definition-error precedent. Non-exact rows consume nothing, so
+/// RULED [user, 2026-08-05]: the walk runs from `Top` — the declared entry
+/// contract is not the function's domain (the recovered grid's `Strict` factorial
+/// is the normative witness: internal recursion lawfully arrives outside it), so
+/// only prior arms' certain consumption can kill an arm. The finding's reuse of
+/// `TrapClass::ExpectingSeat` is likewise ruled acceptable — the §6 catalog stays
+/// closed and the message carries the diagnostic identity. Non-exact rows consume nothing, so
 /// only prior arms' certain consumption can kill a later arm — uncertainty never
 /// raises this error, and neither does any *domain* (declared or per-call).
 fn source_unreachable_arms(
@@ -1753,6 +1747,9 @@ mod tests {
     /// and it is the flip that slice was written to produce.
     #[test]
     fn a_declared_return_contract_that_the_body_does_not_meet_rejects() {
+        // RE-RECORDED [user revocation, 2026-08-05]: the rejection stands, carried
+        // by the Unproven voice — the sampled counterexample and its "refuted by
+        // represented arguments" diagnostic went with the evaluation-based search.
         let (v, _) = check("f where (Number) => String\nf = (n) => n + 1\n");
         assert!(
             !v.accepted(),
@@ -1762,17 +1759,15 @@ mod tests {
         assert!(
             v.findings
                 .iter()
-                .any(|f| f.message.contains("refuted by represented arguments")),
-            "a concrete counterexample must remain Refuted at the program boundary: {v:?}"
+                .any(|f| f.message.contains("cannot be proven of its body")),
+            "the unproven-return diagnostic carries the rejection: {v:?}"
         );
         assert_eq!(v.return_demands.len(), 1);
-        match &v.return_demands[0].verdict {
-            ClaimVerdict::Refuted(witness) => {
-                assert_eq!(witness.arguments.len(), 1);
-                assert!(!Contract::Kind(crate::contract::Kind::String).contains(&witness.produced));
-            }
-            other => panic!("the typed program record lost its refutation: {other:?}"),
-        }
+        assert!(
+            matches!(&v.return_demands[0].verdict, ClaimVerdict::Unproven),
+            "the typed record carries the honest voice: {:?}",
+            v.return_demands[0].verdict
+        );
     }
 
     /// A failed abstract proof with no represented counterexample remains Unproven; the

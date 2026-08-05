@@ -113,10 +113,11 @@ pub fn summarize_instance(
     let completion = match &a.completion {
         Completion::Produces => CompletionWithoutValue::ProvenAbsent,
         Completion::MayFallThrough | Completion::FallsThrough(_) => {
-            crate::analyzer::refute::realized_completion(callee, arg_contracts, interner).map_or(
-                CompletionWithoutValue::UnprovenPossible,
-                CompletionWithoutValue::ProvenPresent,
-            )
+            crate::analyzer::refute::realized_completion(callee, arg_contracts, cenv, interner)
+                .map_or(
+                    CompletionWithoutValue::UnprovenPossible,
+                    CompletionWithoutValue::ProvenPresent,
+                )
         }
     };
     Some(ApplicationOutcome {
