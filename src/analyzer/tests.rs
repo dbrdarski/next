@@ -2431,8 +2431,9 @@ mod refute {
     }
 
     #[test]
-    fn realized_refutation_is_revoked_and_returns_no_witness() {
-        // RE-RECORDED [user revocation, 2026-08-05]: the evaluation-based witness
+    fn realized_refutation_is_closed_and_returns_no_witness() {
+        // RE-RECORDED 2026-08-05 (sampler closed during the A1 discussion — no
+        // author ruling; A1 open): the evaluation-based witness
         // search is closed — even a genuinely wrong claim (f never returns String)
         // yields no realized witness; the claim lands in the honest third voice at
         // its seat. The witness *shape* (AP-19) remains spec vocabulary awaiting a

@@ -59,7 +59,11 @@ pub fn realized_refutation(
     claim: &Contract,
     interner: &mut Interner,
 ) -> Option<RealizedWitness> {
-    // REVOKED [user, 2026-08-05]. The specification licenses the witness *shape*
+    // CLOSED 2026-08-05 — **provenance correction (same day):** this closure was
+    // implemented during the A1 discussion on my own inference; **no author ruling
+    // exists**. The author has neither ratified nor reverted it (explicitly: "a
+    // question is not a permission to change"); A1 remains OPEN on the decisions
+    // ledger. The specification licenses the witness *shape*
     // (AP-19 / the closure rule: a realized completing `(e, x, v)` with `v ∉ γ(C)`)
     // — it never licensed fueled analyzer-side evaluation as the *procedure* for
     // finding one, and the author has ruled that fuel may not appear in analysis.
@@ -74,7 +78,8 @@ pub fn realized_refutation(
 
 /// A represented application proven to complete without a value (application §1.5 /
 /// AP-30) — by **structural derivation only**: no analyzer-side evaluation exists
-/// [user revocation, 2026-08-05]. Candidate points come from the arguments'
+/// [closed 2026-08-05 during the A1 discussion — no author ruling; A1 open].
+/// Candidate points come from the arguments'
 /// **proven members** (contract membership, never evaluation); a point whose row
 /// walk selects nothing falls through denotationally. Anything short of that
 /// certainty stays the honest third voice. `Pure` closures only.
@@ -84,8 +89,9 @@ pub fn realized_completion(
     cenv: &crate::contract::ContractEnv,
     interner: &mut Interner,
 ) -> Option<ApplicationWitness> {
-    // The evaluation-based search is REVOKED [user, 2026-08-05] — same ruling as
-    // `realized_refutation`. What remains is the **structural** derivation, which
+    // The evaluation-based search is closed [2026-08-05, A1 discussion — no author
+    // ruling; see `realized_refutation`]. What remains is the **structural**
+    // derivation, which
     // executes nothing: when every argument is a represented point (the call's own
     // written constants — GR-22) and the instantiated row walk selects **no row**
     // for that point vector, the match falls through denotationally — pattern

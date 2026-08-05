@@ -1747,7 +1747,8 @@ mod tests {
     /// and it is the flip that slice was written to produce.
     #[test]
     fn a_declared_return_contract_that_the_body_does_not_meet_rejects() {
-        // RE-RECORDED [user revocation, 2026-08-05]: the rejection stands, carried
+        // RE-RECORDED 2026-08-05 (sampler closed during the A1 discussion — no
+        // author ruling; A1 open): the rejection stands, carried
         // by the Unproven voice — the sampled counterexample and its "refuted by
         // represented arguments" diagnostic went with the evaluation-based search.
         let (v, _) = check("f where (Number) => String\nf = (n) => n + 1\n");

@@ -123,7 +123,8 @@ mod tests {
     /// refuted with that concrete evidence rather than collapsed into Unproven.
     #[test]
     fn an_unsatisfied_return_demand_is_the_third_voice_since_the_revocation() {
-        // RE-RECORDED [user revocation, 2026-08-05]: with the evaluation-based
+        // RE-RECORDED 2026-08-05 (sampler closed during the A1 discussion — no
+        // author ruling; A1 open): with the evaluation-based
         // witness search closed, a false return claim adjudicates **Unproven** —
         // still a rejection at the asking seat, carried by the honest voice. The
         // demand record preserves whichever voice adjudication produced.
