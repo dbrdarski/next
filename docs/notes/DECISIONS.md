@@ -5849,3 +5849,19 @@ the bounded runner); the paper-proof halves (§13.1–4, μ laws, the semantics 
 **Verification:** 467 lib passed / 1 ignored (+1 projection pin); 173 conformance passed /
 3 ignored (+5 live batteries, +1 recorded stub); 10 machinery gates; clippy `-D warnings`
 clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-05 — A5 ruled and landed: the uncalled-unsafe lint (warning domain)
+
+**Ruling [user, 2026-08-05]:** the uncalled-proven-unsafe-body diagnostic is **lint/warning
+domain** — never an error, never silent. **Landed as `uncalled_unsafe_lints`** at the end of
+program analysis: for each module function binding **no other item mentions** (reference scan
+via the canonicalizer's free-variable walk over a nullary wrapper — nested lambda bodies
+included; self-recursion is not a call), prove body safety over the accepted domain; a
+`Refuted` body raises a definition-site Warning naming the lint. Referenced functions are
+skipped — their call seats carry the real, blocking judgment (no duplicate noise). Three
+conformance pins (`uncalled_unsafe`): uncalled-trapping warns-and-compiles; called-trapping
+keeps the seat rejection without the lint; uncalled-safe stays silent. Zero movement across
+the suites. **`// [ask-author]`: none — the ruling is the author's, given in-session.**
+
+**Verification:** 467 lib passed / 1 ignored; 176 conformance passed / 3 ignored (+3 pins);
+10 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

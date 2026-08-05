@@ -361,6 +361,14 @@ pub(crate) fn analyze_program_project(
         }
     }
 
+    // The uncalled-proven-unsafe-body lint [user ruling, 2026-08-05: warning/lint
+    // domain — never error, never silent]. A function no other module item ever
+    // references has no call seat, so the late-resolution law raises no demand on
+    // its body; the lint runs the body-safety judgment anyway and *advises* when
+    // the body is proven to trap. Referenced functions are skipped — their seats
+    // already carry the real (blocking) judgment.
+    uncalled_unsafe_lints(module, &values, &cenv, &mut findings, interner);
+
     (
         ProgramVerdict {
             findings,
@@ -921,6 +929,87 @@ fn ground_executable(
                 grounding_demands,
                 interner,
             );
+        }
+    }
+}
+
+/// The reference names an item expression mentions, nested lambda bodies
+/// included: the expression is wrapped as a nullary lambda body and the
+/// canonicalizer's free-variable computation does the walk (bindings excluded,
+/// closures traversed — exactly the "does any item mention this name" question).
+fn expr_mentions(e: &crate::ast::Expr, interner: &mut Interner) -> Vec<String> {
+    let wrapper = crate::ast::Lambda {
+        params: crate::ast::Pat::Tuple(vec![]),
+        body: Box::new(e.clone()),
+        act_kind: crate::ast::ActKind::Pure,
+    };
+    crate::oracle::lambda_free_vars(&wrapper, interner)
+}
+
+/// See the call site: for each module function binding whose name **no other
+/// item** mentions (self-recursion is not a call seat), prove body safety over
+/// the accepted domain and advise on refutation.
+fn uncalled_unsafe_lints(
+    module: &Module,
+    values: &HashMap<String, ValueRef>,
+    cenv: &ContractEnv,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) {
+    use std::collections::HashSet;
+    // (owner name, mentioned names) per item — Bind items own their name so a
+    // recursive body's self-reference is attributed and excluded below.
+    let mut mentions: Vec<(Option<String>, HashSet<String>)> = Vec::new();
+    for item in &module.items {
+        let (owner, expr) = match item {
+            Item::Bind(b) => (
+                match &b.target {
+                    crate::ast::BindTarget::Name(n) => Some(n.clone()),
+                    crate::ast::BindTarget::Pattern(_) => None,
+                },
+                Some(&b.value),
+            ),
+            Item::SlotDecl(slot) => (Some(slot.name.clone()), Some(&slot.init)),
+            Item::Stmt(e) => (None, Some(e)),
+            _ => (None, None),
+        };
+        if let Some(e) = expr {
+            mentions.push((owner, expr_mentions(e, interner).into_iter().collect()));
+        }
+    }
+    let mut names: Vec<&String> = values.keys().collect();
+    names.sort();
+    for name in names {
+        let value = &values[name];
+        if value.as_closure().is_none() {
+            continue;
+        }
+        let referenced_elsewhere = mentions
+            .iter()
+            .any(|(owner, set)| owner.as_deref() != Some(name.as_str()) && set.contains(name));
+        if referenced_elsewhere {
+            continue;
+        }
+        let Some(args) = crate::analyzer::obligation::accepted_domain(value, cenv, interner)
+            .and_then(|domain| match domain {
+                Contract::Tuple(parts) => {
+                    Some(parts.iter().map(|c| (**c).clone()).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        if let safety::BodySafety::Refuted(_) = safety::prove(value, &args, cenv, interner) {
+            findings.push(Finding {
+                class: TrapClass::OperationSafety,
+                severity: Severity::Warning,
+                message: format!(
+                    "`{name}` is never called, and its body is proven to trap on \
+                     represented input (uncalled-unsafe lint; any call seat would \
+                     reject it)"
+                ),
+            });
         }
     }
 }

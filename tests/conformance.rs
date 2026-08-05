@@ -1818,6 +1818,60 @@ mod region_instantiation_multi {
     }
 }
 
+// The uncalled-unsafe lint [user ruling, 2026-08-05: warning/lint domain]. An
+// unreferenced function raises no seat demand (late-resolution), but a body proven
+// to trap is advised at the definition — never an error, never silent.
+mod uncalled_unsafe {
+    use super::*;
+    use next::analyzer::Severity;
+
+    #[test]
+    fn uu_uncalled_trapping_body_warns_and_compiles() {
+        let v = check_source("f = (n) => n + \"s\"\nx = 1\nx\n")
+            .expect("parses and checks")
+            .0;
+        assert!(v.accepted(), "a lint never rejects: {:#?}", v.findings);
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.severity == Severity::Warning
+                    && f.message.contains("uncalled-unsafe lint")),
+            "the definition-site advisory fires: {:#?}",
+            v.findings
+        );
+    }
+
+    #[test]
+    fn uu_called_function_keeps_the_blocking_seat_judgment() {
+        let v = check_source("f = (n) => n + \"s\"\nx = f(1)\nx\n")
+            .expect("parses and checks")
+            .0;
+        assert!(!v.accepted(), "the call seat carries the real rejection");
+        assert!(
+            !v.findings
+                .iter()
+                .any(|f| f.message.contains("uncalled-unsafe lint")),
+            "a referenced function is not \"uncalled\": {:#?}",
+            v.findings
+        );
+    }
+
+    #[test]
+    fn uu_uncalled_safe_function_stays_silent() {
+        let v = check_source("f = (n) => n + 1\nx = 1\nx\n")
+            .expect("parses and checks")
+            .0;
+        assert!(v.accepted());
+        assert!(
+            !v.findings
+                .iter()
+                .any(|f| f.message.contains("uncalled-unsafe lint")),
+            "{:#?}",
+            v.findings
+        );
+    }
+}
+
 // TIER 5 — the C§16 discharge, executable face (A-SND v2). **Evidence, not proof**:
 // grounding §13.5 states "property testing supplements §16; it never replaces it" —
 // these batteries are the executable supplements, one per named obligation. The

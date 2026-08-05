@@ -405,6 +405,11 @@ the projectors see through `Leaf(Intersection)` (sound either-side rule, no cons
 Still owed: the γ-per-world battery, the world-decided runner, all paper-proof halves.
 Detail in `DECISIONS.md` (2026-08-05).
 
+**A5 ruled and landed (2026-08-05):** the uncalled-proven-unsafe-body diagnostic is
+**lint domain** [user] — `uncalled_unsafe_lints` advises at the definition when an
+unreferenced function's body is proven to trap; seats keep the blocking judgment; three
+conformance pins. Detail in `DECISIONS.md` (2026-08-05).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -623,7 +628,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **173 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **176 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
