@@ -420,6 +420,14 @@ stands. Same session: A2 (walk-from-Top) and A3 (class borrowing) RULED and conv
 A4(2) gray-acknowledgment allowed for unproven recursion only (spelling reserved); A7
 where-on-product-binding ruled EXTEND (queued). Detail in `DECISIONS.md` (2026-08-05).
 
+**Nested-factory false rejection fixed (2026-08-06):** both application paths that answer
+while the safety voice is coarse collapsed the **produced** contract to `Top` for
+non-recursive callees, contradicting the §1.6 doctrine stated in their own comments. A
+function produced by a nested call therefore became unresolvable, rejecting correct code
+(`build = () => makeCounter(7)(3)`) that the module-level form accepted. Both now answer
+from `analyze_instance_body` (settles no fact, bounded by the shape cutoff). Pinned as
+conformance `nested_factory_application`. Detail in `DECISIONS.md` (2026-08-06).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -638,7 +646,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **177 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **180 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

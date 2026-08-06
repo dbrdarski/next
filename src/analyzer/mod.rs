@@ -1318,10 +1318,18 @@ fn analyze_known_application_alternative(
         // contract instead of minting an uncoverable `(m, [Top])` node. Completion
         // consults the assumed completion facts and settled coverage — read-only,
         // never a settlement past the cutoff.
+        //
+        // A **non-recursive** callee answers its produced voice the same way: the
+        // ordinary instance-body walk, which settles no fact and is bounded by the
+        // shape-repeat cutoff. Collapsing it to `Top` was not free — a function
+        // *produced by a nested call* became unresolvable, so
+        // `build = () => makeCounter(7)(3)` was rejected with "callee not resolved to
+        // a known function" while the identical two-step form at module level passed.
         let produced = if induction::is_recursive(callee) {
             call_return(callee, arg_contracts, has_spread, cenv, interner)
         } else {
-            Contract::Top
+            outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
+                .map_or(Contract::Top, |a| a.contract)
         };
         let completion = if induction::completes_assumed(callee, arg_contracts, interner)
             || safety::completes_settled(callee, arg_contracts, cenv, interner)
@@ -1356,10 +1364,21 @@ fn analyze_known_application_alternative(
         // recursive callee must contribute its assumed contract — under the
         // proposal's bottoms that is `Bottom`, not a proposal-poisoning `Top`.
         // Completion likewise reads the assumed/settled completion facts only.
+        //
+        // A **non-recursive** callee keeps its own produced judgment too: analyze the
+        // instance body (which settles no fact — it is the ordinary body walk) rather
+        // than collapsing to `Top`. Sound either way — if the body is genuinely unsafe
+        // the seat already carries the error and no value is produced — but the
+        // collapse was **not** free: during a safety settlement, nested applications
+        // are deliberately answered coarsely (the `VERIFYING_SAFETY` guard), so a
+        // function *produced by a nested call* became `Top` and could then never be
+        // applied. That rejected correct code — `build = () => makeCounter(7)(3)` —
+        // with "callee not resolved to a known function".
         let produced = if induction::is_recursive(callee) {
             call_return(callee, arg_contracts, has_spread, cenv, interner)
         } else {
-            Contract::Top
+            outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
+                .map_or(Contract::Top, |a| a.contract)
         };
         let completion = if induction::completes_assumed(callee, arg_contracts, interner)
             || safety::completes_settled(callee, arg_contracts, cenv, interner)

@@ -5944,3 +5944,51 @@ converted to the ruling.
 
 **Verification:** 467 lib passed / 1 ignored; 177 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-06 — A false rejection closed: a factory product could not be applied inside a body
+
+**Found while checking my own claim in a B4 discussion — the example I used to illustrate
+symbolic instances turned out to be failing for an unrelated reason, and the reason was a
+defect.**
+
+**The repro is minimal — no parameters, no `where`, every value a literal:**
+
+```
+makeCounter = (limit) => (n) => n <= limit ? n : limit
+build = () => makeCounter(7)(3)
+x = build()
+x
+```
+
+`--check` → `error: cannot prove this callee's body safe (callee not resolved to a known
+function)`. `run` → `=> 3`. Correct program, correct answer, rejected. The isolation: the
+identical two-step form **at module level** (`c = makeCounter(7)` then `c(3)`) passes, a
+plain call inside a body passes, and a module-level product *called* from inside a body
+passes. Only *producing* the function inside a body fails.
+
+**Cause, traced.** Both application paths that answer while the safety voice is coarse —
+the `safety_context_active()` guard branch and the post-`discharge_body_safety` branch —
+collapsed the **produced** contract to `Top` for a non-recursive callee, immediately below
+a comment stating that produced and completion "remain their own judgments (§1.6 — separate
+judgment classes)". The recursive case already honored that (it reads `call_return`); the
+non-recursive case did not. During a safety settlement, nested applications are answered
+coarsely on purpose, so `makeCounter(7)` produced `Top`, and the outer application then had
+nothing to resolve — hence "callee not resolved to a known function." The instrumented
+trace shows `instance_body OUT contract=Equals(Function)` — the closure *was* built
+correctly — followed by `classify callee erased=Top`.
+
+**Fix.** In both branches, a non-recursive known callee answers its produced voice from
+`outcome::analyze_instance_body` — the ordinary body walk, which settles no fact and is
+bounded by the shape-repeat cutoff — instead of `Top`. Sound in the failing direction: if
+the body is genuinely unsafe the seat already carries its error and no value is produced,
+so the produced contract is not load-bearing there; and the safety verdict itself is
+untouched. This restores the code's own stated §1.6 discipline rather than adding a rule.
+
+**Pinned** as conformance `nested_factory_application`: the minimal repro, the block-binding
+and parameterized forms, and the module-level control that always worked. Zero regressions.
+
+**`// [ask-author]`: none** — the change makes the implementation match the doctrine written
+at both sites.
+
+**Verification:** 467 lib passed / 1 ignored; 180 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

@@ -1834,6 +1834,50 @@ mod region_instantiation_multi {
     }
 }
 
+// A factory product applied **inside a function body** (2026-08-06 defect fix). The
+// produced voice is a separate judgment class (§1.6) — collapsing it to `Top` while
+// the safety voice was coarse made a function returned by a nested call unresolvable.
+mod nested_factory_application {
+    use super::*;
+
+    const MK: &str = "makeCounter = (limit) => (n) => n <= limit ? n : limit\n";
+
+    /// The minimal repro: no parameters, no `where`, every value a literal. Rejected
+    /// before the fix with "callee not resolved to a known function"; runs to 3.
+    #[test]
+    fn nf_factory_applied_in_a_body_resolves() {
+        let src = format!("{MK}build = () => makeCounter(7)(3)\nx = build()\nx\n");
+        let v = check_source(&src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(&src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "3"
+        );
+    }
+
+    /// The same through a block binding, and through a parameter — both were rejected.
+    #[test]
+    fn nf_two_step_and_parameterized_forms_resolve() {
+        let block =
+            format!("{MK}build = () => {{\n  c = makeCounter(7)\n  => c(3)\n}}\nx = build()\nx\n");
+        assert!(check_source(&block).expect("parses").0.accepted());
+        let param = format!("{MK}build = (k) => makeCounter(k)(3)\nx = build(7)\nx\n");
+        assert!(check_source(&param).expect("parses").0.accepted());
+    }
+
+    /// The control that always worked — the product bound at module level — still does.
+    #[test]
+    fn nf_module_level_factory_still_resolves() {
+        let src = format!("{MK}c = makeCounter(7)\nx = c(3)\nx\n");
+        assert!(check_source(&src).expect("parses").0.accepted());
+    }
+}
+
 // The uncalled-unsafe lint [user ruling, 2026-08-05: warning/lint domain]. An
 // unreferenced function raises no seat demand (late-resolution), but a body proven
 // to trap is advised at the definition — never an error, never silent.
