@@ -1834,6 +1834,69 @@ mod region_instantiation_multi {
     }
 }
 
+// **Contract-level analysis instances (C§13.2, landed 2026-08-06).** A function value
+// produced with a capture that is *not* a single value carries its instance — shape +
+// capture **contracts** — as metadata beside the coarse `Kind(Function)`, and a call site
+// resolves through it. The spec's own example is this case ("contract-level for factory
+// products like `makeAdder(someInput)`"; "callables … arrive at call sites with instances
+// recoverable — plumbing, not a contract constructor").
+mod contract_level_instances {
+    use super::*;
+
+    /// A `where` over a domain that is not enumerable as points, on a function that
+    /// builds a helper from its own argument and calls it. Before the instance landed,
+    /// this was rejected with "callee not resolved to a known function".
+    #[test]
+    fn cli_a_factory_product_from_a_declared_domain_is_callable() {
+        for domain in ["Number", "Range(100, 200)", "GreaterEq(0)"] {
+            let src = format!(
+                "makeCounter = (limit) => (n) => n <= limit ? n : limit\n\
+                 build where ({domain}) => Number\n\
+                 build = (k) => {{\n  c = makeCounter(k)\n  => c(3)\n}}\n\
+                 x = build(7)\nx\n"
+            );
+            let v = check_source(&src).expect("parses and checks").0;
+            assert!(v.accepted(), "where ({domain}): {:#?}", v.findings);
+        }
+    }
+
+    /// The sound direction: the instance carries the capture's **contract**, so a body
+    /// that misuses it is refuted — and named precisely, not as an unresolved callee.
+    #[test]
+    fn cli_a_bad_capture_contract_is_refuted_at_the_operation() {
+        let src = "makeAdder = (k) => (n) => n + k\n\
+                   bad where (String) => Number\n\
+                   bad = (s) => makeAdder(s)(1)\n\
+                   x = 1\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(!v.accepted(), "`1 + aString` must be refuted");
+        assert!(
+            v.findings.iter().any(|f| f.message.contains("Add")),
+            "the diagnostic names the operation, not a missing callee: {:#?}",
+            v.findings
+        );
+    }
+
+    /// The same shape with a sound capture contract proves, and runs.
+    #[test]
+    fn cli_the_sound_twin_proves_and_runs() {
+        let src = "makeAdder = (k) => (n) => n + k\n\
+                   good where (Number) => Number\n\
+                   good = (k) => makeAdder(k)(1)\n\
+                   x = good(5)\nx\n";
+        assert!(check_source(src).expect("parses").0.accepted());
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "6"
+        );
+    }
+}
+
 // **The `where`-isolation invariant** [author, 2026-08-06]: E11 makes a `where` a
 // verified assertion — "never trusted, never a mode … hence no new caller obligations."
 // So the presence of a signature must never change what a *call site* concludes. Before

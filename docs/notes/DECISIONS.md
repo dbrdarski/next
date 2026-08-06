@@ -6043,3 +6043,57 @@ this repair.
 
 **Verification:** 467 lib passed / 1 ignored; 182 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-06 — Contract-level analysis instances (C§13.2): the factory product becomes callable
+
+**The former "B4" was never an open question — it was specified and unbuilt**, and the
+record is corrected in the same commit series. C§13.2, twice: *"A call site resolves its
+callee to an analysis instance (**shape + environment contracts — exact for const closures,
+contract-level for factory products like `makeAdder(someInput)`**)"* and *"Function-valued
+analysis results retain their possible analysis instances … as analyzer **metadata riding
+alongside their coarse `Kind(Function)` contract**, so callables … arrive at call sites with
+instances recoverable (**plumbing, not a contract constructor**)."*
+
+The types already existed — `Instance { shape: Lambda, env: Vec<AnalysisContract> }` and
+`InstanceMetadata::Known(..)` — with a lattice and its tests. What did not exist was the
+plumbing at either end.
+
+**Producer.** `analyze_lambda` returned a bare `Kind(Function)` the moment any capture was
+non-singleton, discarding the instance. It now emits `Kind(Function)` **with**
+`Known([Instance { shape, env }])`, the env being the free names' contracts in canonical
+order.
+
+**Carrier.** Both safety-branch `produced` computations erased to a plain `Contract`
+(`a.contract`), stripping the metadata a produced callable carries. Both now pass the
+**annotated** form through. Without this the instance died in exactly the seats that needed
+it, and a genuinely trapping program was rejected as "callee not resolved" instead of by its
+operand error.
+
+**Consumer.** A seat whose callee is `Kind(Function)` with a single non-empty Pure
+`Known` instance resolves **through** it: bind the shape's free names to the capture
+contracts, bind the parameters to the argument tuple, run the ordinary body walk, and adopt
+its findings, demands, produced contract and completion. Guarded by
+`ACTIVE_INSTANCE_SHAPES` — a symbolic instance has no fact key yet, so a repeated shape
+answers coarsely (sound). **Still owed** (`OwedItems` §1a): unions of instances, non-Pure
+act kinds, and the fact-cache keys such instances would need.
+
+**Effect.** Every scratch variant of the investigation now checks clean — `where (Number)`,
+`where (Range(100,200))`, `where (GreaterEq(0))`, the block and one-line forms, with and
+without a call — and each still runs to the same value. The sound direction is unchanged and
+sharper: `bad where (String) => Number; bad = (s) => makeAdder(s)(1)` is refuted, now naming
+*"`Add` traps on some input admitted by the operands"* rather than a missing callee.
+
+**Pinned** as conformance `contract_level_instances`: a factory product from a declared
+domain is callable across three domain shapes; a bad capture contract is refuted at the
+operation; the sound twin proves and runs.
+
+**The three-defect cluster this closes.** All in one neighborhood — function values flowing
+out of calls and into calls — and each hid the next: the produced-voice collapse to `Top`
+(2026-08-06), the discovery/verification predicate split (2026-08-06, option D), and this
+missing instance plumbing. The author's question — *"are we chasing ghosts?"* — is what
+prompted re-reading C§13.2 and finding that the last one was specified all along.
+
+**`// [ask-author]`: none** — implemented to the cited text.
+
+**Verification:** 467 lib passed / 1 ignored; 185 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

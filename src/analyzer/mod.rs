@@ -378,7 +378,35 @@ fn analyze_lambda(l: &crate::ast::Lambda, env: &TypeEnv, interner: &mut Interner
             });
         match singleton {
             Some(v) => captures.push((name.clone(), v)),
-            None => return exact(Contract::Kind(Kind::Function)),
+            // **C§13.2's contract-level instance.** A capture that is not a single
+            // value cannot make a closure *value* — but the analysis instance is
+            // "shape + environment **contracts**", and the spec's own example is this
+            // case (`makeAdder(someInput)`). Carry it as metadata beside the coarse
+            // `Kind(Function)` so the callable "arrives at call sites with instances
+            // recoverable"; returning a bare `Kind(Function)` here is what made a
+            // factory product unusable under a `where`.
+            None => {
+                let captured: Vec<AnalysisContract> = free
+                    .iter()
+                    .map(|n| {
+                        env.get(n)
+                            .cloned()
+                            .unwrap_or_else(|| AnalysisContract::of_contract(Contract::Top))
+                    })
+                    .collect();
+                let instance = domain::Instance {
+                    shape: l.clone(),
+                    env: captured,
+                };
+                return Analysis::produced_annotated(
+                    AnalysisContract::leaf(
+                        Contract::Kind(Kind::Function),
+                        domain::InstanceMetadata::Known(vec![instance]),
+                    ),
+                    vec![],
+                    interner,
+                );
+            }
         }
     }
     let scope = crate::env::Scope::root();
@@ -1092,6 +1120,66 @@ fn analyze_apply(
     }
 }
 
+thread_local! {
+    /// Shapes currently being analyzed through a contract-level instance. A symbolic
+    /// instance carries no fact key yet (owed), so this is what keeps a self-applying
+    /// shape from recursing without bound — the same discipline `outcome`'s
+    /// `ACTIVE_SHAPES` applies to value instances. A repeat answers coarsely, which is
+    /// sound.
+    static ACTIVE_INSTANCE_SHAPES: std::cell::RefCell<Vec<crate::ast::Lambda>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Analyze an application whose callee is a **contract-level instance** (C§13.2):
+/// bind the shape's free names to the instance's capture contracts, bind the
+/// parameters to the argument tuple, and run the ordinary body walk. The body's own
+/// findings and safety demands become this seat's — no fact is settled, because a
+/// symbolic instance has no cache key yet.
+fn analyze_contract_level_instance(
+    instance: &domain::Instance,
+    arg_contracts: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> AlternativeContribution<ApplicationDetail> {
+    let repeated = ACTIVE_INSTANCE_SHAPES
+        .with(|active| active.borrow().iter().any(|held| held == &instance.shape));
+    if repeated {
+        return application_contribution(
+            Vec::new(),
+            Vec::new(),
+            Contract::Top,
+            Completion::MayFallThrough,
+        );
+    }
+
+    let free = crate::oracle::lambda_free_vars(&instance.shape, interner);
+    let mut env = TypeEnv::new();
+    for (name, captured) in free.iter().zip(&instance.env) {
+        env.insert(name.clone(), captured.clone());
+    }
+    let arg_tuple = Contract::tuple(arg_contracts.to_vec(), interner);
+    bind_pattern(&instance.shape.params, &arg_tuple, &mut env);
+
+    ACTIVE_INSTANCE_SHAPES.with(|active| active.borrow_mut().push(instance.shape.clone()));
+    let analysis = analyze_in_world(
+        &instance.shape.body,
+        &env,
+        cenv,
+        world_for_act(instance.shape.act_kind),
+        interner,
+    );
+    ACTIVE_INSTANCE_SHAPES.with(|active| {
+        active.borrow_mut().pop();
+    });
+
+    application_contribution(
+        analysis.findings,
+        analysis.safety_demands,
+        analysis.annotated,
+        analysis.completion,
+    )
+}
+
 #[derive(Clone, Debug, Default)]
 struct ApplicationDetail {
     findings: Vec<Finding>,
@@ -1115,6 +1203,24 @@ fn analyze_application_alternative(
         .iter()
         .map(|argument| argument.erase(interner))
         .collect();
+    // **C§13.2's contract-level instance at the seat.** A callable with no value but a
+    // recoverable instance — shape + capture contracts — resolves *through* that
+    // instance instead of being declared unknown ("callables … arrive at call sites
+    // with instances recoverable"). Restricted to a single Pure instance for now; a
+    // union of instances, and the fact-cache keys such instances would need, remain
+    // owed (`OwedItems` §1a).
+    if !has_spread
+        && let AnalysisContract::Leaf {
+            contract: Contract::Kind(Kind::Function),
+            metadata: domain::InstanceMetadata::Known(instances),
+        } = &alternative.callee
+        && let [instance] = instances.as_slice()
+        && matches!(instance.shape.act_kind, ActKind::Pure)
+        && !instance.is_empty()
+    {
+        return analyze_contract_level_instance(instance, &arg_contracts, cenv, interner);
+    }
+
     let erased_callee = alternative.callee.erase(interner);
     let classified = application::classify_callees(&erased_callee, interner);
     let callee = match classified.as_slice() {
@@ -1336,11 +1442,22 @@ fn analyze_known_application_alternative(
         // *produced by a nested call* became unresolvable, so
         // `build = () => makeCounter(7)(3)` was rejected with "callee not resolved to
         // a known function" while the identical two-step form at module level passed.
+        // The annotated form, not the erased one: a produced **callable** carries its
+        // analysis instance as metadata (C§13.2), and erasing here would strip it —
+        // leaving a later seat with an unresolvable `Kind(Function)`.
         let produced = if induction::is_recursive(callee) {
-            call_return(callee, arg_contracts, has_spread, cenv, interner)
+            AnalysisContract::of_contract(call_return(
+                callee,
+                arg_contracts,
+                has_spread,
+                cenv,
+                interner,
+            ))
         } else {
-            outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
-                .map_or(Contract::Top, |a| a.contract)
+            outcome::analyze_instance_body(callee, arg_contracts, cenv, interner).map_or_else(
+                || AnalysisContract::of_contract(Contract::Top),
+                |a| a.annotated,
+            )
         };
         let completion = if induction::completes_assumed(callee, arg_contracts, interner)
             || safety::completes_settled(callee, arg_contracts, cenv, interner)
@@ -1385,11 +1502,22 @@ fn analyze_known_application_alternative(
         // function *produced by a nested call* became `Top` and could then never be
         // applied. That rejected correct code — `build = () => makeCounter(7)(3)` —
         // with "callee not resolved to a known function".
+        // The annotated form, not the erased one: a produced **callable** carries its
+        // analysis instance as metadata (C§13.2), and erasing here would strip it —
+        // leaving a later seat with an unresolvable `Kind(Function)`.
         let produced = if induction::is_recursive(callee) {
-            call_return(callee, arg_contracts, has_spread, cenv, interner)
+            AnalysisContract::of_contract(call_return(
+                callee,
+                arg_contracts,
+                has_spread,
+                cenv,
+                interner,
+            ))
         } else {
-            outcome::analyze_instance_body(callee, arg_contracts, cenv, interner)
-                .map_or(Contract::Top, |a| a.contract)
+            outcome::analyze_instance_body(callee, arg_contracts, cenv, interner).map_or_else(
+                || AnalysisContract::of_contract(Contract::Top),
+                |a| a.annotated,
+            )
         };
         let completion = if induction::completes_assumed(callee, arg_contracts, interner)
             || safety::completes_settled(callee, arg_contracts, cenv, interner)

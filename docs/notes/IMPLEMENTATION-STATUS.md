@@ -437,6 +437,16 @@ E11's "no new caller obligations". Both now call one read-only `safety::establis
 across five declared domains, adding a call adds no error. B4 (symbolic instances) is
 untouched and still open. Detail in `DECISIONS.md` (2026-08-06).
 
+**Contract-level analysis instances landed (2026-08-06) — C§13.2's "plumbing".** A lambda
+with a non-singleton capture now carries `Known([Instance{shape, capture contracts}])`
+beside `Kind(Function)`; both safety branches pass the **annotated** produced contract so
+the metadata survives; a seat with a single Pure instance resolves through it (body walked
+with capture contracts + argument tuple, `ACTIVE_INSTANCE_SHAPES`-guarded). A factory
+product built from a declared domain is callable at last — the former "B4", which was
+specified rather than open. Owed: instance unions, non-Pure kinds, symbolic fact keys
+(`OwedItems` §1a). Pinned as conformance `contract_level_instances`. Detail in
+`DECISIONS.md` (2026-08-06).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -655,7 +665,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **182 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **185 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
