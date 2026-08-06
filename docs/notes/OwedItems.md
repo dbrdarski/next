@@ -332,6 +332,11 @@ sound.)
   diagnostic (error / goes-nowhere warning / silent) is **not explicitly ruled** — I
   found no spec statement. E10's goes-nowhere lint tier is the natural home. Narrow;
   off the recovery's critical path. **[ask-author]**
+- **F0 draft Q1 — the union rule in operation images** — hull (implemented) vs
+  distribution vs held-image. Registered here because the framing changed under
+  measurement: this is **not** a precision/cost tradeoff at the margin — the hull
+  manufactures values the program cannot produce and then rejects correct programs for
+  not handling them. Full record and decision space in **Thread D** (§5).
 - **Literal parameter patterns `(0) => …`** — E3: *"[deferred; likely excluded]"*. (Some
   analyzer tests use const params; they'd need re-basing if excluded.)
 
@@ -343,6 +348,18 @@ sound.)
   (`1/0 ≠ 2/0`). `HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md`. Tests
   that move if ruled: `(1/0) == (2/0)` (`oracle/tests.rs`), PR-04's render, MU-10 in
   `poly.rs`.
+- **Thread D** — the **operation rulebook's union rule** (F0 Q1 / A6): interval hull
+  (implemented) vs distribution vs a **held-and-forced image**. Not a precision dial —
+  measured 2026-08-05: the hull rejects a *correct, total* program over its own declared
+  domain, because exact rationals make an interval dense and no finite set of point rows
+  can consume one; the same file accepts under distribution. Carries two sub-threads: the
+  emptiness check's bounded-arithmetic-progression gap (`Range ∧ Mod` denotes a finite
+  set the algebra cannot enumerate — independently useful for user-written bounded
+  integer contracts), and a third candidate rule modelled on region-table §8's parked
+  held-relation suspension (hold the image, let the consuming seat force it; the coarse
+  form answers `Proven`, anything else forces and re-asks — RT-14's discipline).
+  `HANDOVER-hull-vs-distribution-2026-08-05.md`. **No test moves if ruled** — the case
+  lives in the handover, not the suite; pinning it is part of whatever is ruled.
 
 ## 6. Author-flagged opens (implemented per stated law)
 
