@@ -213,6 +213,36 @@ thread_local! {
     static VERIFYING_SAFETY: Cell<bool> = const { Cell::new(false) };
 }
 
+/// **The one answer to "is this dependency already established?"** [2026-08-06].
+///
+/// Graph discovery and body verification used to ask this question with *different*
+/// predicates: discovery accepted a settled proven fact by coverage and dropped the
+/// dependency, while verification accepted only a hypothesis derived from a graph
+/// node. Anything discovery discharged from the cache was therefore invisible to
+/// verification, which reported "callee safety is not established by the active fact
+/// graph" and rejected correct code — and, because a `where` is an easy way to seed a
+/// wide proven fact, a signature could change a call site's verdict, contradicting
+/// E11 ("never a mode … no new caller obligations").
+///
+/// Both now call this. It consults the active hypotheses first, then the **published**
+/// facts by coverage (`factcache::covering` returns only untainted, depth-0 `Proven`
+/// entries, so a hypothesis-relative settlement can never leak in). It is **read-only**
+/// — it never starts a settlement, so no graph cutoff is bypassed.
+pub(crate) fn established(
+    callee: &ValueRef,
+    args: &[Contract],
+    claim: &Claim,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    if matches!(claim, Claim::Safety) && induction::safety_assumed(callee, args, interner) {
+        return true;
+    }
+    factcache::key(callee, args, claim, cenv, interner)
+        .and_then(|key| factcache::covering(&key, interner))
+        .is_some_and(|verdict| verdict.is_proven())
+}
+
 /// Whether a body-safety verification is active. The hypothesis table covers normal
 /// vector passes; `VERIFYING_SAFETY` also covers post-settlement diagnostic recovery.
 pub(crate) fn safety_context_active() -> bool {
@@ -745,12 +775,11 @@ fn discover(
                 edges[i].push(j);
                 continue;
             }
-            // A settled proven fact whose domain contains the target discharges the
-            // dependency in the same resolution step — coverage as resolution, for
-            // the claim this graph will be settled under.
-            if let Some(key) = factcache::key(&target, &targs, claim, cenv, interner)
-                && matches!(factcache::covering(&key, interner), Some(v) if v.is_proven())
-            {
+            // A dependency already established discharges here — coverage as
+            // resolution, for the claim this graph will be settled under. The same
+            // predicate answers at the verification seat, so the two cannot disagree
+            // about what counts as discharged.
+            if established(&target, &targs, claim, cenv, interner) {
                 continue;
             }
             let shape = shape_of(&target);

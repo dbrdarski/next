@@ -5992,3 +5992,54 @@ at both sites.
 
 **Verification:** 467 lib passed / 1 ignored; 180 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-06 — One predicate for "established": a `where` can no longer change a call site
+
+**Ruled by the author after a joint diagnosis (option D of four).** The defect: graph
+discovery and body verification asked the *same* question with **different predicates**.
+
+- `discover` accepted a dependency as discharged if either an existing graph node covered
+  it **or a settled proven fact covered it** (`factcache::covering`) — and then dropped it,
+  node and edge both.
+- The verification seat (`analyze_apply`) accepted only an **active hypothesis**, which is
+  derived from graph nodes. No node ⇒ no hypothesis ⇒ *"callee safety is not established by
+  the active fact graph"* ⇒ Unproven.
+
+So anything discovery discharged from the cache was invisible to verification. Because a
+`where` is an easy way to seed a wide published fact, **a signature changed a call site's
+verdict** — `x = build(7)` accepted with no `where`, rejected with `where (Number)`.
+That contradicts E11 directly: a `where` is "never trusted, never a mode … hence **no new
+caller obligations**."
+
+**The repair (D — one predicate, one lookup).** `safety::established(callee, args, claim,
+cenv, interner)` is now the single answer: active hypotheses first, then **published** facts
+by coverage (`factcache::covering` returns only untainted depth-0 `Proven` entries, so a
+hypothesis-relative settlement cannot leak in). It is read-only — it never settles, so no
+graph cutoff is bypassed. Both `discover` and the application seat call it, so the two
+**cannot** disagree about what counts as discharged. Options A (teach verification the
+cache), B (stop dropping the node) and C (record a hypothesis instead) were the narrower
+alternatives; D was chosen as the repair rather than the patch.
+
+**Diagnosis provenance, since three of my intermediate accounts were wrong and withdrawn:**
+the mechanism was found by instrumenting, in order, coverage hits and graph discovery
+(showing the call-site graph shrink from 3 nodes to 2), component settlement (showing
+`build @ [7]` settle unproven with a 2-node graph), and finally the hypothesis lookup
+(`same_callee=0` — no hypothesis for `makeCounter` at all, the node being absent). Each
+instrumentation was reverted. The earlier claims that an *incomplete* fact was stamped
+Proven, and that callee **identities** disagreed, were both wrong and are recorded here as
+withdrawn.
+
+**Pinned** as conformance `where_isolation`, which encodes the author's invariant directly:
+for five declared domains, the errors of *(where + call)* equal the errors of *(where, no
+call)* — the call contributes nothing — and the bare call with no `where` is accepted.
+`w2` now emits exactly the three errors `w7` does, and no fourth.
+
+**Still open, deliberately untouched:** the `where (Number)` pass itself still fails on this
+program, because `makeCounter(k)` cannot produce a closure when `k` is a contract rather
+than a value. That is B4 (symbolic instances), a capability question, and is unaffected by
+this repair.
+
+**`// [ask-author]`: none** — the author selected D explicitly.
+
+**Verification:** 467 lib passed / 1 ignored; 182 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

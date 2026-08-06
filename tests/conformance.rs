@@ -1834,6 +1834,62 @@ mod region_instantiation_multi {
     }
 }
 
+// **The `where`-isolation invariant** [author, 2026-08-06]: E11 makes a `where` a
+// verified assertion — "never trusted, never a mode … hence no new caller obligations."
+// So the presence of a signature must never change what a *call site* concludes. Before
+// the one-predicate repair, graph discovery discharged a dependency from a covering
+// published fact while body verification accepted only graph-derived hypotheses, so a
+// `where` (an easy way to seed a wide proven fact) silently changed a call's verdict.
+mod where_isolation {
+    use super::*;
+
+    const MK: &str = "makeCounter = (limit) => (n) => n <= limit ? n : limit\n";
+    const BODY: &str = "build = (k) => {\n  c = makeCounter(k)\n  => c(3)\n}\n";
+
+    fn errors(src: &str) -> Vec<String> {
+        check_source(src)
+            .expect("parses and checks")
+            .0
+            .findings
+            .iter()
+            .filter(|f| f.severity == next::analyzer::Severity::Error)
+            .map(|f| f.message.clone())
+            .collect()
+    }
+
+    /// The invariant, stated as a test: **adding a call must not change the verdict**,
+    /// whatever the declared domain is. For each `where` domain, the errors of
+    /// `(where + call)` must equal the errors of `(where, no call)` — the call site
+    /// contributes nothing of its own.
+    #[test]
+    fn wi_a_call_adds_no_error_under_any_declared_domain() {
+        for domain in [
+            "Number",
+            "Equals(7)",
+            "Union(Equals(7), Equals(9))",
+            "Range(100, 200)",
+            "Union(Equals(1), Equals(2))",
+        ] {
+            let with_call =
+                format!("{MK}build where ({domain}) => Number\n{BODY}x = build(7)\nx\n");
+            let no_call = format!("{MK}build where ({domain}) => Number\n{BODY}x = 1\nx\n");
+            assert_eq!(
+                errors(&with_call),
+                errors(&no_call),
+                "`where ({domain})` changed the call site's verdict"
+            );
+        }
+    }
+
+    /// The other half: with **no** `where` at all, the same call is accepted. So the
+    /// signature neither creates nor removes a caller obligation.
+    #[test]
+    fn wi_the_bare_call_is_accepted() {
+        let bare = format!("{MK}{BODY}x = build(7)\nx\n");
+        assert!(errors(&bare).is_empty(), "{:?}", errors(&bare));
+    }
+}
+
 // A factory product applied **inside a function body** (2026-08-06 defect fix). The
 // produced voice is a separate judgment class (§1.6) — collapsing it to `Top` while
 // the safety voice was coarse made a function returned by a nested call unresolvable.

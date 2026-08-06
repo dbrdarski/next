@@ -428,6 +428,15 @@ function produced by a nested call therefore became unresolvable, rejecting corr
 from `analyze_instance_body` (settles no fact, bounded by the shape cutoff). Pinned as
 conformance `nested_factory_application`. Detail in `DECISIONS.md` (2026-08-06).
 
+**`where`-isolation restored (2026-08-06) [user chose option D]:** graph discovery and
+body verification used different predicates for "is this dependency established?" —
+discovery accepted a covering published fact and dropped the node, verification accepted
+only graph-derived hypotheses — so a `where` could change a *call site's* verdict, against
+E11's "no new caller obligations". Both now call one read-only `safety::established`
+(hypotheses, then published facts by coverage). Pinned as conformance `where_isolation`:
+across five declared domains, adding a call adds no error. B4 (symbolic instances) is
+untouched and still open. Detail in `DECISIONS.md` (2026-08-06).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -646,7 +655,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **180 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **182 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

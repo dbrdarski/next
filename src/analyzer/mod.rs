@@ -1272,9 +1272,20 @@ fn analyze_known_application_alternative(
         );
     }
 
-    // A recursive reference covered by an active safety fact resolves through that
-    // fact; acyclic dependencies retain their exact body outcome.
-    if !has_spread && induction::safety_assumed(callee, arg_contracts, interner) {
+    // A dependency already established resolves through that fact; acyclic
+    // dependencies retain their exact body outcome. `safety::established` is the
+    // *same* predicate graph discovery uses, so a dependency discovery discharged is
+    // one this seat can consume (2026-08-06 — they used to disagree, and a `where`
+    // could thereby change a call site's verdict).
+    if !has_spread
+        && safety::established(
+            callee,
+            arg_contracts,
+            &induction::Claim::Safety,
+            cenv,
+            interner,
+        )
+    {
         safety_demands.push(SafetyDemand::Body(BodySafetyDemand {
             callee: callee.clone(),
             arguments: arg_contracts.to_vec(),
