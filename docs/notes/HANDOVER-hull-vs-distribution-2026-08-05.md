@@ -252,3 +252,112 @@ Recorded so they are not re-imported from the conversation:
 - **Handover Thread C** mentions a "closed-enumeration narrowing" among the unratified
   equality-freeze exclusions. Whether that is the same notion as §6's `denotes_exactly` was
   **not** checked; someone continuing this should read it before assuming either way.
+
+---
+
+## 12. Exploration — the held operation image ("suspension" applied to §1's question)
+
+**Status: sketch only. Non-normative, not adopted, nothing implemented, no ruling sought
+here.** Recorded 2026-08-06 because the author judged the direction worth exploring after
+noticing region-table spec §8's held-relation suspension. This section reasons *by analogy*
+to that parked note; every claim is **[derived]**, none observed.
+
+### 12.1 The observation
+
+§8 parks a refinement of case (c) whose shape is: *a relation the table cannot express is
+not discarded but **held**, unforced, and forces to a unary contract the moment a constant
+bound arrives* — "the recursion move: analyze the suspension, don't expand it."
+
+§§1–5 above describe a different collapse with the same shape. `rate * 2` must produce a
+contract at the moment of the operation, and both candidate rules commit immediately: the
+hull commits to an envelope (destroying the set), distribution commits to the product
+(paying for exactness nobody may want). A third position exists and it is §8's: **commit to
+neither at the operation; hold the image and let the consumer decide.**
+
+### 12.2 The mechanism, sketched
+
+Bind `doubled` to a *suspended image*: the operation node plus its operand contracts,
+uncomputed. Then:
+
+- A consumer that only needs a coarse answer — a safety demand asking "are these Numbers?",
+  a `where` return asking `⊑ Number` — is answered from the **cheap** form. That is exactly
+  what the hull computes today, and it is enough.
+- A consumer that needs membership precision — a region walk dispatching on the value, an
+  emptiness check after consumption — **forces** the suspension, and only then is the
+  product computed, and only for that operation.
+
+So the choice between §1's two rules stops being global. **The seat that consumes the value
+picks the rule, per value.** There is no N to choose (decision-space option 3 above
+dissolves), because the program's own structure decides where exactness is paid for.
+
+### 12.3 Where it would live — the shape already exists
+
+`AnalysisContract` is already "an ordinary contract plus analyzer-only metadata, with a
+formal concretization γ" (application spec §2). That is the right home and it satisfies
+§8's hardest boundary for free: the **contract** field carries the coarse, always-sound
+answer — the thing the language sees, interned, canonical — while the suspension rides in
+**metadata**, analyzer-side, never a `Contract`, never interned, never value-borne. §8's
+constitutional caveat ("assumptions … never enter the contract algebra or ride on any
+interned value, so canonicalization is untouched") transfers verbatim.
+
+### 12.4 The forcing rule, and why it is sound
+
+The coarse form over-approximates the exact one: `γ(exact) ⊆ γ(coarse)`. That asymmetry
+gives a clean rule:
+
+- **A `Proven` answer from the coarse form stands.** `coarse ⊑ X` implies `exact ⊑ X`.
+  Likewise "proven empty" from the coarse form implies genuinely empty.
+- **A `Refuted` or `Unproven` answer from the coarse form must force and re-ask.** A
+  refutation drawn from an over-approximation is precisely the false-rejection failure of
+  §3 — and the analyzer already carries this discipline under another name: RT-14, where an
+  over-approximate arrival set authorizes no refutation.
+
+So the cost is paid exactly where the cheap answer was not good enough, and never where it
+was. Applied to §3: the exit match's remainder is "not proven empty" from the coarse form →
+force → `Union(4,2)` → the two point rows consume it → proven empty → the correct program
+verifies. Applied to `pricing2.next`: nothing interrogates `total`, every query is answered
+coarsely, no product is ever built.
+
+### 12.5 §8's other boundaries, transferred
+
+- **Closed consumer list.** §8 admits suspensions only to comparison guards, never
+  arithmetic, so they cannot breed. The analogue: a held image is forced only by a named,
+  closed set of consumers (region selection, emptiness, difference) — never silently by
+  every subsequent operation.
+- **No suspension-to-suspension chaining without a bound.** §8's "whole safety boundary" is
+  that a suspension forces against *forced* facts only. Here the analogous hazard is
+  arithmetic: a chain of held operations (`monthly → yearly → shipped → total`) forced at
+  the end costs the full product along the chain — the same worst case as always-distribute.
+  Chaining is what makes deferral valuable (nothing is computed if nothing forces) and also
+  what concentrates the cost at the force point. A depth or width bound on forcing is
+  probably required; §8's answer to the same question was a flat prohibition.
+- **Deferral, not solving.** As in §8, this proves nothing new. It only postpones a
+  discard that may turn out to be premature.
+
+### 12.6 Open questions — the ones that would decide it
+
+1. **Verdict stability and memo keys.** The fact cache keys on contracts. If a value is
+   coarse at one seat and forced at another, the same underlying question could key
+   differently and settle twice — or worse, inconsistently. Memo-key completeness is a
+   failure this project has already had once; this design walks straight back into that
+   area and would need the interaction settled *first*, not after.
+2. **Determinism / order-independence.** AP-10 requires order-independent results across
+   demand order and cache warmth. Forcing is triggered by consumers, so analysis order
+   determines *when* things force. The results must be provably the same either way — which
+   they should be, since forcing only refines, but "should be" is not a discharge.
+3. **What exactly forces, and is that list closed?** §8's discipline says the consumer list
+   must be enumerable and small, or the mechanism breeds.
+4. **Does it subsume §6's finite-enumeration idea, or compose with it?** Forcing gives the
+   exact set directly, so `denotes_exactly` may become unnecessary for images — but it
+   remains useful for *user-written* bounded integer contracts, which no operation produced.
+5. **Is any of this reachable without adopting §8 itself?** The two are independent
+   mechanisms sharing a shape. Adopting one does not commit to the other, and §8 remains
+   parked on its own terms.
+
+### 12.7 What this does not settle
+
+The A6 question stays open exactly as §8 leaves case (c) open. This section adds a third
+candidate to §8's decision space, with the property that it is the only one that does not
+require choosing a global precision level. It is worth exploring; it is not a proposal, and
+no work should start on it without an author ruling — the memo-key interaction in 12.6(1)
+alone is enough to make speculative implementation unwise.
