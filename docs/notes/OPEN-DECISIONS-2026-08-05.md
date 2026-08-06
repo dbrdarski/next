@@ -101,11 +101,55 @@ Implemented same day (`uncalled_unsafe_lints` + three conformance pins): an unre
 function with a body proven to trap gets a definition-site **Warning** — never rejects,
 never silent; referenced functions keep their seats' blocking judgment.
 
-### A6. F0 Q1 — `Union` distribution vs interval hull in operation images
-`Union(Equals(1), Equals(10)) + Equals(1)`: distribution gives `Union(2, 11)` (precise,
-cost grows multiplicatively per operand alternative); the hull gives `Range(2, 11)` (coarse,
-constant cost — **implemented**). Purely a precision/cost dial on the operation rulebook;
-observable when a downstream match tests `== 6` (hull can't exclude it, distribution can).
+### A6. F0 Q1 — the union rule in operation images: hull · distribution · **laziness**
+**Reframed 2026-08-05 under measurement. The earlier entry called this "purely a
+precision/cost dial"; that was wrong in the direction that matters** — the hull does not
+merely blur, it **manufactures values the program cannot produce and then rejects correct
+programs for not handling them.** Measured: `hull.next` is total over its declared domain
+and runs, yet the hull rejects it (E10 completion) while the same file under distribution
+checks `ok`. Exact rationals make this categorical: once a finite set becomes an interval it
+is dense, and no finite number of point rows can ever consume it again.
+
+Three candidates now, not two:
+
+1. **Interval hull (implemented).** Flatten each operand to its numeric envelope, apply the
+   rule to the envelopes. Constant cost; destroys the set. `{1,2} * 2` →
+   `Intersection(Range(2,4), Mod{2,0})` — note it *keeps parity*, so the information isn't
+   lost so much as moved into a form the emptiness check cannot discharge.
+2. **Distribution.** Apply the rule per combination of operand alternatives and join.
+   Exact; arm count is the running product of the choice counts along a chain. Measured on
+   a six-step pricing chain: ~72 arms, 146 rule applications, no verdict change — cheap
+   there, unbounded in principle.
+3. **Laziness — the held image [new, 2026-08-06].** Commit to neither at the operation:
+   bind the result to a *suspended* image and let the **consuming seat** choose. A safety
+   demand or a `⊑ Number` return check is answered from the cheap coarse form; a region
+   walk dispatching on the value forces the exact product, and only there. Modelled on
+   region-table §8's parked held-relation suspension ("analyze the suspension, don't expand
+   it"), and it fits the existing shape: `AnalysisContract` is already contract + analyzer
+   metadata, so the coarse answer stays in the interned canonical contract while the
+   suspension rides in metadata — never a `Contract`, never interned, canonicalization
+   untouched. The forcing rule falls out of the over-approximation asymmetry and is
+   RT-14's discipline under another name: a **`Proven`** answer from the coarse form
+   stands; **`Refuted`/`Unproven`** must force and re-ask.
+
+**Why (3) is attractive:** it dissolves the dial. Options 1 and 2 need a global precision
+level (and a hybrid needs an `N`); the held image lets the program's own structure decide
+where exactness is paid for — nothing is computed for values nothing interrogates.
+
+**Why (3) might not survive:** the fact cache keys on contracts, so a value coarse at one
+seat and forced at another could key differently or settle twice. Memo-key completeness is
+a failure this project has already had once; that interaction would have to be settled
+*before* any implementation, not after. Order-independence (AP-10) and keeping the
+forcing-consumer list closed are the other two open questions.
+
+**Adjacent, independent, additive:** the emptiness check cannot enumerate a bounded
+arithmetic progression (`Range ∧ Mod` denotes a finite set). Fixing that helps user-written
+bounded integer contracts on its own — but it only recovers exactness where the hull was
+*accidentally* exact (`{1,2,5} * 2` still fails), so it is not a substitute for the rule
+choice.
+
+Full record, both programs, traces, cost data, corrections, and the reproduction recipe:
+`HANDOVER-hull-vs-distribution-2026-08-05.md` (Thread D in `OwedItems.md` §5).
 
 ### A7. **RULED [user, 2026-08-05]: extend.** `where` may attach to a binding proven to
 hold an exact function value; queued as the next implementation slice.
