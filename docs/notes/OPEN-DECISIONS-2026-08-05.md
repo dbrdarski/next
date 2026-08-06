@@ -167,10 +167,12 @@ store). Check-mode project analysis has no runtime store, so an exported slot ha
 binding to harvest — imports of slots analyze coarse today. Decision: what does check mode
 *claim* about an imported slot (its declared contract? Top? a dedicated slot-shape)?
 
-### A9. `String.units` / `String.points` element representation
-E8 pins only the **lengths** (S-02 asserts them). Implemented as Tuples of Numbers (UTF-16
-code units / code points). Decision: bless Numbers, or rule a dedicated element form
-(e.g. single-unit Strings), which would change `"é".points` from `[233]` to `["é"]`-shaped.
+### A9. **RULED [user, 2026-08-06]: `points` yields Strings, `units` yields Numbers — the
+two views deliberately differ.** Landed same day: every code point is a well-formed String,
+so a point compares and matches directly (`String.points("héllo")[1] == "é"`); a lone
+surrogate half is not a String and E8 forbids minting one, so `units` stays Numbers
+(`String.units("👋")` → `[55357, 56395]`). Marker in `harness.rs` converted; pinned as
+conformance `s02b_points_are_strings_units_are_numbers`.
 
 ### A10. The two Part-D adoption gates (the last suite ignores besides the runner stub)
 - **A-ACC contract-claim layer:** the Recursion/UniformFamily foresight battery — builder,

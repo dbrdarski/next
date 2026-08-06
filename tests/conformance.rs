@@ -847,6 +847,22 @@ mod phase3 {
         // grapheme length is 1 (S-01) — both views exceed it.
     }
 
+    /// **Element representation [user ruling, 2026-08-06]: the two views differ.**
+    /// `points` yields Strings — every code point is a well-formed String, so a
+    /// point compares and matches directly. `units` yields Numbers — a lone
+    /// surrogate half is not a String, and E8 forbids minting one.
+    #[test]
+    fn s02b_points_are_strings_units_are_numbers() {
+        vtrue("p = String.points(\"e\\u{301}\")\np[0] == \"e\"");
+        vtrue("p = String.points(\"e\\u{301}\")\np[1] == \"\\u{301}\"");
+        vtrue("p = String.points(\"👋\")\np[0] == \"👋\"");
+        // The astral point survives as one String even though it is two units.
+        vtrue("u = String.units(\"👋\")\nu[0] == 55357");
+        vtrue("u = String.units(\"👋\")\nu[1] == 56395");
+        // A point is itself a String, so string ops apply to it.
+        vtrue("p = String.points(\"héllo\")\nString.length(p[1]) == 1");
+    }
+
     #[test]
     fn s03_slicing_never_splits_clusters() {
         vtrue("s = \"a👨‍👩‍👧b\"\ns[1...2] == \"👨‍👩‍👧\"");

@@ -108,9 +108,13 @@ pub fn prelude_env(interner: &mut Interner) -> Env {
 /// `String.length` counts **grapheme clusters** (UAX #29, the pinned segmenter —
 /// E8); `String.units` / `String.points` are the UTF-16-unit and code-point views
 /// over the same machinery.
-// [ask-author]: the element representation of the `units`/`points` views is not
-// pinned by E8 — implemented here as Tuples of Numbers (code units / code points);
-// only their *lengths* are asserted by the suite (S-02).
+///
+/// **Element representation — RULED [user, 2026-08-06]: the two views differ.**
+/// `points` yields **Strings** (one per code point), so a code point can be
+/// compared and matched directly (`p[1] == "é"`); `units` yields **Numbers**,
+/// because a lone surrogate half is not a String and E8 forbids any operation
+/// from minting one. E8 pins only the lengths (S-02); this asymmetry is the
+/// author's ruling, not an inference from the text.
 fn install_string_prelude(interner: &mut Interner, env: &Env) {
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -146,7 +150,16 @@ fn install_string_prelude(interner: &mut Interner, env: &Env) {
         act_kind: ActKind::Pure,
         imp: Rc::new(move |interner: &mut Interner, args: &[ValueRef]| {
             let s = demand_str(args)?;
-            let items: Vec<ValueRef> = s.chars().map(|c| interner.integer(c as i64)).collect();
+            // One **String** per code point [user, 2026-08-06] — every code point
+            // is a well-formed String, so this view stays in the value domain the
+            // rest of the string machinery speaks.
+            let items: Vec<ValueRef> = s
+                .chars()
+                .map(|c| {
+                    let mut buf = [0u16; 2];
+                    interner.string_units(c.encode_utf16(&mut buf).to_vec())
+                })
+                .collect();
             Ok(interner.tuple(items))
         }),
     };

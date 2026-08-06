@@ -5925,3 +5925,22 @@ A5 lint, A7 extend) are unaffected — those were explicit.
 
 **Verification:** comment/record-only change; 467 lib / 176 conformance / 10 machinery
 unchanged and re-run green; clippy clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-06 — A9 ruled and landed: the two string views differ
+
+**Ruling [user, 2026-08-06]:** `String.points` yields **Strings**, `String.units` yields
+**Numbers**; the asymmetry is deliberate. Rationale recorded at the definition: every code
+point is a well-formed String, so a point can be compared and matched directly and the
+whole string machinery applies to it (`String.length(p[1]) == 1`); a lone surrogate half is
+**not** a String and E8 forbids any operation from minting one, so the UTF-16 view must stay
+numeric. E8 pins only the lengths (S-02), so this is the author's ruling, not an inference —
+recorded as such in the doc comment. The `// [ask-author]` marker in `harness.rs` is
+converted to the ruling.
+
+**Observed:** `String.points("e\u{301}")` → `["e", "\u{301}"]`, `String.units(…)` →
+`[101, 769]`, `String.length(…)` → `1`; `String.points("👋")` → `["👋"]` (one String) beside
+`String.units("👋")` → `[55357, 56395]`. Pinned as conformance
+`s02b_points_are_strings_units_are_numbers`; S-02's length assertions unchanged.
+
+**Verification:** 467 lib passed / 1 ignored; 177 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
