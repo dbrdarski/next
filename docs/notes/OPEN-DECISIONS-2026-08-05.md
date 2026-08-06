@@ -202,8 +202,21 @@ choice.
 - **B2. D-4 basin derivation** — `collatz(64)`'s Pow2 basin; deferred as a possible later
   improvement; collatz stays honestly unproven.
 - **B3. μ laws 2/4** — nested-binder merge; partition-refinement slot merging.
-- **B4. Symbolic-instance fact keys** — the analyzer doesn't construct symbolic instances
-  yet; keys deferred with them.
+- ~~**B4. Symbolic-instance fact keys**~~ — **MIS-FILED; REMOVED FROM THIS GROUP
+  [2026-08-06].** This was never an author deferral and never an open question. C§13.2
+  specifies it twice: *"A call site resolves its callee to an analysis instance (**shape +
+  environment contracts — exact for const closures, contract-level for factory products
+  like `makeAdder(someInput)`**)"* and *"Function-valued analysis results retain their
+  possible analysis instances … as analyzer **metadata riding alongside their coarse
+  `Kind(Function)` contract**, so callables … arrive at call sites with instances
+  recoverable (**plumbing, not a contract constructor**)."* An instance carries capture
+  **contracts**, not values, and the spec's own example is exactly the failing case. The
+  implementation instead emits a bare `Kind(Function)` with no metadata when a capture is
+  non-singleton, so nothing is recoverable at the call site — the behavior that sentence
+  forbids. **Moved to Group C (owed implementation).** The consumer half already exists:
+  the region-table machinery takes an environment of contracts and handles
+  contract-described captures (case (b)); the producing and carrying half is what is
+  missing. The fact-*keys* question is downstream of it and dissolves with it.
 - **B5. The grapheme boundary-state compression** — lifting exact string-length arithmetic
   to abstract string *contracts*; needs segmenter category tables and a length-contract
   form.
@@ -216,6 +229,13 @@ choice.
 
 ## Group C — owed implementation (mine; no ruling needed)
 
+- **C0. Analysis-instance metadata for factory products (C§13.2) — the former "B4".**
+  A function value produced with non-singleton captures must carry its instance (shape +
+  capture *contracts*) as metadata beside `Kind(Function)`, and a call site must resolve
+  through it. Specified, unimplemented. Symptom: a `where` over any non-enumerable domain
+  on a function that builds a helper from its own argument and calls it — rejected with
+  "callee not resolved to a known function" (scratch program `w2.next`). **Not proven to be
+  the sole remaining cause of that rejection**, only the specified piece that is missing.
 - **C1.** The application package's four γ obligations as a sampled joint-operand battery
   per world (Tier 5's next slice).
 - **C2.** The world-decided gray runner — host effects in the bounded oracle, then the

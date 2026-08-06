@@ -340,6 +340,25 @@ sound.)
 - **Literal parameter patterns `(0) => …`** — E3: *"[deferred; likely excluded]"*. (Some
   analyzer tests use const params; they'd need re-basing if excluded.)
 
+### 1a. Analysis-instance metadata for factory products [added 2026-08-06]
+
+**C§13.2, specified and unimplemented.** *"A call site resolves its callee to an analysis
+instance (shape + environment contracts — exact for const closures, **contract-level for
+factory products like `makeAdder(someInput)`**)"*; function-valued results *"retain their
+possible analysis instances … as analyzer metadata riding alongside their coarse
+`Kind(Function)` contract, so callables … arrive at call sites with instances recoverable
+(**plumbing, not a contract constructor**)."*
+
+Today a lambda whose captures are not all singletons analyzes to a bare `Kind(Function)`
+with no metadata, so nothing is recoverable at the call site. Consequence: a `where` over
+any domain that is not enumerable as points, on a function that builds a helper from its
+own argument and calls it, is rejected with "callee not resolved to a known function".
+The consumer half exists (region tables already take an environment of contracts and
+handle contract-described captures — case (b)); the producing/carrying half does not.
+**Previously mis-filed as an author deferral ("symbolic instance fact keys"); it is
+neither deferred nor a question.** The fact-key identity question is downstream and
+dissolves with it.
+
 ## 5. Open design threads (no spec change; block nothing) — see the handovers
 
 - **Thread B** — the jagged function-equality boundary under the freeze slice
