@@ -252,18 +252,20 @@ pub(crate) fn point_set(c: &Contract) -> Option<Vec<Contract>> {
 /// every combination and join. Exact by construction — each combination is a
 /// singleton application, and the join is their union. `None` when an operand is not
 /// a finite point set or the combination count exceeds [`EXACT_IMAGE_LIMIT`].
-pub(crate) fn exact_point_image(
+/// The combination driver over operand point sets that are already resolved — the form
+/// a **chained** image needs, since its operands are produced by forcing a nested image
+/// rather than by reading a contract.
+pub(crate) fn exact_image_over(
     op: PrimOp,
-    inputs: &[Contract],
+    sets: &[Vec<Contract>],
     interner: &mut Interner,
 ) -> Option<Contract> {
-    let sets: Vec<Vec<Contract>> = inputs.iter().map(point_set).collect::<Option<_>>()?;
     let count: usize = sets.iter().map(Vec::len).product();
-    if count == 0 || count > EXACT_IMAGE_LIMIT || sets.iter().all(|s| s.len() <= 1) {
-        return None; // nothing to distribute, or too wide for this slice
+    if count == 0 || count > EXACT_IMAGE_LIMIT {
+        return None;
     }
     let mut combos: Vec<Vec<Contract>> = vec![Vec::new()];
-    for set in &sets {
+    for set in sets {
         let mut next = Vec::with_capacity(combos.len() * set.len());
         for prefix in &combos {
             for point in set {

@@ -438,11 +438,18 @@ fn analyze_primop(
     let mut findings = Vec::new();
     let mut safety_demands = Vec::new();
     let mut inputs = Vec::with_capacity(args.len());
+    let mut image_operands: Vec<domain::ImageOperand> = Vec::with_capacity(args.len());
     for a in args {
         let mut r = analyze_in_world(a, env, cenv, world, interner);
         demand(&r, &mut findings); // operands are expecting seats
         findings.append(&mut r.findings);
         safety_demands.append(&mut r.safety_demands);
+        // An operand that holds its own image is carried **as that image**, so a chain
+        // stays exact instead of collapsing at the first coarse step.
+        image_operands.push(match r.annotated.held_image() {
+            Some(nested) => domain::ImageOperand::Nested(nested),
+            None => domain::ImageOperand::Points(r.contract.clone()),
+        });
         inputs.push(r.contract);
     }
 
@@ -509,7 +516,7 @@ fn analyze_primop(
     // discharged at the producer's mapping, DR-02/DR-09), so it is not computed. The
     // ingredients ride beside the coarse contract, and a **routing** judgment that
     // cannot proceed without them forces this one node — never the whole judgment.
-    let held = domain::HeldImage::hold(op, &inputs);
+    let held = domain::HeldImage::hold(op, image_operands);
     let mut analysis = Analysis::produced_with_safety(contract, findings, safety_demands);
     if let Some(image) = held {
         analysis.annotated = AnalysisContract::leaf_with_image(

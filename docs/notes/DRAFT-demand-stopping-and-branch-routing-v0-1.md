@@ -727,8 +727,14 @@ forced, not one judgment re-run. **§11 item 3 is dissolved with it**: the mode 
 memo-key field are deleted, so a coarse settlement and an exact one are no longer different
 questions to keep apart.
 
-**Not built, deliberately.** Chaining (an operand that is itself a held image is not forced
-through), shared-versus-independent provenance, deeper operation graphs, BR-10/BR-11's keyed
+**Chaining built 2026-08-07.** An operand that itself holds an image is carried as
+`ImageOperand::Nested`, and forcing resolves depth-first, so a chain stays exact instead of
+collapsing at its first coarse step. Budgeting uses a bound computed at hold time (the
+product of the operands' bounds), so the budget is checked without forcing.
+
+**Not built, deliberately.** Shared-versus-independent provenance (two operands descending
+from the same source are forced independently, so `a + a` is over-approximate rather than
+wrong — BR-04's correlation is not yet what the forcing path uses), BR-10/BR-11's keyed
 lookup, BR-15's collapse inventory, and DR-12/DR-14's substitution as a *distinct* mechanism
 (today's narrowing comes from the region walk, not from substitution). The 256-combination
 budget for forcing is the drafter's and unratified.

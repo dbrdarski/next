@@ -6332,3 +6332,39 @@ author.
 
 **Verification:** 467 lib passed / 1 ignored; 196 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — Chained held images: an operand that holds an image is carried as one
+
+**The gap.** A held image required every operand to be a *finite point set read off a
+contract*. The moment an operand was itself a computed image, its coarse contract — an
+interval-with-congruence — failed that test and no image was held, so a chain collapsed at
+its first step. `p ∈ {1,2,5}` gives `a = p*2` exactly `{2,4,10}`, but `a`'s coarse contract
+is `{2,4,6,8,10}`; `b = a*10` read that and produced `{20,40,60,80,100}`, which three arms
+covering `{20,40,100}` cannot exhaust.
+
+**The change.** An image's operands become `ImageOperand::Points(contract)` or
+**`ImageOperand::Nested(HeldImage)`**. The producer carries an operand *as its image* when
+it has one, and forcing resolves depth-first: each nested image is forced to points, then
+the leaf rule is applied over the combinations. `exact_image_over` is the driver, taking
+already-resolved point sets — the form a chain needs, since its operands come from forcing
+rather than from reading a contract.
+
+**Budgeting without forcing.** An image carries a `bound`: the product of its operands' own
+bounds, computed at hold time. Dedup during the join only ever shrinks the real count, so
+budgeting on the bound is conservative in the safe direction — and it means the budget can
+be checked without forcing anything, which is the whole point of holding.
+
+**Measured.** Two-step chain `p{1,2,5} → a{2,4,10} → b{20,40,100}` with three exact arms:
+`ok`, runs to `2`. Three-step chain mixing `*` and `+` through `c = b + 1`: `ok`, runs to
+`3`. Drop an arm from the chain and it is still refused. Zero suite movement.
+
+**Pinned** as three more rows in conformance `exact_images`.
+
+**Still owed:** shared-versus-independent provenance — two operands descending from the same
+source are forced independently, so a chain that reuses a value (`a + a`) is over-approximate
+rather than wrong; and the 256-combination budget, still the drafter's and unratified.
+
+**`// [ask-author]`: none.**
+
+**Verification:** 467 lib passed / 1 ignored; 199 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

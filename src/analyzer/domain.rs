@@ -83,37 +83,78 @@ impl InstanceMetadata {
 ///
 /// Held, not computed: this is the storage that lets the completion walk force **one
 /// node** instead of re-running the whole judgment in a different mode.
+/// One operand of a held image. An operand is either a finite point set standing on
+/// its own, or **another held image** — which is what lets a chain
+/// (`(a * b) * c`) stay exact instead of collapsing at the first coarse step.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ImageOperand {
+    Points(Contract),
+    Nested(std::rc::Rc<HeldImage>),
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct HeldImage {
     pub op: crate::ast::PrimOp,
-    pub operands: Vec<Contract>,
+    pub operands: Vec<ImageOperand>,
+    /// An **upper bound** on the combinations forcing this image will apply the leaf
+    /// rule to, computed without forcing anything: the product of the operands' own
+    /// bounds. Dedup during the join only ever makes the real count smaller, so
+    /// budgeting on the bound is conservative in the safe direction.
+    pub bound: usize,
+}
+
+impl ImageOperand {
+    fn bound(&self) -> usize {
+        match self {
+            ImageOperand::Points(c) => crate::contract::point_set(c).map_or(0, |s| s.len()),
+            ImageOperand::Nested(image) => image.bound,
+        }
+    }
+
+    /// Resolve to a finite point set, forcing a nested image if that is what it is.
+    fn points(&self, interner: &mut Interner) -> Option<Vec<Contract>> {
+        match self {
+            ImageOperand::Points(c) => crate::contract::point_set(c),
+            ImageOperand::Nested(image) => {
+                let forced = image.force(interner)?;
+                crate::contract::point_set(&forced)
+            }
+        }
+    }
 }
 
 impl HeldImage {
-    /// Hold an image when it is worth holding: every operand a **finite point set**,
-    /// more than one combination (nothing to distribute otherwise), and the count
-    /// within the forcing budget. `None` means there is no exact image to offer and
-    /// the coarse contract is the whole answer.
-    pub fn hold(op: crate::ast::PrimOp, operands: &[Contract]) -> Option<HeldImage> {
-        let counts: Vec<usize> = operands
-            .iter()
-            .map(|c| crate::contract::point_set(c).map(|s| s.len()))
-            .collect::<Option<_>>()?;
-        let total: usize = counts.iter().product();
-        if total <= 1 || total > crate::contract::EXACT_IMAGE_LIMIT {
+    /// Hold an image when it is worth holding: every operand resolvable to points —
+    /// **directly, or by forcing a nested image** — more than one combination, and the
+    /// bound within the forcing budget. `None` means there is no exact image to offer
+    /// and the coarse contract is the whole answer.
+    pub fn hold(op: crate::ast::PrimOp, operands: Vec<ImageOperand>) -> Option<HeldImage> {
+        let bounds: Vec<usize> = operands.iter().map(ImageOperand::bound).collect();
+        if bounds.contains(&0) {
+            return None;
+        }
+        let bound: usize = bounds.iter().product();
+        if bound <= 1 || bound > crate::contract::EXACT_IMAGE_LIMIT {
             return None;
         }
         Some(HeldImage {
             op,
-            operands: operands.to_vec(),
+            operands,
+            bound,
         })
     }
 
-    /// **Force** the image: apply the leaf rule to every operand combination and join.
-    /// Exact by construction, and a subset of the coarse contract — so a judgment that
-    /// failed coarsely can only be improved, never reversed.
+    /// **Force** the image: resolve every operand to points — forcing nested images
+    /// depth-first — then apply the leaf rule to each combination and join. Exact by
+    /// construction, and a subset of the coarse contract, so a judgment that could not
+    /// be settled coarsely can only be improved, never reversed.
     pub fn force(&self, interner: &mut Interner) -> Option<Contract> {
-        crate::contract::exact_image(self.op, &self.operands, interner)
+        let sets: Vec<Vec<Contract>> = self
+            .operands
+            .iter()
+            .map(|o| o.points(interner))
+            .collect::<Option<_>>()?;
+        crate::contract::exact_image_over(self.op, &sets, interner)
     }
 }
 

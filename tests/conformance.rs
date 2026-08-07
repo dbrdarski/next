@@ -2010,6 +2010,63 @@ mod exact_images {
         );
     }
 
+    /// **Chained images** (2026-08-07). An operand that itself holds an image is carried
+    /// *as that image*, so a chain stays exact instead of collapsing at the first coarse
+    /// step. `p ∈ {1,2,5}` → `a = p*2` is `{2,4,10}` but hulls to `{2,4,6,8,10}`; without
+    /// chaining `b = a*10` would read that hull and give `{20,40,60,80,100}`, which the
+    /// three arms do not cover.
+    #[test]
+    fn ei_a_two_step_chain_stays_exact() {
+        let src = "Plan = Union(Equals(1), Union(Equals(2), Equals(5)))\n\
+                   f where (Plan) => Number\n\
+                   f = (p) => {\n  a = p * 2\n  b = a * 10\n\
+                     => b :: { 20 => 1\n    40 => 2\n    100 => 3 }\n}\n\
+                   x = f(2)\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "2"
+        );
+    }
+
+    /// Three steps, mixing `*` and `+`.
+    #[test]
+    fn ei_a_three_step_chain_stays_exact() {
+        let src = "Plan = Union(Equals(1), Union(Equals(2), Equals(5)))\n\
+                   f where (Plan) => Number\n\
+                   f = (p) => {\n  a = p * 2\n  b = a * 10\n  c = b + 1\n\
+                     => c :: { 21 => 1\n    41 => 2\n    101 => 3 }\n}\n\
+                   x = f(5)\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "3"
+        );
+    }
+
+    /// The sound converse through a chain: drop an arm and it is still refused.
+    #[test]
+    fn ei_a_chain_with_a_missing_arm_is_refused() {
+        let src = "Plan = Union(Equals(1), Union(Equals(2), Equals(5)))\n\
+                   f where (Plan) => Number\n\
+                   f = (p) => {\n  a = p * 2\n  b = a * 10\n\
+                     => b :: { 20 => 1\n    40 => 2 }\n}\n\
+                   x = f(2)\nx\n";
+        assert!(!check_source(src).expect("parses and checks").0.accepted());
+    }
+
     /// The original A6 flagship, which the hull rejected: total over its domain, and
     /// now accepted.
     #[test]

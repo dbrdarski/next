@@ -474,6 +474,16 @@ analysing every non-lambda binding in the declaration pre-pass regressed the non
 mutual pair. Pinned as conformance `where_on_products`. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Held images, and chaining (2026-08-07) — A6's mechanism.** `domain::HeldImage` rides on
+`AnalysisContract::Leaf` beside the coarse contract; `analyze_primop` holds it when the
+operands resolve to finite point sets, `analyze_match` forces it at the scrutinee. An
+operand that itself holds an image is carried as `ImageOperand::Nested`, so chains stay
+exact (`p{1,2,5} → a{2,4,10} → b{20,40,100}`); forcing resolves depth-first and budgets on a
+bound computed without forcing. The earlier whole-judgment retry, its mode flag and its
+memo-key field are **deleted** — one mechanism, and the draft's §11 items 2 and 3 are
+closed. Pinned as conformance `exact_images` (6 rows). Detail in `DECISIONS.md`
+(2026-08-07).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -692,7 +702,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **196 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **199 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
