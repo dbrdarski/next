@@ -561,8 +561,8 @@ another computed**, and `(s) => s + s` compared equal to `(s) => 2 * s`. The rai
 separate operators: `PlusPlus` token, `PrimOp::Concat`, `eval_concat`, and the String rail
 (with T2.5's grapheme-seam bound) moved off `Add`, which is Number-demanding like the other
 arithmetic. The frozen rewrite list needed no amendment. Pinned as conformance
-`concat_operator`. The grammar and compendium still describe the overload and are
-manifest-protected — discrepancy logged. Detail in `DECISIONS.md` (2026-08-07).
+`concat_operator`. The grammar and compendium still describe the overload
+and are manifest-protected; the author's ruling **supersedes** them — settled, not tracked. Detail in `DECISIONS.md` (2026-08-07).
 
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /

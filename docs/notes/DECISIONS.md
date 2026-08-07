@@ -6473,9 +6473,10 @@ no longer changes `g`. Pinned as conformance `concat_operator`, including the H-
 string-seam rows now name `PrimOp::Concat`; a divergence row spells its append `++`; and a
 factory row's assertion quoted the old overloaded message text.
 
-**Normative discrepancy, logged not reconciled.** The grammar and compendium still describe
-`+` as numeric-or-String and do not list `++`; both are manifest-protected and were not
-edited. The author's ruling supersedes them in effect.
+**The normative text is superseded, not in conflict.** The grammar and compendium still
+describe `+` as numeric-or-String, and the compendium's excluded-operator ledger lists `++`
+(as C-style increment). Both are manifest-protected and were not edited. **The author's
+ruling supersedes them — this is settled, not an open item, and is not to be re-raised.**
 
 **Verification:** 468 lib passed / 1 ignored; 202 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
@@ -6835,13 +6836,14 @@ coverage one. Both specimens are also written with `++` over tuples, which is St
 here. Remaining unwritten: #4, #15, #18, #21, #27, #29 — the world-classifier and
 mixed-callee families.
 
-### Normative discrepancy found while writing them
+### One open implementation question found while writing them
 
-The compendium's **excluded-operator ledger lists `++`** ("`++`/`--` (`+:= 1` covers it)") —
-excluding C-style increment, but it is the same spelling adopted for concatenation
-[user, 2026-08-07]. Separately, the **grounding spec uses ` ++ ` five times for *tuple*
-concatenation** (`f(rest(l)) ++ f(l)`), which the String-only implementation cannot express.
-Both files are manifest-protected; logged alongside the `+`/`++` and P-1 discrepancies.
+`++` as concatenation is **settled [user, 2026-08-07]**; the superseded ledger entry is not an
+issue and is not tracked as one.
+
+What *is* open: the grounding spec writes ` ++ ` over **tuples** (`f(rest(l)) ++ f(l)`), and
+the implementation makes `++` String-only, so those specimens cannot be written. Whether `++`
+also concatenates tuples is an implementation question owed to the author. `// [ask-author]`
 
 **Verification:** 473 lib passed / 1 ignored; 226 conformance passed / 11 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
