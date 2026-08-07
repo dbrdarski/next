@@ -105,7 +105,13 @@ impl Contract {
     }
 
     pub fn union(a: Contract, b: Contract, i: &mut Interner) -> Contract {
-        Contract::Union(i.contract(a), i.contract(b))
+        // `Bottom` is the identity of union. Dropping it here is what lets a
+        // distributed difference (see [`Contract::difference`]) collapse back to a
+        // plain union of the surviving arms instead of accumulating dead ones.
+        match (a, b) {
+            (Contract::Bottom, x) | (x, Contract::Bottom) => x,
+            (a, b) => Contract::Union(i.contract(a), i.contract(b)),
+        }
     }
 
     pub fn intersection(a: Contract, b: Contract, i: &mut Interner) -> Contract {
@@ -141,6 +147,26 @@ impl Contract {
         // point/interval readers downstream (orbit envelopes, grids) can consume.
         if disjoint(&a, &b) {
             return a;
+        }
+        // **Distribution over union arms** — `(X ∪ Y) ∖ Z = (X ∖ Z) ∪ (Y ∖ Z)`, an exact
+        // set identity, so this loses nothing. Without it a remainder built by an
+        // ordered walk becomes a left-leaning stack of `Difference` nodes that the
+        // emptiness check cannot see through: **three** exact point arms exactly
+        // covering a three-member union were not proven exhaustive, while two were
+        // (measured 2026-08-06). Distributing keeps the remainder in the
+        // union-of-points spelling the walk started from.
+        if let Contract::Union(x, y) = &a {
+            let dx = Contract::difference((**x).clone(), b.clone(), i);
+            let dy = Contract::difference((**y).clone(), b.clone(), i);
+            return Contract::union(dx, dy, i);
+        }
+        // A point removed by an exclusion that contains it leaves nothing. Decided by
+        // membership, never by `subcontract` — this constructor is called *from* the
+        // subcontract machinery, so it must not call back into it.
+        if let Contract::Equals(v) = &a
+            && b.contains(v)
+        {
+            return Contract::Bottom;
         }
         Contract::Difference(i.contract(a), i.contract(b))
     }

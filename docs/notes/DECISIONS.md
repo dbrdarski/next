@@ -6097,3 +6097,42 @@ prompted re-reading C§13.2 and finding that the last one was specified all alon
 
 **Verification:** 467 lib passed / 1 ignored; 185 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — Union remainders empty out: n point arms consume an n-member union
+
+**Found on the author's own worked example** (the demand-stopping draft, §7): a three-plan
+enum with three exact arms would not check, while the same program with two-member enums
+did. Measured boundary — 2 members ok, 3 members rejected, both nesting directions, numbers
+and strings alike.
+
+**Cause.** The ordered walk subtracts each exact row's region from the carried remainder.
+`Contract::difference` elided only when the **whole** subtrahend was disjoint from the base,
+so subtracting point arms one at a time built a left-leaning stack of `Difference` nodes —
+`((U ∖ a) ∖ b) ∖ c` — that the emptiness check could not see through. Two members happened
+to survive because a single `Difference` over a two-arm union is still readable; the third
+subtraction buried it. Two smaller gaps sat underneath: `Equals(v) ∖ Z` did not reduce to
+`Bottom` when `Z` contains `v`, and `Contract::union` did not drop `Bottom` arms, so even a
+correct reduction accumulated dead ones.
+
+**Fix — three exact identities, no approximation.**
+1. `difference` **distributes over union arms**: `(X ∪ Y) ∖ Z = (X ∖ Z) ∪ (Y ∖ Z)`. The
+   remainder stays in the union-of-points spelling the walk started from.
+2. `Equals(v) ∖ Z = Bottom` when `Z` contains `v` — decided by **membership**, never by
+   `subcontract`, since this constructor is called *from* the subcontract machinery and must
+   not call back into it.
+3. `union` drops `Bottom` arms — the identity law, which is what lets (1) collapse.
+
+**Pinned** as conformance `union_remainders`: 2, 3 and 4 exact point arms each consume their
+own n-member union; string enums behave identically; and the sound converse — a genuinely
+missing arm is still not proven exhaustive.
+
+**Where it lands on the author's example.** With the fix, the wildcard variant and the
+two-member variant both check `ok`, and the three-member inner matches (`rate`, `seats`) now
+prove. The full worked example **still fails**, and correctly so for a different reason: the
+exit match dispatches on `subtotal = rate * seats`, whose contract is the operation **hull**,
+and six point arms cannot consume an interval. That is A6 / Thread D, untouched here.
+
+**`// [ask-author]`: none** — three exact set identities.
+
+**Verification:** 467 lib passed / 1 ignored; 188 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

@@ -223,5 +223,6 @@ finite, structurally-determined set.
 - **BR-15** the escape-site inventory.
 - Cost at large cell counts when BR-08 *does* demand routing — the honest residual problem,
   with no mechanism proposed here.
-- Whether the union-emptiness gap (three exact point arms over a three-member union are not
-  proven exhaustive — measured 2026-08-06) is subsumed by BR-13(2) or needs its own fix.
+- ~~the union-emptiness gap~~ — **FIXED 2026-08-07.** `difference` distributes over union
+  arms; `Equals(v) ∖ Z` reduces by membership; `union` drops `Bottom`. n point arms now
+  consume an n-member union. See `DECISIONS.md` (2026-08-07).

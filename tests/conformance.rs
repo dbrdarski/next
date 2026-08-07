@@ -1897,6 +1897,62 @@ mod contract_level_instances {
     }
 }
 
+// **Union remainders empty out** (2026-08-07). An ordered walk subtracts each exact
+// arm's region from the remainder; without distributing difference over union arms the
+// remainder became a stack of `Difference` nodes the emptiness check could not see
+// through, so *three* exact point arms exactly covering a three-member union were not
+// proven exhaustive while two were. `(X ∪ Y) ∖ Z = (X ∖ Z) ∪ (Y ∖ Z)` is exact, so
+// distributing loses nothing.
+mod union_remainders {
+    use super::*;
+
+    fn arms_cover(members: &[&str], arms: &[&str]) -> bool {
+        let domain = members.iter().take(members.len() - 1).rev().fold(
+            format!("Equals({})", members[members.len() - 1]),
+            |acc, m| format!("Union(Equals({m}), {acc})"),
+        );
+        let arm_src = arms
+            .iter()
+            .map(|a| format!("  {a} => 0"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let src = format!(
+            "D = {domain}\nf where (D) => Number\nf = (p) => p :: {{\n{arm_src} }}\nx = 1\nx\n"
+        );
+        check_source(&src).expect("parses and checks").0.accepted()
+    }
+
+    /// Two, three and four exact point arms exactly covering their domain — every one
+    /// exhaustive. Three was the first that failed before the fix.
+    #[test]
+    fn ur_n_point_arms_consume_an_n_member_union() {
+        assert!(arms_cover(&["1", "2"], &["1", "2"]), "2 members");
+        assert!(arms_cover(&["1", "2", "3"], &["1", "2", "3"]), "3 members");
+        assert!(
+            arms_cover(&["1", "2", "3", "4"], &["1", "2", "3", "4"]),
+            "4 members"
+        );
+    }
+
+    /// Strings behave identically — the gap was never numeric.
+    #[test]
+    fn ur_string_enums_too() {
+        assert!(
+            arms_cover(&["\"a\"", "\"b\"", "\"c\""], &["\"a\"", "\"b\"", "\"c\""]),
+            "3 string members"
+        );
+    }
+
+    /// The sound converse: a genuinely uncovered member is still not exhaustive.
+    #[test]
+    fn ur_a_missing_arm_is_still_caught() {
+        assert!(
+            !arms_cover(&["1", "2", "3"], &["1", "2"]),
+            "arm 3 missing — must not be proven exhaustive"
+        );
+    }
+}
+
 // **The `where`-isolation invariant** [author, 2026-08-06]: E11 makes a `where` a
 // verified assertion — "never trusted, never a mode … hence no new caller obligations."
 // So the presence of a signature must never change what a *call site* concludes. Before

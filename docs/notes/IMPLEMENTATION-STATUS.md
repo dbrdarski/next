@@ -447,6 +447,14 @@ specified rather than open. Owed: instance unions, non-Pure kinds, symbolic fact
 (`OwedItems` §1a). Pinned as conformance `contract_level_instances`. Detail in
 `DECISIONS.md` (2026-08-06).
 
+**Union remainders empty out (2026-08-07):** `Contract::difference` now distributes over
+union arms (`(X∪Y)∖Z = (X∖Z)∪(Y∖Z)`), `Equals(v)∖Z` reduces to `Bottom` by membership when
+`Z` contains `v`, and `union` drops `Bottom` arms. Before this, an ordered walk's remainder
+became an opaque stack of `Difference` nodes and **three** exact point arms exactly covering
+a three-member union were not proven exhaustive (two were). Pinned as conformance
+`union_remainders`. The author's worked example's inner matches now prove; its exit match
+still needs the operation-image work (A6/Thread D). Detail in `DECISIONS.md` (2026-08-07).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -665,7 +673,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **185 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **188 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
