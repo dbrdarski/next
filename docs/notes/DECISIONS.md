@@ -6416,3 +6416,21 @@ doing another's job.
 
 **Verification:** 468 lib passed / 1 ignored; 199 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — Ruling: "semantics-version event" is not a gate
+
+**[user, 2026-08-07]:** the notion of a *semantics-version event* — the phrase μ §8 attaches
+to the composition of the frozen `==`-rewrite set — **is not recognized and is discarded.**
+
+**Consequence.** I had cited it in two places as a reason to wait for a stamp before moving
+`poly`'s arithmetic rewrites (`x + x → 2*x`, commutative reordering, constant folding) out
+of function-shape canonicalization and into the wired normalization phase. That gate does
+not exist. **A12 is ordinary implementation**, blocked on nothing but a decision to do it.
+
+**Provenance note.** The phrase remains in `next-mu-canonicalization-specification-v0-5.md`,
+which is manifest-protected and not edited here. The author's ruling supersedes it in
+effect; the discrepancy is logged rather than silently reconciled, per the recorded-staleness
+discipline.
+
+**Verification:** records only; 468 lib / 199 conformance / 10 machinery unchanged; manifest
+19/19 OK.

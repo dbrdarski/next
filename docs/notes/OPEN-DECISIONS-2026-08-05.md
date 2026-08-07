@@ -184,9 +184,11 @@ normalized form. Today `poly`'s three rewrites (commutative reordering, constant
 normalization phase, now wired, carries only the two template rules. Moving the arithmetic
 rewrites into the phase would make the analyzer see `2 * a` where the source wrote `a + a`,
 dissolving the inline-correlation case with no new mechanism. **The list is unchanged
-either way** — but §8 calls the composition of the `==`-set "a semantics-version event," so
-changing *where* those rewrites apply is yours to stamp. It would not reach sharing through
-a binding (`b = a * 2; a + b`), which is syntactically invisible.
+either way.** I cited §8's "amending the list is a semantics-version event" as a gate;
+**the author has ruled that notion unrecognized and discarded [user, 2026-08-07]**, so
+A12 is **not gated** — it is ordinary implementation, waiting only on a decision to do it.
+It would not reach sharing through a binding (`b = a * 2; a + b`), which is syntactically
+invisible.
 
 ### A8. Exported slots in check mode (MOD-03 residue)
 Runtime linking installs an exported `@state` slot **itself** into the consumer (shared
