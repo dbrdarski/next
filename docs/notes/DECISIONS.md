@@ -6251,3 +6251,41 @@ measured regression.
 
 **Verification:** 467 lib passed / 1 ignored; 195 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — A6 residue settled, and a Group-B audit: three of six were mis-filed
+
+**Residue (the spec's §11 item 4 — which consumers may force an exact image).** The retry is
+wired at the `where` completion judgment only. **Measured: it needs no wiring anywhere
+else.** The retry re-runs the *whole* body analysis in exact mode, so nested seats — the
+application path's own `safety::completes` callers included — inherit it; and outside a
+`where` no branch set exists at all (BR-02), so those seats have nothing to retry. Verified
+on a union argument crossing a call boundary where the hull is genuinely insufficient:
+`rate ∈ {1,2,5}` has mixed parity, so `rate * 2` hulls to `{2,4,6,8,10}` against a truth of
+`{2,4,10}`, and the three arms cover the truth and not the hull. Pinned as conformance
+`exact_image_reach`. A first attempt at this check used `{1,3,5}`, which passes *coarsely* —
+odd × 2 is ≡ 2 (mod 4), so the congruence made the hull exact — and would have proved
+nothing; the mixed-parity version is the one that discriminates.
+
+**Residue remaining, unchanged:** the mechanism is a re-analysis under a mode flag rather
+than a held image (§11 item 2), and the 256-combination cap is the drafter's, unratified.
+
+**The audit.** After mis-filing two items as author deferrals, all six of Group B were
+re-checked against their sources.
+
+- **Correctly filed** — grounding §14's *"Deferred by ruling [user]"* line names them
+  explicitly: **B1** (GR-10(3) finite-product exact chains), **B2** (D-4 basin derivation),
+  **B6** (async/non-polling Effects).
+- **Mis-filed, moved to owed implementation:** **B3** — the μ package is *design-closed*
+  (compendium: "v0.5; design-closed, rounds 1–4 + confirmatory") and laws 1–5 are part of
+  it; the only "deferred" note is a **code comment of mine** in `src/oracle/mu.rs`. **B5** —
+  E8 says the string-length contract design is "specified and design-closed … implementation
+  … remain owed"; its `[ask-author]` marker asks nothing and is stale. **B4** was corrected
+  yesterday.
+
+**Three of six.** The pattern is consistent: I recorded my own implementation deferrals as
+though the author had ruled them. Group B now carries an audit note saying it should be
+re-derived from sources rather than from this file's history, and `OwedItems` gains §1b and
+§1c for the two moved items.
+
+**Verification:** 467 lib passed / 1 ignored; 196 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

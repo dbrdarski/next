@@ -359,6 +359,23 @@ handle contract-described captures — case (b)); the producing/carrying half do
 neither deferred nor a question.** The fact-key identity question is downstream and
 dissolves with it.
 
+### 1b. μ laws 2 and 4 [added 2026-08-07, audit]
+
+Design-closed with the μ package (compendium: *v0.5; design-closed, rounds 1–4 +
+confirmatory*); laws 1–5 are all part of it. Implemented as **not merging** — conservative,
+so the cost is duplicate cache entries for genuinely identical recursive groups, never a
+wrong answer. Note in `src/oracle/mu.rs`. **Previously mis-filed as an author deferral; the
+only deferral note is that code comment.**
+
+### 1c. Exact string-length seam arithmetic [added 2026-08-07, audit]
+
+E8: *"String-length contract design: specified and design-closed with the tuple family;
+implementation, generated-table validation, and C§16 discharge remain owed."* Today the
+analyzer gives the sound interval `count(a) ≤ count(a ++ b) ≤ count(a) + count(b)`; the
+boundary-state compression that makes it exact needs the segmenter's category tables and a
+string-length contract form. Note in `src/contract/grapheme.rs` — its `[ask-author]` marker
+asks nothing and is stale. **Previously mis-filed as an author deferral.**
+
 ## 5. Open design threads (no spec change; block nothing) — see the handovers
 
 - **Thread B** — the jagged function-equality boundary under the freeze slice

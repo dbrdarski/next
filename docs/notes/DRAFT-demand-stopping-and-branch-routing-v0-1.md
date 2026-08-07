@@ -712,10 +712,20 @@ number of combinations.
   combinations; beyond the cap the coarse verdict stands. §7's worked example checks `ok` and
   runs to `16`; removing one arm is still refused.
 
+**§11 item 4 — the consumer set — settled by measurement 2026-08-07.** The retry is wired
+at the `where`'s completion judgment **only**, and needs no wiring elsewhere: it re-runs the
+*whole* body analysis in exact mode, so every nested seat — including the application path's
+own completion judgments — inherits it; and outside a `where` no branch set exists (BR-02),
+so those seats have nothing to retry. Verified on a union argument crossing a call boundary
+where the hull is genuinely insufficient (`rate ∈ {1,2,5}`, mixed parity, hull `{2,4,6,8,10}`
+against a truth of `{2,4,10}`) — conformance `exact_image_reach`.
+
 **Not built, deliberately.** Chaining, shared-versus-independent provenance, deeper operation
-graphs, the general lazy-image representation (§11 item 2), BR-10/BR-11's keyed lookup,
-BR-15's collapse inventory, and DR-12/DR-14's substitution as a *distinct* mechanism (today's
-narrowing comes from the region walk, not from substitution).
+graphs, the general lazy-image representation (§11 item 2 — today's retry is a re-analysis
+under a mode flag, not a held image), BR-10/BR-11's keyed lookup, BR-15's collapse inventory,
+and DR-12/DR-14's substitution as a *distinct* mechanism (today's narrowing comes from the
+region walk, not from substitution). The 256-combination cap on the exact image is the
+drafter's and unratified.
 
 **Editorial nit on §7.** `Union` is binary in the grammar, so the example's three-argument
 `Union(a, b, c)` must be written nested — `Union(a, Union(b, c))` — to parse. The verified

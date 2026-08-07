@@ -101,6 +101,18 @@ Implemented same day (`uncalled_unsafe_lints` + three conformance pins): an unre
 function with a body proven to trap gets a definition-site **Warning** — never rejects,
 never silent; referenced functions keep their seats' blocking judgment.
 
+### A6. **RULED and FIRST SLICE LANDED.** Hull retained as an accelerator only; exact
+resolution forced — mandatorily, not discretionarily — when routing/completion cannot be
+proven coarsely. Landed 2026-08-07 (conformance `exact_images`), with the union-remainder
+algebra as its prerequisite (`union_remainders`). **Residue item 2 settled by measurement
+2026-08-07:** the retry needs no wiring at the application path's own `safety::completes`
+callers — it re-runs the whole body analysis in exact mode, so nested seats inherit it, and
+outside a `where` no branch set exists for them to retry (pinned: `exact_image_reach`).
+**Residue remaining:** the mechanism is a re-analysis under a mode flag rather than a held
+image (the spec's §11 item 2), and the 256-combination cap is the drafter's, unratified.
+Design now lives in `DRAFT-demand-stopping-and-branch-routing-v0-1.md`.
+
+#### (original three-candidate text, superseded)
 ### A6. F0 Q1 — the union rule in operation images: hull · distribution · **laziness**
 **Reframed 2026-08-05 under measurement. The earlier entry called this "purely a
 precision/cost dial"; that was wrong in the direction that matters** — the hull does not
@@ -197,12 +209,23 @@ choice.
 
 ## Group B — deferred by your own rulings (reopen only deliberately)
 
+> **Audit, 2026-08-07.** All six original entries were re-checked against their sources
+> after two were found mis-filed. **Correctly filed (grounding §14, "Deferred by ruling
+> [user]"): B1, B2, B6.** **Mis-filed and moved to Group C: B3, B4, B5** — each is
+> specified and design-closed, with the "deferral" existing only in a drafter's code
+> comment or note. Three of six. Group B should be re-derived from sources, not from this
+> file's history.
+
 - **B1. GR-10(3) finite-product exact chains** — numeric finite-state walking (specimens
   11/22) and the reason the recursive `sum` over `IntList` is unproven. One lib pin sits
   ignored on exactly this. Reopening = stamping the extension into v1 scope.
 - **B2. D-4 basin derivation** — `collatz(64)`'s Pow2 basin; deferred as a possible later
   improvement; collatz stays honestly unproven.
-- **B3. μ laws 2/4** — nested-binder merge; partition-refinement slot merging.
+- ~~**B3. μ laws 2/4**~~ — **MIS-FILED; REMOVED [audit 2026-08-07].** The μ package is
+  **design-closed** (compendium: *"μ-canonicalization package (v0.5; design-closed, rounds
+  1–4 + confirmatory)"*), and laws 1–5 are part of it. The only "deferred" note is a
+  **code comment of mine** in `src/oracle/mu.rs` ("Deferred refinements (flagged)"), not an
+  author ruling. Owed implementation; moved to Group C.
 - ~~**B4. Symbolic-instance fact keys**~~ — **MIS-FILED; REMOVED FROM THIS GROUP
   [2026-08-06].** This was never an author deferral and never an open question. C§13.2
   specifies it twice: *"A call site resolves its callee to an analysis instance (**shape +
@@ -218,9 +241,12 @@ choice.
   the region-table machinery takes an environment of contracts and handles
   contract-described captures (case (b)); the producing and carrying half is what is
   missing. The fact-*keys* question is downstream of it and dissolves with it.
-- **B5. The grapheme boundary-state compression** — lifting exact string-length arithmetic
-  to abstract string *contracts*; needs segmenter category tables and a length-contract
-  form.
+- ~~**B5. The grapheme boundary-state compression**~~ — **MIS-FILED; REMOVED [audit
+  2026-08-07].** E8: *"String-length contract design: **specified and design-closed** with
+  the tuple family; implementation, generated-table validation, and C§16 discharge remain
+  owed."* Not an author deferral. Owed implementation; moved to Group C. The
+  `// [ask-author]` marker in `src/contract/grapheme.rs` asks nothing — it states the item
+  is deferred — so the marker is stale, not a question.
 - **B6. Async / non-polling Effects** — behind the reactive fence with the rest.
 - **Threads A/B/C** (handover docs): open-value observation legality; function equality
   under the freeze slice; the equality-freeze exclusions' provenance. All PENDING-§5-
@@ -237,6 +263,15 @@ choice.
   on a function that builds a helper from its own argument and calls it — rejected with
   "callee not resolved to a known function" (scratch program `w2.next`). **Not proven to be
   the sole remaining cause of that rejection**, only the specified piece that is missing.
+- **C6. μ laws 2 and 4 (design-closed, unimplemented)** — law 2's adjacent/nested-binder
+  merge and law 4's partition-refinement slot merging. Implemented today as *not merging*,
+  which is the conservative direction: the cost is that two genuinely identical recursive
+  groups key separately and are analyzed twice — a missed optimization, never a wrong
+  answer. Note in `src/oracle/mu.rs`.
+- **C7. Exact string-length seam arithmetic (design-closed, unimplemented)** — the
+  boundary-state compression that lifts `count(a) ≤ count(a ++ b) ≤ count(a) + count(b)` to
+  an exact contract. Needs the segmenter's category tables and a string-length contract
+  form. Note in `src/contract/grapheme.rs`; the `[ask-author]` marker there is stale.
 - **C1.** The application package's four γ obligations as a sampled joint-operand battery
   per world (Tier 5's next slice).
 - **C2.** The world-decided gray runner — host effects in the bounded oracle, then the

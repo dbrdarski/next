@@ -2024,6 +2024,41 @@ mod exact_images {
     }
 }
 
+// **The exact-image retry reaches nested seats** (A6 residue, settled 2026-08-07). The
+// retry is wired at the `where`'s completion judgment only. It needs no wiring at the
+// application path's own `safety::completes` callers, because the retry re-runs the *whole*
+// body analysis in exact mode, so every nested seat inherits it — and outside a `where` no
+// branch set exists at all (arguments are points), so there is nothing for them to retry.
+mod exact_image_reach {
+    use super::*;
+
+    /// A union argument crossing a **call boundary**, where the hull is genuinely
+    /// insufficient: `rate ∈ {1,2,5}` has mixed parity, so the hull of `rate * 2` is
+    /// `{2,4,6,8,10}` while the truth is `{2,4,10}`. The three arms cover the truth and
+    /// not the hull, so this passes only if the callee's completion is judged under the
+    /// exact image — which it is, inherited from the `where`-level retry.
+    #[test]
+    fn eir_a_union_argument_across_a_call_is_covered() {
+        let src = "Plan = Union(Equals(\"basic\"), Union(Equals(\"pro\"), Equals(\"enterprise\")))\n\
+                   helper = (r) => {\n  d = r * 2\n  => d :: { 2 => 10\n    4 => 20\n    10 => 50 }\n}\n\
+                   price where (Plan) => Number\n\
+                   price = (plan) => {\n  rate = plan :: { \"basic\" => 1\n    \"pro\" => 2\n    \"enterprise\" => 5 }\n\
+                     => helper(rate)\n}\n\
+                   x = price(\"pro\")\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "20"
+        );
+    }
+}
+
 // **A7 [user ruling, 2026-08-05]: `where` extends to a binding proven to hold an exact
 // function value** — a factory product, not only a directly-written function. Only names a
 // `where` actually mentions are resolved this way; every other binding is untouched.
