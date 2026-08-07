@@ -151,8 +151,9 @@ choice.
 Full record, both programs, traces, cost data, corrections, and the reproduction recipe:
 `HANDOVER-hull-vs-distribution-2026-08-05.md` (Thread D in `OwedItems.md` §5).
 
-### A7. **RULED [user, 2026-08-05]: extend.** `where` may attach to a binding proven to
-hold an exact function value; queued as the next implementation slice.
+### A7. **RULED [user, 2026-08-05]: extend — LANDED 2026-08-07.** `where` attaches to a
+binding proven to hold an exact function value (`c = makeCounter(5)`). Resolution is scoped
+to names a `where` mentions; pinned as conformance `where_on_products`.
 
 #### (original text, superseded)
 `c = makeCounter(5)` then `c where (Number) => Number` — errors today ("names no function

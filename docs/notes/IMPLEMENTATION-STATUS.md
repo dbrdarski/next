@@ -466,6 +466,14 @@ flagship both pass now. Pinned as conformance `exact_images`. Chaining, provenan
 and the general lazy-image representation are deliberately not built. Detail in
 `DECISIONS.md` (2026-08-07).
 
+**A7 landed (2026-08-07):** a `where` now attaches to a binding proven to hold an exact
+function value — `c = makeCounter(5)`, `c where (Number) => Number`. `collect` resolves the
+bindings a `where` names by analysing them against the defined siblings and accepting only
+an exact function value; resolution is deliberately scoped to those names, because
+analysing every non-lambda binding in the declaration pre-pass regressed the non-tail
+mutual pair. Pinned as conformance `where_on_products`. Detail in `DECISIONS.md`
+(2026-08-07).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -684,7 +692,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **191 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **195 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

@@ -2024,6 +2024,78 @@ mod exact_images {
     }
 }
 
+// **A7 [user ruling, 2026-08-05]: `where` extends to a binding proven to hold an exact
+// function value** — a factory product, not only a directly-written function. Only names a
+// `where` actually mentions are resolved this way; every other binding is untouched.
+mod where_on_products {
+    use super::*;
+
+    const MK: &str = "makeCounter = (limit) => (n) => n <= limit ? n : limit\n";
+
+    /// The ruling's motivating case: `c = makeCounter(5)` then `c where (Number) => Number`.
+    /// Errored with "names no function binding in this module" before.
+    #[test]
+    fn wp_a_where_attaches_to_a_factory_product() {
+        let src = format!("{MK}c where (Number) => Number\nc = makeCounter(5)\nx = c(3)\nx\n");
+        let v = check_source(&src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(&src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "3"
+        );
+    }
+
+    /// The declaration is verified, not assumed: a product whose body traps over the
+    /// declared domain is refuted at the operation.
+    #[test]
+    fn wp_a_trapping_product_is_refuted() {
+        let src = "makeAdder = (k) => (n) => n + k\n\
+                   bad where (Number) => Number\nbad = makeAdder(\"s\")\nx = 1\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(!v.accepted());
+        assert!(
+            v.findings.iter().any(|f| f.message.contains("Add")),
+            "named at the operation: {:#?}",
+            v.findings
+        );
+    }
+
+    /// A binding that is not a function still gets the ordinary malformed-`where`
+    /// diagnostic — the extension resolves function values, it does not weaken the check.
+    #[test]
+    fn wp_a_non_function_binding_still_errors() {
+        let src = "n = 1 + 1\nn where (Number) => Number\nx = 1\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(!v.accepted());
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.message.contains("names no function binding")),
+            "{:#?}",
+            v.findings
+        );
+    }
+
+    /// The scope guard: resolution runs only for names a `where` mentions. An ordinary
+    /// executable binding of a recursive call must not be dragged into the declaration
+    /// pre-pass — measured as a regression on this exact program.
+    #[test]
+    fn wp_ordinary_bindings_are_untouched() {
+        let v = check_source(
+            "f = (n) => n <= 0 ? 0 : 1 + g(n - 1)\ng = (n) => n <= 0 ? 0 : 1 + f(n - 1)\n\
+             x = f(4)\n",
+        )
+        .expect("parses and checks")
+        .0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+}
+
 // **The `where`-isolation invariant** [author, 2026-08-06]: E11 makes a `where` a
 // verified assertion — "never trusted, never a mode … hence no new caller obligations."
 // So the presence of a signature must never change what a *call site* concludes. Before

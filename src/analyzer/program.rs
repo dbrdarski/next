@@ -655,6 +655,62 @@ fn collect(
         }
     }
 
+    // **A7 [user ruling, 2026-08-05]: a `where` may attach to any binding proven to
+    // hold an exact function value**, not only to a directly-written function. The
+    // motivating case is a factory product — `c = makeCounter(5)` — whose value *is*
+    // a real closure the instance machinery (C§12.3/RT-09) can already analyze; only
+    // the pre-pass's name resolution stood in the way.
+    //
+    // Resolved here, in source order, so a product may itself be built from an
+    // earlier product. Analysis, not evaluation: the construction-evaluates-nothing
+    // license applies, and only a result that erases to an **exact function value**
+    // is accepted — anything else leaves the name unresolved exactly as before, so a
+    // genuinely non-function binding still gets the ordinary malformed-`where` error.
+    //
+    // **Only names a `where` actually mentions** are resolved. Analysing every
+    // non-lambda binding here would pull ordinary executable bindings — `x = f(4)` —
+    // into the declaration pre-pass, settling their facts before the environment they
+    // belong to exists; measured as a regression on the non-tail mutual pair. A
+    // program with no such `where` is untouched by this pass.
+    let where_names: HashSet<&str> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Where(w) => Some(w.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    for item in &module.items {
+        let Item::Bind(Bind {
+            target: BindTarget::Name(name),
+            value,
+            ..
+        }) = item
+        else {
+            continue;
+        };
+        if !where_names.contains(name.as_str())
+            || values.contains_key(name)
+            || contract_names.contains(name)
+        {
+            continue;
+        }
+        if matches!(value, Expr::Lambda(_) | Expr::Const(_)) {
+            continue; // already handled above
+        }
+        let mut tenv = crate::analyzer::TypeEnv::new();
+        for (n, v) in &values {
+            tenv.insert(n.clone(), AnalysisContract::of_value(v.clone()));
+        }
+        let analysis = crate::analyzer::analyze(value, &tenv, &cenv, interner);
+        if let Contract::Equals(v) = analysis.contract
+            && v.as_closure().is_some()
+        {
+            scope.define(name, Binding::Value(v.clone()));
+            values.insert(name.clone(), v);
+        }
+    }
+
     // Every sibling is now present in the shared late-binding scope. Close the
     // captured graphs in a stable order so analyzer-created function values obey
     // the same universal interning invariant as oracle-created values.

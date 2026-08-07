@@ -6217,3 +6217,37 @@ three-argument form must be nested to parse.
 
 **Verification:** documentation only; 467 lib / 191 conformance / 10 machinery unchanged;
 manifest 19/19 OK.
+
+## 2026-08-07 — A7 lands: `where` attaches to a binding proven to hold a function
+
+**The ruling [user, 2026-08-05]** was "extend": a `where` may name any binding proven to
+hold an exact function value, not only a directly-written function. `c = makeCounter(5)`
+then `c where (Number) => Number` errored with *"names no function binding in this module"*
+— the pre-pass resolved `w.name` against `values`, which `collect` populated from lambda
+and act bindings only. A factory product is an `Apply`, so it never arrived.
+
+**The fix.** After the sibling closures and the C§9 contract pass, `collect` resolves the
+remaining bindings **named by a `where`**: it analyzes the value expression against the
+already-defined siblings and accepts the result **only if it erases to an exact function
+value**, defining it into the shared scope and `values`. Analysis, not evaluation — the
+construction-evaluates-nothing license covers it, and the instance machinery (C§12.3 /
+RT-09) could already analyze such a product; only name resolution stood in the way.
+Resolution runs in source order, so a product may be built from an earlier product.
+
+**The scope guard, and why it exists.** The first cut resolved *every* non-lambda binding
+and regressed the non-tail mutual pair (`x = f(4)`): analysing an ordinary executable
+binding inside the **declaration** pre-pass settles its facts before the environment it
+belongs to exists. Restricting resolution to names a `where` actually mentions fixes it and
+makes the pass invisible to any program without such a declaration. The regression is now a
+pin in its own right.
+
+**Pinned** as conformance `where_on_products`: the factory product accepted and running; a
+trapping product refuted *at the operation* (`Add` named, not a missing callee); a
+non-function binding still getting the ordinary malformed-`where` error; and the
+ordinary-bindings-untouched guard.
+
+**`// [ask-author]`: none** — the ruling is the author's; the scope guard is forced by the
+measured regression.
+
+**Verification:** 467 lib passed / 1 ignored; 195 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
