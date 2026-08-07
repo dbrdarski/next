@@ -1953,12 +1953,12 @@ mod union_remainders {
     }
 }
 
-// **Exact operation images, forced only by routing** [author, 2026-08-07]. A completion
-// judgment tries the coarse (hull) reading first; if and only if that cannot prove it, the
-// same judgment re-runs with the operation rulebook distributing over finite point
-// operands. Coarse stays authoritative for positive proofs — the exact image is a subset
-// of the hull, so the retry can only turn unproven into proven. Deterministic: one retry,
-// no search, no budget, no inversion.
+// **Held operation images, forced by routing** [author, 2026-08-07]. An operation over
+// finite point operands holds its exact image — ingredients only, uncomputed — beside the
+// coarse contract. A *result* demand never forces it (DR-09 stops at the producer); the
+// **routing** judgment does, at the scrutinee, forcing one node rather than re-running the
+// judgment. The forced image is a subset of the coarse contract, so the walk can only
+// sharpen. No search, no budget, no inversion, no mode.
 mod exact_images {
     use super::*;
 

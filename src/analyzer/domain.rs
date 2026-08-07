@@ -75,13 +75,57 @@ impl InstanceMetadata {
     }
 }
 
+/// A **held operation image** (DR-16 / DR-17). An operation over finite point operands
+/// has an exact result, but computing it is not free and no *result* demand needs it —
+/// `⊑ Numeric` is discharged at the producer's mapping. So the ingredients are carried
+/// beside the coarse contract and nothing is computed until a **routing** judgment
+/// cannot proceed without them.
+///
+/// Held, not computed: this is the storage that lets the completion walk force **one
+/// node** instead of re-running the whole judgment in a different mode.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct HeldImage {
+    pub op: crate::ast::PrimOp,
+    pub operands: Vec<Contract>,
+}
+
+impl HeldImage {
+    /// Hold an image when it is worth holding: every operand a **finite point set**,
+    /// more than one combination (nothing to distribute otherwise), and the count
+    /// within the forcing budget. `None` means there is no exact image to offer and
+    /// the coarse contract is the whole answer.
+    pub fn hold(op: crate::ast::PrimOp, operands: &[Contract]) -> Option<HeldImage> {
+        let counts: Vec<usize> = operands
+            .iter()
+            .map(|c| crate::contract::point_set(c).map(|s| s.len()))
+            .collect::<Option<_>>()?;
+        let total: usize = counts.iter().product();
+        if total <= 1 || total > crate::contract::EXACT_IMAGE_LIMIT {
+            return None;
+        }
+        Some(HeldImage {
+            op,
+            operands: operands.to_vec(),
+        })
+    }
+
+    /// **Force** the image: apply the leaf rule to every operand combination and join.
+    /// Exact by construction, and a subset of the coarse contract — so a judgment that
+    /// failed coarsely can only be improved, never reversed.
+    pub fn force(&self, interner: &mut Interner) -> Option<Contract> {
+        crate::contract::exact_image(self.op, &self.operands, interner)
+    }
+}
+
 /// The structural / correlated abstract-domain element (§2, bridge form).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum AnalysisContract {
-    /// A scalar/opaque position: an ordinary contract with function-position metadata.
+    /// A scalar/opaque position: an ordinary contract with function-position metadata,
+    /// and optionally a **held operation image** (see [`HeldImage`]).
     Leaf {
         contract: Contract,
         metadata: InstanceMetadata,
+        held: Option<std::rc::Rc<HeldImage>>,
     },
     /// A tuple with positional annotated elements — structure preserved.
     Tuple(Vec<AnalysisContract>),
@@ -188,7 +232,33 @@ impl AnalysisContract {
         {
             return AnalysisContract::Bottom;
         }
-        AnalysisContract::Leaf { contract, metadata }
+        AnalysisContract::Leaf {
+            contract,
+            metadata,
+            held: None,
+        }
+    }
+
+    /// A leaf carrying a **held operation image** beside its coarse contract.
+    pub fn leaf_with_image(
+        contract: Contract,
+        metadata: InstanceMetadata,
+        image: HeldImage,
+    ) -> AnalysisContract {
+        AnalysisContract::Leaf {
+            contract,
+            metadata,
+            held: Some(std::rc::Rc::new(image)),
+        }
+    }
+
+    /// The held image at this position, if any. `None` everywhere but a leaf that an
+    /// operation produced over finite point operands.
+    pub fn held_image(&self) -> Option<std::rc::Rc<HeldImage>> {
+        match self {
+            AnalysisContract::Leaf { held, .. } => held.clone(),
+            _ => None,
+        }
     }
 
     /// A correlated tuple; a bottom element makes the whole tuple bottom.
@@ -437,7 +507,9 @@ pub fn realizes(v: &ValueRef, i: &Instance, interner: &mut Interner) -> bool {
 pub fn gamma_contains(ac: &AnalysisContract, v: &ValueRef, interner: &mut Interner) -> bool {
     match ac {
         AnalysisContract::Bottom => false,
-        AnalysisContract::Leaf { contract, metadata } => {
+        AnalysisContract::Leaf {
+            contract, metadata, ..
+        } => {
             if !contract.contains(v) {
                 return false;
             }
@@ -569,10 +641,12 @@ pub fn intersect_a(
             AnalysisContract::Leaf {
                 contract: ca,
                 metadata: ma,
+                ..
             },
             AnalysisContract::Leaf {
                 contract: cb,
                 metadata: mb,
+                ..
             },
         ) => {
             let contract = Contract::intersect(ca.clone(), cb.clone(), interner);

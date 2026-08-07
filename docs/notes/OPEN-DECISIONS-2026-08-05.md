@@ -108,8 +108,10 @@ algebra as its prerequisite (`union_remainders`). **Residue item 2 settled by me
 2026-08-07:** the retry needs no wiring at the application path's own `safety::completes`
 callers — it re-runs the whole body analysis in exact mode, so nested seats inherit it, and
 outside a `where` no branch set exists for them to retry (pinned: `exact_image_reach`).
-**Residue remaining:** the mechanism is a re-analysis under a mode flag rather than a held
-image (the spec's §11 item 2), and the 256-combination cap is the drafter's, unratified.
+**Residue closed 2026-08-07:** the held image is built (`domain::HeldImage`, forced at the
+scrutinee by `analyze_match`), replacing the re-analysis; the mode flag and its memo-key
+field are deleted, dissolving the spec's §11 item 3. **Remaining:** chaining, provenance
+sharing, and the 256-combination budget, which is the drafter's and unratified.
 Design now lives in `DRAFT-demand-stopping-and-branch-routing-v0-1.md`.
 
 #### (original three-candidate text, superseded)

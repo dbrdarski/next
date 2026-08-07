@@ -504,7 +504,21 @@ fn analyze_primop(
         }
     };
 
-    Analysis::produced_with_safety(contract, findings, safety_demands)
+    // **Hold the exact image** (DR-16/17). When every operand is a finite point set the
+    // operation has an exact result — but no *result* demand needs it (`⊑ Numeric` is
+    // discharged at the producer's mapping, DR-02/DR-09), so it is not computed. The
+    // ingredients ride beside the coarse contract, and a **routing** judgment that
+    // cannot proceed without them forces this one node — never the whole judgment.
+    let held = domain::HeldImage::hold(op, &inputs);
+    let mut analysis = Analysis::produced_with_safety(contract, findings, safety_demands);
+    if let Some(image) = held {
+        analysis.annotated = AnalysisContract::leaf_with_image(
+            analysis.contract.clone(),
+            domain::InstanceMetadata::Unknown,
+            image,
+        );
+    }
+    analysis
 }
 
 fn analyze_tuple(
@@ -1213,6 +1227,7 @@ fn analyze_application_alternative(
         && let AnalysisContract::Leaf {
             contract: Contract::Kind(Kind::Function),
             metadata: domain::InstanceMetadata::Known(instances),
+            ..
         } = &alternative.callee
         && let [instance] = instances.as_slice()
         && matches!(instance.shape.act_kind, ActKind::Pure)
@@ -1892,7 +1907,7 @@ fn analyze_match(
     let mut safety_demands = Vec::new();
 
     // The scrutinee is evaluated once, in an expecting seat.
-    let (scrut, scrut_annotated) = match &m.scrutinee {
+    let (mut scrut, scrut_annotated) = match &m.scrutinee {
         Some(e) => {
             let mut a = analyze_in_world(e, env, cenv, world, interner);
             demand(&a, &mut findings);
@@ -1903,6 +1918,21 @@ fn analyze_match(
         }
         None => (Contract::Top, AnalysisContract::of_contract(Contract::Top)),
     };
+
+    // **Force the held image, here and nowhere else** (DR-17). Routing is the judgment
+    // that needs exact branch values; a *result* demand never does (DR-09), so the
+    // image stayed unevaluated until this point. Forcing yields a subset of the coarse
+    // contract, so every arm this match would have selected coarsely it still selects
+    // — the walk can only get sharper, never differently-shaped.
+    //
+    // Forced unconditionally rather than only on failure: the exact contract is what
+    // the arms are walked against, so deciding "did the coarse walk fail?" first would
+    // mean walking twice. One node, one walk.
+    if let Some(image) = scrut_annotated.held_image()
+        && let Some(exact) = image.force(interner)
+    {
+        scrut = exact;
+    }
 
     // `body_env` accumulates Bind / Stmt bindings; each item runs against it.
     let mut body_env = env.clone();

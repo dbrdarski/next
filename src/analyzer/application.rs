@@ -259,7 +259,9 @@ fn callee_branches(callee: &AnalysisContract) -> Vec<AnalysisContract> {
         AnalysisContract::Alt(alternatives) => {
             alternatives.iter().flat_map(callee_branches).collect()
         }
-        AnalysisContract::Leaf { contract, metadata } => match contract {
+        AnalysisContract::Leaf {
+            contract, metadata, ..
+        } => match contract {
             Contract::Union(left, right) => [left, right]
                 .into_iter()
                 .flat_map(|branch| {

@@ -720,12 +720,18 @@ so those seats have nothing to retry. Verified on a union argument crossing a ca
 where the hull is genuinely insufficient (`rate ∈ {1,2,5}`, mixed parity, hull `{2,4,6,8,10}`
 against a truth of `{2,4,10}`) — conformance `exact_image_reach`.
 
-**Not built, deliberately.** Chaining, shared-versus-independent provenance, deeper operation
-graphs, the general lazy-image representation (§11 item 2 — today's retry is a re-analysis
-under a mode flag, not a held image), BR-10/BR-11's keyed lookup, BR-15's collapse inventory,
-and DR-12/DR-14's substitution as a *distinct* mechanism (today's narrowing comes from the
-region walk, not from substitution). The 256-combination cap on the exact image is the
-drafter's and unratified.
+**§11 item 2 — the representation — built 2026-08-07.** `domain::HeldImage { op, operands }`
+rides on `AnalysisContract::Leaf` beside the coarse contract; `analyze_primop` holds it when
+every operand is a finite point set, and `analyze_match` forces it at the scrutinee. One node
+forced, not one judgment re-run. **§11 item 3 is dissolved with it**: the mode flag and its
+memo-key field are deleted, so a coarse settlement and an exact one are no longer different
+questions to keep apart.
+
+**Not built, deliberately.** Chaining (an operand that is itself a held image is not forced
+through), shared-versus-independent provenance, deeper operation graphs, BR-10/BR-11's keyed
+lookup, BR-15's collapse inventory, and DR-12/DR-14's substitution as a *distinct* mechanism
+(today's narrowing comes from the region walk, not from substitution). The 256-combination
+budget for forcing is the drafter's and unratified.
 
 **Editorial nit on §7.** `Union` is binary in the grammar, so the example's three-argument
 `Union(a, b, c)` must be written nested — `Union(a, Union(b, c))` — to parse. The verified

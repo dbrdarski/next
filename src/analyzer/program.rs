@@ -447,7 +447,7 @@ fn analyze_where(
     // per-call judgment. Mutator/Effect bodies carry no coverage obligation.
     if let Some(closure) = callee.as_closure()
         && matches!(closure.lambda.act_kind, crate::ast::ActKind::Pure)
-        && !completes_coarse_then_exact(callee, &args, cenv, interner)
+        && !safety::completes(callee, &args, cenv, interner)
     {
         findings.push(Finding {
             class: TrapClass::ExpectingSeat,
@@ -1062,35 +1062,6 @@ fn uncalled_unsafe_lints(
             });
         }
     }
-}
-
-/// **Completion, coarse first, exact only on failure** [author, 2026-08-07].
-///
-/// The control flow is deterministic and has no heuristic step:
-///
-/// ```text
-/// coarse completion judgment
-///     ├─ proven → stop
-///     └─ not proven → an exact operation image is available?
-///                        ├─ yes → force it and re-run the judgment
-///                        └─ no  → the coarse verdict stands
-/// ```
-///
-/// Coarse stays authoritative for *positive* proofs — the exact image is a subset of
-/// the hull, so it can only ever turn an unproven into a proven, never the reverse.
-/// The retry keys separately in the fact cache (`FactKey::exact_images`), so the
-/// cached coarse answer cannot short-circuit it. Nothing here searches, inverts, or
-/// budgets; the retry is one re-run of the same judgment.
-fn completes_coarse_then_exact(
-    callee: &ValueRef,
-    args: &[Contract],
-    cenv: &ContractEnv,
-    interner: &mut Interner,
-) -> bool {
-    if safety::completes(callee, args, cenv, interner) {
-        return true;
-    }
-    crate::contract::with_exact_images(|| safety::completes(callee, args, cenv, interner))
 }
 
 /// Principle 9 as stamped [user, 2026-08-03]: recursion must be proven to terminate.

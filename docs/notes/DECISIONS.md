@@ -6289,3 +6289,46 @@ re-derived from sources rather than from this file's history, and `OwedItems` ga
 
 **Verification:** 467 lib passed / 1 ignored; 196 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — The held image replaces the retry: one node forced, not one judgment re-run
+
+**The author named the defect from the word "re-".** The first A6 slice judged completion
+coarsely and, on failure, **re-ran the entire judgment** under a mode flag — a second
+discovery, a second body walk, with every operation in the program distributing rather than
+the one that mattered. Correct verdicts, wrong shape: DR-16/17 describe *holding* an image
+and forcing it, not repeating the judgment.
+
+**What replaced it.**
+
+- **`domain::HeldImage { op, operands }`** — the ingredients of an operation's exact result,
+  carried on `AnalysisContract::Leaf` beside the coarse contract. Held only when every
+  operand is a finite point set, there is more than one combination, and the count is within
+  the forcing budget. `AnalysisContract` is the right home because it is the only thing that
+  survives a binding into the environment, which is how `subtotal` reaches the match that
+  consumes it.
+- **The producer** (`analyze_primop`) attaches it. Nothing is computed there — the coarse
+  contract is still the operation's answer, exactly as DR-02/DR-09 require.
+- **The consumer** (`analyze_match`) forces it at the scrutinee, before the arm walk. One
+  node, one walk. Forced unconditionally rather than on failure, because the exact contract
+  is *what the arms are walked against* — testing "did the coarse walk fail?" first would
+  mean walking twice, which is the thing being removed.
+
+**Three mechanisms deleted, not merely bypassed:** the `EXACT_IMAGES` thread-local and its
+`with_exact_images` scope; `analyze_output`'s mode branch; and `FactKey::exact_images`. That
+last one matters — the memo-key field existed only to keep a coarse settlement and an exact
+one apart. With a single mechanism the ambiguity is gone, so the draft's **§11 open item 3
+is dissolved rather than answered**.
+
+**Measured, unchanged in verdict:** the author's six-arm example `ok` and running to `16`;
+the missing-arm variant still refused; the A6 flagship `ok`; the union-across-a-call case
+(`exact_image_reach`) `ok`; `where`-on-products `ok`. Zero suite movement.
+
+**Still owed:** chaining (an operand that is itself a held image is not forced through),
+shared-versus-independent provenance, and the 256-combination budget, which remains the
+drafter's and unratified.
+
+**`// [ask-author]`: none** — the shape is the author's document; the defect was named by the
+author.
+
+**Verification:** 467 lib passed / 1 ignored; 196 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
