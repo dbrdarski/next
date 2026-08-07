@@ -1916,9 +1916,14 @@ mod tests {
         assert_eq!(operation.operation, crate::ast::PrimOp::Add);
         match &operation.verdict {
             OpSafety::Refuted(witness) => {
+                // Source order was `1 + "x"`; the analyzer reads the **normalized**
+                // form (A12), where literal constants fold to the tail of the
+                // chain. The witness is the operands as analyzed, so it reports
+                // `"x"` first. `// [ask-author]`: diagnostics now quote normalized
+                // operand order, not source order — see DECISIONS 2026-08-07.
                 assert_eq!(
                     witness,
-                    &vec![interner.integer(1), interner.string("x")],
+                    &vec![interner.string("x"), interner.integer(1)],
                     "the typed refutation owns the exact operand witness"
                 );
             }

@@ -1141,7 +1141,7 @@ fn grapheme_slices(units: &[u16]) -> Vec<Vec<u16>> {
 /// Render `v` as its canonical literal form. `nested` is true inside a Tuple or
 /// Record, where Strings are quoted and escaped so the form round-trips; a
 /// top-level String renders raw.
-fn render_value(v: &ValueRef, nested: bool) -> String {
+pub(crate) fn render_value(v: &ValueRef, nested: bool) -> String {
     match v.data() {
         ValueData::Str(u) => {
             // Nested: quoted and losslessly escaped, so it round-trips (PR-03/08).

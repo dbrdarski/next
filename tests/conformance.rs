@@ -3380,3 +3380,108 @@ mod phase_gr_world {
         );
     }
 }
+
+/// **The arithmetic slice is the *evaluated* form (A12), and it obeys §8's master
+/// law.** Moving μ §8's frozen rewrites into the normalization phase put them in
+/// front of the oracle and the analyzer both — which is the only way "preserve
+/// demands so shape-level analysis never forgets an obligation" means anything.
+/// It also made two long-standing violations reachable at value level, since a
+/// rewritten body and its source now intern to one closure. Both are pinned shut
+/// here: each pair is a program that must behave the *same* whether or not a
+/// second, differently-spelled function sits above it.
+mod arithmetic_normal_form {
+    use next::oracle::{BoundedRun, run_program_bounded, run_program_value};
+
+    fn value(src: &str) -> String {
+        format!("{:?}", run_program_value(src).expect("completes"))
+    }
+
+    fn outcome(src: &str, fuel: u64) -> &'static str {
+        match run_program_bounded(src, fuel) {
+            BoundedRun::Completed { .. } => "completed",
+            BoundedRun::Diverged { .. } => "diverged",
+            BoundedRun::Trapped(_) => "trapped",
+        }
+    }
+
+    /// The permitted rewrites still fire, now on the form everything reads.
+    #[test]
+    fn an_01_the_frozen_slice_still_identifies_spellings() {
+        assert_eq!(
+            value("[((a, b) => a + b) == ((a, b) => b + a)]"),
+            value("[true]")
+        );
+        assert_eq!(value("[((x) => x + x) == ((x) => 2 * x)]"), value("[true]")); // H-05
+        assert_eq!(
+            value("[((x, y) => 2 * x + 3 * y) == ((x, y) => 3 * y + 2 * x)]"),
+            value("[true]")
+        );
+        assert_eq!(
+            value("[((x) => -x + x) == ((x) => x - x)]"),
+            value("[true]")
+        );
+        // A12's bonus: reordering now precedes capture-slot assignment, so two
+        // spellings over the same free names are one value. Before, the slot
+        // order recorded the source order and they compared unequal.
+        assert_eq!(
+            value("a = 1\nb = 2\n[(() => a + b) == (() => b + a)]"),
+            value("[true]")
+        );
+    }
+
+    /// **Reordering may not move a call.** Operands run left to right, so
+    /// swapping two of them swaps which diverges first — the master law names
+    /// completion-vs-divergence outright.
+    #[test]
+    fn an_02_a_call_holds_its_position() {
+        const PRELUDE: &str = "spin = () => spin()\nbad = () => \"a\" * 2\n";
+        let k = "k = (p, q) => q() + p()\nk(spin, bad)\n";
+        let h_above = "h = (p, q) => p() + q()\n";
+
+        assert_eq!(
+            value("[((p, q) => p() + q()) == ((p, q) => q() + p())]"),
+            value("[false]")
+        );
+        // `k` calls `bad` first and traps — with or without `h` written above it.
+        assert_eq!(outcome(&format!("{PRELUDE}{k}"), 3000), "trapped");
+        assert_eq!(outcome(&format!("{PRELUDE}{h_above}{k}"), 3000), "trapped");
+    }
+
+    /// **Combining may not erase a call.** §8 excludes it by name; the witness is
+    /// fuel-differential, because two calls cost twice one.
+    #[test]
+    fn an_03_a_call_is_never_folded_into_a_coefficient() {
+        const PRELUDE: &str = "work = (n) => n == 0 ? 0 : work(n - 1)\nu = () => work(300)\n";
+        let c = "c = (f) => f() + f()\nc(u)\n";
+        let a_above = "a = (f) => 2 * f()\n";
+
+        assert_eq!(
+            value("[((g) => g() + g()) == ((g) => 2 * g())]"),
+            value("[false]")
+        );
+        // Two calls do not fit in 4000 steps and do fit in 8000 — either way the
+        // answer must not depend on whether `a` is written above `c`.
+        for (fuel, expected) in [(4000u64, "diverged"), (8000, "completed")] {
+            assert_eq!(outcome(&format!("{PRELUDE}{c}"), fuel), expected);
+            assert_eq!(outcome(&format!("{PRELUDE}{a_above}{c}"), fuel), expected);
+        }
+    }
+
+    /// MU-10's trio, read at the phase rather than at the shape helper.
+    #[test]
+    fn an_04_the_permanent_exclusions_do_not_fire() {
+        assert_eq!(value("[((x) => x + 0) == ((x) => x)]"), value("[false]"));
+        assert_eq!(
+            value("[((f, x) => 0 * f(x)) == ((f, x) => 0)]"),
+            value("[false]")
+        );
+        assert_eq!(value("[((x) => x - x) == ((x) => 0)]"), value("[false]"));
+        assert_eq!(
+            outcome(
+                "loop = (x) => loop(x)\nz = (x) => 0 * loop(x)\nz(1)\n",
+                3000
+            ),
+            "diverged"
+        );
+    }
+}

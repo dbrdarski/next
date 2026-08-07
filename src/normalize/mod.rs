@@ -12,13 +12,25 @@
 //! - **Literal template → constant**: a template with no interpolations is the
 //!   string it denotes (its interpolation stringification is B2's rule, but with
 //!   no interpolations it is a plain literal).
+//! - **The arithmetic slice** ([`arith`]): μ §8's frozen `==`-set — commutative
+//!   reordering, literal constant folding, and like-term combining.
 //!
 //! Everything else is a structure-preserving recursive map, so new rules bolt on
 //! in one place.
+//!
+//! ## Why the arithmetic slice lives *here*
+//!
+//! §8's master law demands the frozen set preserve "demand[s] so shape-level
+//! analysis never forgets an obligation" — which only means anything if analysis
+//! reads the normalized form. The phase runs inside `lower_program`, so the one
+//! rewriting is what the oracle evaluates, what the analyzer contracts over, and
+//! (re-run after α-conversion, since renaming changes the ordering keys) what
+//! decides function-shape identity. One rule, one law, one harness.
 
 use crate::ast::*;
 use crate::interner::Interner;
 
+mod arith;
 #[cfg(test)]
 mod tests;
 
@@ -67,7 +79,10 @@ fn normalize_bind(b: &Bind, interner: &mut Interner) -> Bind {
     }
 }
 
-fn normalize_lambda(l: &Lambda, interner: &mut Interner) -> Lambda {
+/// Normalize a lambda. Public to the crate because shape canonicalization must
+/// re-run the phase **after** α-conversion: renaming rewrites the very `Ref`s the
+/// ordering keys are built from, so the pre-α order is not the canonical one.
+pub(crate) fn normalize_lambda(l: &Lambda, interner: &mut Interner) -> Lambda {
     Lambda {
         params: l.params.clone(),
         body: Box::new(normalize_expr(&l.body, interner)),
@@ -77,6 +92,12 @@ fn normalize_lambda(l: &Lambda, interner: &mut Interner) -> Lambda {
 
 /// Normalize an expression: recurse into children, then apply the local rules.
 pub fn normalize_expr(e: &Expr, interner: &mut Interner) -> Expr {
+    let rebuilt = normalize_children(e, interner);
+    arith::rewrite(&rebuilt, interner)
+}
+
+/// The structure-preserving map over children, plus the template rules.
+fn normalize_children(e: &Expr, interner: &mut Interner) -> Expr {
     match e {
         Expr::Const(_) | Expr::Ref(_) => e.clone(),
         Expr::Lambda(l) => Expr::Lambda(normalize_lambda(l, interner)),

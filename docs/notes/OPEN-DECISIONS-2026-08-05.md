@@ -176,7 +176,17 @@ machinery (RT-09) can already analyze the product; this is purely a *surface* de
 may `where` attach to any binding proven to hold an exact function value, or only to
 module-level function definitions?
 
-### A12. Should the arithmetic `==`-slice govern the **analyzed** form? [new, 2026-08-07]
+### A12. **RULED and LANDED [user, 2026-08-07]: the arithmetic `==`-slice governs the
+### lowered form.** `poly.rs` → `src/normalize/arith.rs`; the phase owns the recursion, so
+### the oracle, the analyzer, and (post-α) shape identity all read one rewriting. Promoting
+### the rules required first *proving* they meet §8's master law — two did not, and both were
+### already live at value level: reordering moved a call past a diverging one, and like-term
+### combining erased a call outright. Both fixed by **anchoring** (an operand that can call or
+### write holds its position and never merges). A harness bug was fixed too: the two runs
+### shared an interner, so the normalized module re-executed the raw closures. Detail in
+### `DECISIONS.md` (2026-08-07); pinned as conformance `arithmetic_normal_form`.
+
+#### (original text, superseded)
 μ §8's master law requires the frozen rewrite set to preserve demands *"so shape-level
 analysis never forgets an obligation"* — which only signifies if analysis reads the
 normalized form. Today `poly`'s three rewrites (commutative reordering, constant folding,

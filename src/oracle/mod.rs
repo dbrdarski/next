@@ -31,11 +31,14 @@ mod eval;
 pub mod harness;
 mod mtch;
 mod mu;
-mod poly;
 #[cfg(test)]
 mod tests;
 
 pub use equal::values_equal;
+/// The normalization harness compares outcomes **across interners** (see
+/// `normalize::tests`), so it needs the value renderer rather than pointers.
+#[cfg(test)]
+pub(crate) use eval::render_value;
 pub use eval::{
     BoundedOutcome, BoundedRun, eval_expr, eval_expr_bounded, eval_prim, run_program_bounded,
     run_program_commits, run_program_value,
@@ -148,7 +151,7 @@ pub struct Oracle<'a> {
     store: Store,
     pending: Option<HashMap<SlotId, ValueRef>>,
     fuel: Option<u64>,
-    out_of_fuel: bool,
+    pub(crate) out_of_fuel: bool,
     call_depth: u32,
     max_call_depth: Option<u32>,
     pending_values: Vec<PendingValue>,

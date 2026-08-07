@@ -8,39 +8,68 @@ use crate::interner::Interner;
 use crate::lex::lex;
 use crate::oracle::{Oracle, TrapClass};
 use crate::parse::{parse_expression, parse_program};
-use crate::value::ValueRef;
 
-/// The evaluation outcome, comparable across the original and normalized forms
-/// (same interner ⇒ values are pointer-comparable; traps compare by class).
-type Observed = Result<ValueRef, TrapClass>;
+/// The evaluation outcome, compared **across interners**: the rendered value, or
+/// the trap class, or exhaustion.
+///
+/// Rendering rather than pointer-comparing is the whole point. The two runs must
+/// not share an interner: a lambda the phase rewrote canonicalizes to the same
+/// shape as the one it came from, so a shared interner hands the second run the
+/// *first* run's closure and it re-executes the original body. The harness would
+/// then be comparing a run against itself, and every body-level rewrite — sound
+/// or not — would pass.
+#[derive(PartialEq, Eq, Debug)]
+enum Observed {
+    Value(String),
+    Trap(TrapClass),
+    Exhausted,
+}
 
-fn run(module: &Module, interner: &mut Interner) -> Observed {
-    Oracle::new(interner)
-        .run_module(module)
-        .map_err(|t| t.class)
+/// Lower `src`, optionally normalize, and run — each call in its own interner.
+fn observe(src: &str, normalized: bool, fuel: Option<u64>) -> Observed {
+    let mut interner = Interner::new();
+    let sprogram = parse_program(lex(src).expect("lex")).expect("parse");
+    let module = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .expect("desugar");
+    let module = if normalized {
+        normalize_module(&module, &mut interner)
+    } else {
+        module
+    };
+
+    let env = crate::oracle::harness::prelude_env(&mut interner);
+    let mut oracle = match fuel {
+        Some(f) => Oracle::new_fueled(&mut interner, f),
+        None => Oracle::new(&mut interner),
+    };
+    let result = oracle.run_module_in(&module, &env);
+    if oracle.out_of_fuel {
+        return Observed::Exhausted;
+    }
+    match result {
+        Ok(value) => Observed::Value(crate::oracle::render_value(&value, false)),
+        Err(trap) => Observed::Trap(trap.class),
+    }
 }
 
 /// Desugar a program, evaluate both it and its normalization, and confirm the
 /// two outcomes agree (`eval ∘ normalize = eval`) — then confirm `normalize` is
 /// idempotent on the kernel form.
 fn assert_normalization_sound(src: &str) {
+    assert_eq!(
+        observe(src, false, None),
+        observe(src, true, None),
+        "normalization changed evaluation for:\n{src}"
+    );
+
+    // idempotence: normalize(normalize(m)) == normalize(m)
     let mut interner = Interner::new();
     let sprogram = parse_program(lex(src).expect("lex")).expect("parse");
     let module = Desugarer::new(&mut interner)
         .program(&sprogram)
         .expect("desugar");
-
     let normalized = normalize_module(&module, &mut interner);
-
-    // eval ∘ normalize = eval
-    let original = run(&module, &mut interner);
-    let after = run(&normalized, &mut interner);
-    assert_eq!(
-        original, after,
-        "normalization changed evaluation for:\n{src}"
-    );
-
-    // idempotence: normalize(normalize(m)) == normalize(m)
     let twice = normalize_module(&normalized, &mut interner);
     assert_eq!(
         twice, normalized,
@@ -79,12 +108,57 @@ const CORPUS: &[&str] = &[
     "greet = (n) => `hi ${n}`\ngreet(\"there\")",
     // mutation
     "@state count = 0\n@mutate inc = () => { count := count + 1 }\ninc()\ninc()\ncount",
+    // the arithmetic slice (A12) — chains the rewrite actually rearranges
+    "f = (x, y) => 1 + x - y + 2 * x + 5\nf(3, 2)",
+    "g = (x) => -x + x + 3 * x - 1\ng(4)",
+    "h = (a, b) => (a - b) * (2 * 3)\nh(9, 4)",
+    "k = (x) => x * 2 + x * 3 - x\nk(7)",
+    "1 / 3 * 3 - 1",
+    // and chains whose operands are anchored, where it must *not* rearrange
+    "p = () => 2\nq = () => 5\nr = () => p() - q() + p()\nr()",
+    "s = (n) => n <= 0 ? 0 : s(n - 1) + n\ns(6)",
+    // the string rail must stay out of it entirely
+    "a = \"x\"\nb = \"y\"\na ++ b ++ a",
 ];
+
+/// Programs whose *divergence* is the observable: each must exhaust or complete
+/// identically before and after normalization, at every budget. §8 names this
+/// method — "divergence included — fuel-differential testing in the harness" —
+/// because an evaluation-order rewrite is invisible to any test that only ever
+/// runs to completion.
+const DIVERGENCE_CORPUS: &[&str] = &[
+    // zero-annihilation must not fire: the loop still runs.
+    "loop = (x) => loop(x)\nz = (x) => 0 * loop(x)\nz(1)",
+    // reordering must not swap a diverging operand past a trapping one.
+    "spin = () => spin()\nbad = () => \"a\" * 2\nk = (p, q) => q() + p()\nk(spin, bad)",
+    "spin = () => spin()\nbad = () => \"a\" * 2\nh = (p, q) => p() + q()\nh(spin, bad)",
+    // combining must not erase a call: two calls stay two calls.
+    "work = (n) => n == 0 ? 0 : work(n - 1)\nu = () => work(300)\nc = (f) => f() + f()\nc(u)",
+    // a terminating control, so the budgets below are not all exhaustion.
+    "work = (n) => n == 0 ? 0 : work(n - 1)\nwork(50) + work(50)",
+];
+
+/// The budgets to sweep. Small enough that the tail ones straddle the boundary
+/// where a doubled call stops fitting — which is the whole point.
+const FUEL_BUDGETS: &[u64] = &[50, 200, 800, 3_000, 6_000];
 
 #[test]
 fn normalization_preserves_evaluation_over_corpus() {
     for src in CORPUS {
         assert_normalization_sound(src);
+    }
+}
+
+#[test]
+fn normalization_preserves_divergence_at_every_budget() {
+    for src in DIVERGENCE_CORPUS {
+        for &fuel in FUEL_BUDGETS {
+            assert_eq!(
+                observe(src, false, Some(fuel)),
+                observe(src, true, Some(fuel)),
+                "normalization changed the outcome at fuel {fuel} for:\n{src}"
+            );
+        }
     }
 }
 
@@ -177,10 +251,68 @@ fn fold_segments_merges_adjacent() {
 
 #[test]
 fn normalize_is_identity_when_no_rule_applies() {
-    // A program with no templates normalizes to a structurally-equal kernel form.
+    // No template, no arithmetic ⇒ a structurally-equal kernel form.
     let mut interner = Interner::new();
-    let sexpr = parse_expression(lex("(n) => n * 2 + 1").unwrap()).unwrap();
+    let sexpr = parse_expression(lex("(n) => [n, n.field, g(n)]").unwrap()).unwrap();
     let kernel = Desugarer::new(&mut interner).expr(&sexpr).unwrap();
     let normalized = normalize_expr(&kernel, &mut interner);
     assert_eq!(kernel, normalized);
+}
+
+// ── Per-rule checks of the arithmetic slice (μ §8) ───────────────────────────
+
+/// Do two spellings share a normal form? One interner, so the constants the
+/// rewrite mints are pointer-comparable.
+fn same_normal_form(a: &str, b: &str) -> bool {
+    let mut interner = Interner::new();
+    let mut norm = |src: &str| {
+        let sexpr = parse_expression(lex(src).unwrap()).unwrap();
+        let kernel = Desugarer::new(&mut interner).expr(&sexpr).unwrap();
+        normalize_expr(&kernel, &mut interner)
+    };
+    norm(a) == norm(b)
+}
+
+#[test]
+fn the_arithmetic_slice_governs_the_lowered_form() {
+    // The three permitted rewrites, now visible to the oracle and the analyzer.
+    assert!(same_normal_form("(a, b) => a + b", "(a, b) => b + a")); // reordering
+    assert!(same_normal_form("(a) => a + 1 + 2", "(a) => a + 3")); // constant folding
+    assert!(same_normal_form("(x) => x + x", "(x) => 2 * x")); // H-05
+    assert!(same_normal_form(
+        "(x, y) => 2 * x + 3 * y",
+        "(x, y) => 3 * y + 2 * x"
+    ));
+    // `-x` normalizes to `(-1) * x`, so the two negation spellings agree.
+    assert!(same_normal_form("(x, y) => -x + y", "(x, y) => y - x"));
+}
+
+#[test]
+fn the_permanent_exclusions_do_not_fire() {
+    // MU-10, read at the phase: each pair must stay *distinct*.
+    assert!(!same_normal_form("(x) => x + 0", "(x) => x")); // identity elimination
+    assert!(!same_normal_form("(f, x) => 0 * f(x)", "(f, x) => 0")); // zero-annihilation
+    assert!(!same_normal_form("(x) => x - x", "(x) => 0")); // cancellation
+    // …but the cancelled chain still reorders, so its spellings agree.
+    assert!(same_normal_form("(x) => -x + x", "(x) => x - x"));
+}
+
+#[test]
+fn a_call_is_anchored_it_never_moves_and_never_merges() {
+    // Reordering two calls would swap which one diverges first; combining them
+    // would erase one outright. Both are refused — §8's master law.
+    assert!(!same_normal_form(
+        "(p, q) => p() + q()",
+        "(p, q) => q() + p()"
+    ));
+    assert!(!same_normal_form("(g) => g() + g()", "(g) => 2 * g()"));
+    assert!(!same_normal_form(
+        "(p, q) => p() * q()",
+        "(p, q) => q() * p()"
+    ));
+    // A lambda is not entered, so a call in its *body* anchors nothing.
+    assert!(same_normal_form(
+        "(a, b) => (() => a()) + b",
+        "(a, b) => b + (() => a())"
+    ));
 }

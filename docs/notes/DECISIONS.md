@@ -6479,3 +6479,101 @@ edited. The author's ruling supersedes them in effect.
 
 **Verification:** 468 lib passed / 1 ignored; 202 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — A12 landed: the arithmetic slice governs the lowered form — and two
+## §8 master-law violations it uncovered
+
+**The ask [user, 2026-08-07]: proceed with A12.** μ §8 requires the frozen rewrite set to
+preserve demands *"so shape-level analysis never forgets an obligation"*, which signifies
+only if analysis reads the normalized form. Before this change the three arithmetic rewrites
+ran **only** in `canon.rs`, on function shapes, for identity. They now run in the
+normalization phase, inside `lower_program` — so one rewriting is what the oracle evaluates,
+what the analyzer contracts over, and (re-run after α-conversion, since renaming rewrites the
+very `Ref`s the ordering keys are built from) what decides shape identity. `poly.rs` moved to
+`src/normalize/arith.rs` and shed its own recursion: the phase owns the walk and hands each
+node down already normalized in its children.
+
+### The two defects found on the way in
+
+Checking whether the rewrites *satisfy* the master law before promoting them found that two
+did not — and both were already live at value level, because a rewritten body and its source
+intern to one closure and one body then runs for both.
+
+**D1 — reordering moved a call.** Operands evaluate strictly left to right, so swapping two
+of them swaps which one diverges first. Witness:
+
+```
+spin = () => spin()
+bad  = () => "a" * 2
+k = (p, q) => q() + p()
+k(spin, bad)                  → traps (OperationSafety)
+
+… but with  h = (p, q) => p() + q()  written above it
+k(spin, bad)                  → diverges
+```
+
+`h == k` was `true`; defining `h` changed what `k` did. The master law names *completion vs
+divergence* outright.
+
+**D2 — like-term combining erased a call.** `(g) => g() + g()` interned equal to
+`(g) => 2 * g()`, so one of the two calls vanished. §8 excludes this by name — *"any rewrite
+erasing a call or potentially-diverging operand."* Witness is fuel-differential, §8's own
+prescribed method: with `u = () => work(300)`, `c = (f) => f() + f()` then `c(u)` **diverged**
+at 4000 steps alone but **completed** with `a = (f) => 2 * f()` written above it.
+
+### The fix: anchoring
+
+An operand that can **call** (`Apply`) or **write** (`Write`) is **anchored** — it holds its
+position relative to the other anchored operands, and it is never merged into a coefficient.
+Only call-free operands reorder and combine, which is exactly the H-05 commitment's own
+scope (`x + x → 2 * x`, over *variable occurrences*). A `Lambda` is not entered: making a
+closure runs no body, so a call inside one anchors nothing.
+
+Everything the slice is supposed to identify survives: `a + b == b + a`, `x + x == 2 * x`,
+`2*x + 3*y == 3*y + 2*x`, `-x + x == x - x`, and MU-10's trio still refuses to fire.
+
+**Anchoring deliberately does not cover plain trapping** — two call-free operands may both be
+ill-typed, and reordering can change which trap class is reported, but only on inputs the
+program already rejects. The master law lists four things to preserve (value, completion vs
+divergence, demands, accepted domain); which trap fires among already-rejected inputs is not
+among them. **`// [ask-author]`: that reading is mine.** It is what keeps
+`2*x + 3*y == 3*y + 2*x`; the stricter reading would cost that equality.
+
+### A bug in the harness itself
+
+The property harness ran both the raw and the normalized module **through one interner**. A
+lambda the phase rewrote canonicalizes to the same shape as its source, so the second run got
+the *first* run's closure back and re-executed the original body — the harness was comparing a
+run against itself, and every body-level rewrite passed by construction. The two runs now use
+separate interners and compare rendered values, trap classes, or exhaustion.
+
+Confirmed by mutation: disabling anchoring makes
+`normalization_preserves_divergence_at_every_budget` fail with `Trap(OperationSafety)` vs
+`Exhausted`. Under the old shared-interner harness the same mutation passed silently.
+
+### Also fixed: a sign bug the new recursion order exposed
+
+The phase normalizes children first, so `-x` reaches its parent already rewritten to
+`(-1)·x`. The cancellation fallback read signs only from the chain's own `+`/`-`, so
+`-x + x` and `x - x` stopped agreeing. It now reads the sign from the coefficient as well.
+
+### Consequences recorded, not smoothed over
+
+- **Diagnostics quote normalized operand order.** `boom = 1 + "x"` now reports its operand
+  witness as `["x", 1]`, because literal constants fold to the tail of the chain and the
+  analyzer reads the form it is given. `// [ask-author]` in
+  `analyzer/program.rs`. Pinned by `an_unsafe_binding_rhs_is_checked_without_being_evaluated`.
+- **A false negative in function equality closed.** `() => a + b` and `() => b + a` now
+  compare **equal**. They did not before: capture slots are numbered in first-occurrence
+  order, so the pre-A12 slot vector recorded the source operand order. Reordering now
+  precedes slot assignment. This is the CLAUDE.md caveat ("spelling-variant duplicates
+  compare unequal until the canonicalizer lands") retiring for this family.
+
+**Harness additions.** Nine arithmetic rows in the evaluation corpus; a new
+`DIVERGENCE_CORPUS` swept across five fuel budgets (§8: *"divergence included — fuel-
+differential testing in the harness"*); per-rule phase tests for the permitted slice, the
+permanent exclusions, and anchoring; conformance `arithmetic_normal_form` (AN-01…04) carrying
+the D1 and D2 witnesses at value level.
+
+**Verification:** 472 lib passed / 1 ignored; 206 conformance passed / 3 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

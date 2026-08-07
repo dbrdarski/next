@@ -494,6 +494,21 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**A12 landed (2026-08-07) [author ruling] — the arithmetic slice governs the lowered
+form, and two §8 master-law violations closed with it.** μ §8's three rewrites moved from
+`canon.rs` (shape identity only) into the normalization phase inside `lower_program`, so the
+oracle, the analyzer, and — re-run after α-conversion — shape identity all read one
+rewriting; `poly.rs` became `src/normalize/arith.rs` and shed its own recursion. Checking the
+rules against the master law *before* promoting them found two that failed it, both already
+live at value level: reordering moved a call past a diverging one (`k(spin, bad)` trapped
+alone, diverged with an unrelated `h` above it), and like-term combining erased a call
+(`(g) => g() + g()` interned equal to `(g) => 2 * g()`). Fixed by **anchoring** — an operand
+that can call or write holds its position and never merges. The property harness was itself
+unsound (both runs shared an interner, so the normalized module re-executed the raw
+closures); it now uses separate interners, and a fuel-differential law sweeps five budgets, as
+§8 prescribes. Pinned as conformance `arithmetic_normal_form`. Detail in `DECISIONS.md`
+(2026-08-07).
+
 **`++` for String concatenation (2026-08-07) [author ruling] — closes a shipped
 unsoundness.** Wiring the normalization phase exposed it: μ §8's commutative reordering
 treats `+` as commutative, but `+` also concatenated, so `s + "y"` and `"y" + s`
@@ -722,8 +737,8 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **468 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **202 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --lib` | **472 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **206 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
