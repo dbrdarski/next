@@ -6577,3 +6577,78 @@ the D1 and D2 witnesses at value level.
 
 **Verification:** 472 lib passed / 1 ignored; 206 conformance passed / 3 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — Anchoring is an act-world rule; purity is per-expression [user rulings]
+
+Three author rulings, in sequence, that reversed most of this morning's anchoring work.
+
+**1. Principle 9 is stamped: unproven termination is an error [user, 2026-08-07 — overriding
+P-1].** The termination doc still reads "unproven grounding warns and compiles. Leaning:
+error," and is manifest-protected; the implementation already went past it —
+`analyzer/grounding.rs` emits `Severity::Error` with the message *"this recursive call is not
+proven to finish (Principle 9: unproven termination is an error, never a warning)."* Verified:
+`spin = () => spin()` and a Collatz-shaped recursion are both **rejected**; only the
+provably-descending one is accepted. **Discrepancy logged, doc not edited.**
+
+**2. Purity is a property of the expression, not of a module or an enclosing lambda [user].**
+`x = a + b` and `fn = () => {…}` are pure; `@effect`/`@mutate` declarations are not. Having no
+enclosing lambda is not missing information — it is the ordinary, pure case. My "the entry
+file's starting world" wrinkle was a non-problem built on a module-level classification that
+does not exist. Withdrawn.
+
+**3. The consequence: anchoring belongs only in act bodies.** An accepted program has **no
+bottoms** — Principle 9 rejects the hang, safety analysis rejects the trap — so in pure code
+nothing can observe which operand ran first. Reordering *and* combining are both free there.
+Only a `@mutate`/`@effect` body can fire something ordered.
+
+### What this reverses
+
+Both defects I recorded this morning were witnessed by **programs that do not compile**:
+
+- **D1** (`k(spin, bad)` traps or hangs by order) — `spin` is not proven to finish and `bad`
+  is refuted. Pinned as conformance `an_03_the_old_witnesses_are_rejected_programs`.
+- **D2** (`c(u)` completes or exhausts) — every function in it terminates; only *fuel*
+  differed, and fuel is explicitly non-semantic. Never a valid witness at all.
+
+So the pure-world restriction was costing real equalities for nothing. Restored:
+`f() + g() == g() + f()`, `g() + g() == 2 * g()`, `f() * g() == g() * f()`.
+
+### What landed
+
+`normalize` threads one bit — in-an-act-body — derived from each lambda's **own** `act_kind`
+(never the surrounding one: that is where an act body starts and where an ordinary arrow
+returns to pure). Module items are pure. `Norm::anchors` is `self.act && anchored_operand(e)`,
+so anchoring is inert in pure code and unchanged in act bodies.
+
+Verified: pure spellings now share a normal form; the same body text inside an `@effect`
+declaration does **not**; MU-10's trio still refuses to fire (zero-annihilation is
+world-independent — the coefficient is kept either way); effect order is preserved.
+
+### Harness scope, narrowed deliberately
+
+`eval ∘ normalize = eval` is claimed for programs the analyzer **accepts**. The two
+divergence-corpus rows that pitted a diverging operand against a trapping one are gone: their
+premise is overruled and both are non-compiling programs. The property that survives is
+checked directly and more sharply by a new `normalization_preserves_effect_order` — act-body
+programs whose emitted output must be identical before and after normalization, with a
+non-empty assertion so a row cannot pass by emitting nothing.
+
+**Residue, named not fixed:** the oracle still runs rejected programs — the whole §6 trap-class
+suite is such programs — and normalization may now reorder their operands. Narrow, since
+arithmetic operands all trap `OperationSafety` regardless of which one fired. Worth a check,
+not a redesign.
+
+**Also established (measured, contra my own framing):** a pure function does **not** read a
+snapshot. `peek = () => n` called from inside a mutator that has staged `n := 5` returns **5**,
+not 0 — it reads through to the live staged write. Anchoring is unaffected, because the
+invariant that carries pure bodies is not isolation from state but that **no write can occur
+during a pure expression's evaluation** (no `:=`, no act calls, at any depth, by
+jurisdiction). Every slot read in one pure body therefore sees the same state.
+
+**Left unruled [user]:** whether a pure function may be declared *nested inside* a mutator or
+effect body, and whether act declarations may nest. The phase does not need the answer — it
+reads `act_kind` off each lambda node, so it is correct either way, and vacuous if the nesting
+is later made illegal.
+
+**Verification:** 472 lib passed / 1 ignored; 206 conformance passed / 3 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

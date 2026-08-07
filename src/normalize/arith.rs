@@ -47,9 +47,10 @@ use crate::interner::Interner;
 use crate::rational::Rational;
 
 /// Apply the arithmetic rule to one node whose children are already normalized.
-/// Any other node is returned untouched.
-pub(super) fn rewrite(e: &Expr, interner: &mut Interner) -> Expr {
-    let mut n = Norm { interner };
+/// Any other node is returned untouched. `act` says whether this node sits in an
+/// act body, where operand position is observable.
+pub(super) fn rewrite(e: &Expr, interner: &mut Interner, act: bool) -> Expr {
+    let mut n = Norm { interner, act };
     match e {
         Expr::PrimOp {
             op: PrimOp::Add | PrimOp::Sub,
@@ -69,6 +70,8 @@ pub(super) fn rewrite(e: &Expr, interner: &mut Interner) -> Expr {
 
 struct Norm<'a> {
     interner: &'a mut Interner,
+    /// True inside a `@mutate`/`@effect` body. Anchoring applies only there.
+    act: bool,
 }
 
 impl Norm<'_> {
@@ -85,7 +88,7 @@ impl Norm<'_> {
         let mut constant = Rational::from(0);
         let mut had_constant = false;
         for (positive, term) in flat {
-            if anchored_operand(&term) {
+            if self.anchors(&term) {
                 anchored.push((positive, term));
                 continue;
             }
@@ -150,7 +153,7 @@ impl Norm<'_> {
                     coeff = coeff * v.as_number().unwrap().clone();
                     had_literal = true;
                 }
-                _ if anchored_operand(&f) => anchored.push(f),
+                _ if self.anchors(&f) => anchored.push(f),
                 _ => rest.push(f),
             }
         }
@@ -199,7 +202,7 @@ impl Norm<'_> {
                     constant = if positive { constant + n } else { constant - n };
                     had_constant = true;
                 }
-                _ if anchored_operand(&t) => anchored.push((positive, t)),
+                _ if self.anchors(&t) => anchored.push((positive, t)),
                 _ => {
                     let (mut coeff, base) = decompose(&t);
                     if !positive {
@@ -234,6 +237,13 @@ impl Norm<'_> {
             result = Some(signed(result, true, c));
         }
         result.unwrap_or_else(|| Expr::Const(self.interner.number(Rational::from(0))))
+    }
+
+    /// Does this operand hold its position? Only inside an act body — that is
+    /// the only place a `Write` or an act call can fire, and so the only place
+    /// operand order is observable at all.
+    fn anchors(&self, e: &Expr) -> bool {
+        self.act && anchored_operand(e)
     }
 
     /// A `coeff · base` term (coeff already known non-zero).

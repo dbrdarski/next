@@ -3429,42 +3429,53 @@ mod arithmetic_normal_form {
         );
     }
 
-    /// **Reordering may not move a call.** Operands run left to right, so
-    /// swapping two of them swaps which diverges first — the master law names
-    /// completion-vs-divergence outright.
+    /// **Purity decides, not the operator [user, 2026-08-07].** An accepted
+    /// program has no bottoms — Principle 9 rejects the hang, safety analysis
+    /// rejects the trap — so in pure code nothing can observe which operand ran
+    /// first, and the slice reorders and combines freely. A pure expression is
+    /// pure wherever it sits; only a `@mutate`/`@effect` body fires something
+    /// ordered.
     #[test]
-    fn an_02_a_call_holds_its_position() {
-        const PRELUDE: &str = "spin = () => spin()\nbad = () => \"a\" * 2\n";
-        let k = "k = (p, q) => q() + p()\nk(spin, bad)\n";
-        let h_above = "h = (p, q) => p() + q()\n";
-
+    fn an_02_pure_operands_reorder_and_combine() {
         assert_eq!(
             value("[((p, q) => p() + q()) == ((p, q) => q() + p())]"),
-            value("[false]")
+            value("[true]")
         );
-        // `k` calls `bad` first and traps — with or without `h` written above it.
-        assert_eq!(outcome(&format!("{PRELUDE}{k}"), 3000), "trapped");
-        assert_eq!(outcome(&format!("{PRELUDE}{h_above}{k}"), 3000), "trapped");
-    }
-
-    /// **Combining may not erase a call.** §8 excludes it by name; the witness is
-    /// fuel-differential, because two calls cost twice one.
-    #[test]
-    fn an_03_a_call_is_never_folded_into_a_coefficient() {
-        const PRELUDE: &str = "work = (n) => n == 0 ? 0 : work(n - 1)\nu = () => work(300)\n";
-        let c = "c = (f) => f() + f()\nc(u)\n";
-        let a_above = "a = (f) => 2 * f()\n";
-
         assert_eq!(
             value("[((g) => g() + g()) == ((g) => 2 * g())]"),
-            value("[false]")
+            value("[true]")
         );
-        // Two calls do not fit in 4000 steps and do fit in 8000 — either way the
-        // answer must not depend on whether `a` is written above `c`.
-        for (fuel, expected) in [(4000u64, "diverged"), (8000, "completed")] {
-            assert_eq!(outcome(&format!("{PRELUDE}{c}"), fuel), expected);
-            assert_eq!(outcome(&format!("{PRELUDE}{a_above}{c}"), fuel), expected);
-        }
+        assert_eq!(
+            value("[((p, q) => p() * q()) == ((p, q) => q() * p())]"),
+            value("[true]")
+        );
+    }
+
+    /// And the programs that once witnessed a difference do not compile, which
+    /// is *why* the pure world is free: `spin` is not proven to finish and `bad`
+    /// is refuted outright.
+    #[test]
+    fn an_03_the_old_witnesses_are_rejected_programs() {
+        let (v, _) = next::oracle::check_source(
+            "spin = () => spin()\n\
+             bad = () => \"a\" * 2\n\
+             k = (p, q) => q() + p()\n\
+             k(spin, bad)\n",
+        )
+        .expect("checks");
+        assert!(
+            !v.accepted(),
+            "the witness must not compile: {:?}",
+            v.findings
+        );
+
+        // Effect order, which *is* observable, is preserved.
+        let act = "@effect p = () => { println(\"P\") }\n\
+                   @effect q = () => { println(\"Q\") }\n\
+                   @effect e = () => { q()\n p() }\n\
+                   e()\n";
+        let (_, io) = next::oracle::run_source(act).expect("runs");
+        assert_eq!(io.output, vec!["Q".to_string(), "P".to_string()]);
     }
 
     /// MU-10's trio, read at the phase rather than at the shape helper.

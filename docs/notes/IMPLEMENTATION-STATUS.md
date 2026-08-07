@@ -494,6 +494,17 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Anchoring narrowed to act bodies (2026-08-07) [author rulings].** Principle 9 is stamped —
+unproven termination is an **error**, already implemented and verified, though the termination
+doc still reads "warns and compiles" and is manifest-protected (discrepancy logged). Purity is
+a property of the expression, not of a module or an enclosing lambda. Together those mean an
+accepted program has **no bottoms**, so in pure code nothing observes operand order:
+reordering and combining are both free, and `f() + g() == g() + f()` and `g() + g() == 2 * g()`
+are true again. Anchoring survives only inside `@mutate`/`@effect` bodies. Both defects
+recorded earlier the same day were witnessed by programs that **do not compile**; the harness
+law is now claimed for accepted programs, with effect order checked directly instead. Detail in
+`DECISIONS.md` (2026-08-07).
+
 **A12 landed (2026-08-07) [author ruling] — the arithmetic slice governs the lowered
 form, and two §8 master-law violations closed with it.** μ §8's three rewrites moved from
 `canon.rs` (shape identity only) into the normalization phase inside `lower_program`, so the

@@ -126,14 +126,19 @@ const CORPUS: &[&str] = &[
 /// method — "divergence included — fuel-differential testing in the harness" —
 /// because an evaluation-order rewrite is invisible to any test that only ever
 /// runs to completion.
+///
+/// **Scope [user, 2026-08-07].** The law is claimed for programs the analyzer
+/// *accepts*. Under Principle 9 an accepted program cannot hang, and safety
+/// analysis means it cannot trap, so in pure code there is no bottom left for
+/// operand order to distinguish — reordering there is unobservable and legal.
+/// Rows that pit a diverging operand against a trapping one therefore no longer
+/// belong: both are programs that do not compile. Effect order, which *is*
+/// observable, is checked directly by [`normalization_preserves_effect_order`].
 const DIVERGENCE_CORPUS: &[&str] = &[
-    // zero-annihilation must not fire: the loop still runs.
+    // zero-annihilation must not fire: the loop still runs. This one is
+    // world-independent — the coefficient is kept whether or not anchoring
+    // applies — so it holds in pure code too.
     "loop = (x) => loop(x)\nz = (x) => 0 * loop(x)\nz(1)",
-    // reordering must not swap a diverging operand past a trapping one.
-    "spin = () => spin()\nbad = () => \"a\" * 2\nk = (p, q) => q() + p()\nk(spin, bad)",
-    "spin = () => spin()\nbad = () => \"a\" * 2\nh = (p, q) => p() + q()\nh(spin, bad)",
-    // combining must not erase a call: two calls stay two calls.
-    "work = (n) => n == 0 ? 0 : work(n - 1)\nu = () => work(300)\nc = (f) => f() + f()\nc(u)",
     // a terminating control, so the budgets below are not all exhaustion.
     "work = (n) => n == 0 ? 0 : work(n - 1)\nwork(50) + work(50)",
 ];
@@ -146,6 +151,49 @@ const FUEL_BUDGETS: &[u64] = &[50, 200, 800, 3_000, 6_000];
 fn normalization_preserves_evaluation_over_corpus() {
     for src in CORPUS {
         assert_normalization_sound(src);
+    }
+}
+
+/// Act bodies are where order is observable, and the property is direct: the
+/// emitted output must be identical before and after normalization.
+#[test]
+fn normalization_preserves_effect_order() {
+    const ACT_CORPUS: &[&str] = &[
+        "@effect p = () => { println(\"P\") }\n\
+         @effect q = () => { println(\"Q\") }\n\
+         @effect e = () => { p()\n q() }\n\
+         e()\n",
+        "@effect p = () => { println(\"P\") }\n\
+         @effect q = () => { println(\"Q\") }\n\
+         @effect e = () => { q()\n p()\n q() }\n\
+         e()\n",
+        "@state n = 0\n\
+         @mutate bump = () => { n := n + 1 }\n\
+         @effect e = () => { bump()\n println(`${n}`)\n bump() }\n\
+         e()\n",
+    ];
+    for src in ACT_CORPUS {
+        let mut interner = Interner::new();
+        let sprogram = parse_program(lex(src).expect("lex")).expect("parse");
+        let raw = Desugarer::new(&mut interner)
+            .program(&sprogram)
+            .expect("desugar");
+        let normalized = normalize_module(&raw, &mut interner);
+
+        let mut run = |module: &Module| {
+            let io = std::rc::Rc::new(std::cell::RefCell::new(crate::oracle::HostIo::default()));
+            let env = crate::oracle::harness::prelude_env(&mut interner);
+            crate::oracle::harness::install_host_effects(&mut interner, &env, &io);
+            let _ = Oracle::new(&mut interner).run_module_in(module, &env);
+            io.borrow().output.clone()
+        };
+        let before = run(&raw);
+        let after = run(&normalized);
+        assert_eq!(
+            before, after,
+            "normalization changed effect order for:\n{src}"
+        );
+        assert!(!before.is_empty(), "the row emitted nothing: {src}");
     }
 }
 
@@ -295,24 +343,4 @@ fn the_permanent_exclusions_do_not_fire() {
     assert!(!same_normal_form("(x) => x - x", "(x) => 0")); // cancellation
     // …but the cancelled chain still reorders, so its spellings agree.
     assert!(same_normal_form("(x) => -x + x", "(x) => x - x"));
-}
-
-#[test]
-fn a_call_is_anchored_it_never_moves_and_never_merges() {
-    // Reordering two calls would swap which one diverges first; combining them
-    // would erase one outright. Both are refused — §8's master law.
-    assert!(!same_normal_form(
-        "(p, q) => p() + q()",
-        "(p, q) => q() + p()"
-    ));
-    assert!(!same_normal_form("(g) => g() + g()", "(g) => 2 * g()"));
-    assert!(!same_normal_form(
-        "(p, q) => p() * q()",
-        "(p, q) => q() * p()"
-    ));
-    // A lambda is not entered, so a call in its *body* anchors nothing.
-    assert!(same_normal_form(
-        "(a, b) => (() => a()) + b",
-        "(a, b) => b + (() => a())"
-    ));
 }
