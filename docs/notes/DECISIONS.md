@@ -6990,47 +6990,49 @@ was re-measured to say so: the row moved from a resolution gap to a safety gap.
 **Verification:** 473 lib passed / 1 ignored; 241 conformance passed / 11 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
 
-## 2026-08-07 — One compilation, one memo table: the analyzer leaked verdicts between programs
+## 2026-08-07 — A memo's key must determine its value: RT-09's key erased parameter spelling
 
-**Found while chasing the body-safety gap; unrelated to it, and worse.** Analyzing one program
-changed the verdict of the next in the same process:
+**The symptom.** Analyzing one program changed the verdict of the next in the same process:
 
 ```
-cd = (n) => n == 0 ? 0 : cd(n - 1)                                 ; r = cd(5)
-cd = (k) => k == 0 ? 0 : cd(k - 1) ; run = (n) => { cd(n) }        ; r = run(5)
+cd = (n) => n == 0 ? 0 : cd(n - 1)                            ; r = cd(5)
+cd = (k) => k == 0 ? 0 : cd(k - 1) ; run = (n) => { cd(n) }   ; r = run(5)
 ```
 
-The second **compiles alone** and **compiles on a fresh thread**. Run the first before it on
-the same thread and the second is **rejected**. Confirmed by construction: thread-locals are
-per-thread, so spawning a thread for the second run restored acceptance.
+The second **compiles alone** and **on a fresh thread**, and is **rejected** when the first ran
+before it on the same thread.
 
-**Cause.** `factcache::key` builds a `FactKey` from interned contract handles and the callee's
-layer-2 **shape**. Every whole-program analysis brings its **own interner**, but `CACHE` is
-thread-local and outlives it — so a key minted under interner A can equal a key minted under
-interner B while the values behind them are unrelated. The two `cd`s differ only in parameter
-spelling, so they share a canonical shape and collide.
+**My first fix was wrong in kind, and the author said so** — *"the cache should be memoization.
+What cache are you implementing here? Dirty time expiring cache?"* Clearing the memos at each
+compilation entry is expiry; it hides an incomplete key instead of closing it. If a hit can
+change an answer, the key does not determine the value. **Reverted in full.**
 
-**The code asserted the opposite.** The note on `clear()` read: *"Correctness does not depend on
-clearing: settled entries are facts of complete semantic keys."* That claim is false across
-compilations, and `clear()` was `#[allow(dead_code)]`, called only from test modules — so in
-ordinary use nothing was ever cleared.
+**The actual defect, measured.** Instrumentation ruled the fact cache out entirely — zero
+cross-compilation hits, no leaked `InProgress` markers, `DEPTH` zero. Clearing *only* the RT-09
+instance tables restored the verdict; clearing only the fact cache did nothing.
 
-**Fix.** `analyze_program_project` — the single entry every whole-program analysis passes
-through — now clears the per-compilation memos first: the fact cache, its layer-2 map, and both
-RT-09 instance-table caches. These are memos of one compilation, never cross-compilation facts,
-so clearing is the correctness boundary and can only ever cost a cache hit. The false note is
-replaced with the witness.
+`InstanceKey` is `(shape, captures, named)`, and `shape` is the **α-renamed** canonical form —
+so `(n) => … n …` and `(k) => … k …` key identically. But a cached `Row`'s `result` is an
+expression in the **original spelling**, and `instance_table` returns *this* closure's parameter
+beside those cached rows. The analyzer binds `k`, the rows reference `n`, nothing resolves, and
+a provable body reads as unproven.
 
-**Verified:** the pair is order-independent in both directions and idempotent within an order; a
-rejected program no longer poisons a later good one, nor the reverse. Pinned as conformance
-`analysis_is_isolated_per_program` (AI-01…03). The suite is green under `--test-threads=1` as
-well as the default, so no existing row depended on the leak.
+**The fix: complete the key.** `InstanceKey` gains the parameter names as spelled, for both the
+single- and multi-parameter tables. No clearing anywhere. `factcache::clear()` goes back to
+being test isolation and memory reclamation, and its note now states the discipline instead of
+asserting an outcome: *if clearing can change an answer, the key is incomplete.*
 
-**A caution about this session's measurements.** Several probes ran multiple `check_source`
-calls in one process, and at least one gave a wrong reading because of this — a case I first
-reported as rejected is accepted in isolation. Findings that were re-measured in a fresh
-process, and every conformance row, stand. Loose probe output from this session should not be
-trusted without re-running.
+Net **−31/+20 lines** — the fix is smaller than the workaround it replaced.
+
+**Verified:** the witness pair is order-independent both ways and idempotent; a rejected program
+does not poison a later good one, nor the reverse; the suite is green under `--test-threads=1`
+as well as the default. Pinned as conformance `analysis_is_isolated_per_program` (AI-01…03) —
+those rows stand unchanged, because they test the property rather than the mechanism.
+
+**A caution about this session's measurements.** Several probes ran multiple programs in one
+process, and at least one gave a wrong reading — a case first reported as rejected is accepted
+in isolation. Conformance rows and anything re-measured in a fresh process stand; loose probe
+output from earlier in the session should be re-run before it is trusted.
 
 **Verification:** 473 lib passed / 1 ignored; 244 conformance passed / 11 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

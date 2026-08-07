@@ -494,15 +494,16 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
-**Analysis is isolated per program (2026-08-07) — a correctness fix.** The analyzer's memos
-key on interned handles while each whole-program analysis brings its own interner, and the
-thread-local caches were never cleared in ordinary use (`clear()` was `#[allow(dead_code)]`,
-called only from tests). Measured: a program that compiles **alone** and **on a fresh thread**
-was **rejected** when another ran before it on the same thread — analyzing one program changed
-the verdict of the next. The code asserted the opposite in a comment. Fixed at
-`analyze_program_project`, the single entry: the fact cache, its layer-2 map, and both RT-09
-instance-table caches are cleared per compilation. Pinned as conformance
-`analysis_is_isolated_per_program`. Detail in `DECISIONS.md` (2026-08-07).
+**A memo's key must determine its value (2026-08-07) — a correctness fix.** Analyzing one
+program changed the verdict of the next: a program that compiles **alone** and **on a fresh
+thread** was **rejected** when another ran first. Cause, measured: RT-09's `InstanceKey` is
+built from the **α-renamed** shape, so `(n) => … n …` and `(k) => … k …` key identically —
+while a cached row's `result` is an expression in the *original* spelling, and the lookup hands
+back this closure's parameter beside those cached rows. The analyzer binds `k`, the rows ask for
+`n`, nothing resolves. Fixed by completing the key with the parameter names; **no cache clearing
+anywhere** — an earlier clear-at-entry fix was expiry rather than memoization and was reverted
+[user]. The fact cache was ruled out by instrumentation (zero cross-compilation hits). Pinned as
+conformance `analysis_is_isolated_per_program`. Detail in `DECISIONS.md` (2026-08-07).
 
 **Local functions resolve (2026-08-07) [author ruling].** A block's named lambda bindings are
 built as closure values *before* any initializer is analyzed, sharing one scope — the
