@@ -453,6 +453,22 @@ fn analyze_primop(
         inputs.push(r.contract);
     }
 
+    // **A consequence never speaks.** If analyzing the operands already produced an
+    // Error, this operation cannot run at all — the operand halts first — so it has
+    // no obligation to record and nothing to add. `f = d + e` fails *because* `d`
+    // did, and `(1 + "x") + (2 * "y")` fails because its operand did: the same
+    // descendant relation, once across a binding and once inside an expression. The
+    // statement level already suppressed the first; this suppresses the second.
+    // Returning `Bottom` carries the poison up, so the grandparent stays quiet too
+    // and a chain reports one finding per real site.
+    //
+    // **Only an Error suppresses.** A merely *Unproven* operand leaves this seat's
+    // Error as the thing that actually rejects the program (§5 late resolution) —
+    // suppressing there would let an unproven program compile.
+    if findings.iter().any(|f| f.severity == Severity::Error) {
+        return Analysis::produced_with_safety(Contract::Bottom, findings, safety_demands);
+    }
+
     // The rulebook judgment is made for every operation, including a closed one. The
     // oracle still supplies the exact folded value/trap below; the typed judgment is
     // retained separately so its witness/third voice survives program policy.

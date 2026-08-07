@@ -494,6 +494,17 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Consequence suppression (2026-08-07) [author ruling].** An operation whose operand already
+produced an Error now records nothing of its own and yields `Bottom` — it cannot run, so it has
+no obligation to report. This extends the descendant-suppression already working across
+bindings down into a single expression, removing the two "cannot prove `Add` safe" lines that
+followed every failing sub-expression. Siblings are untouched: independent failures all still
+report. Only an **Error** suppresses — an *Unproven* operand still earns the seat's
+unsuppressible Error, which is what rejects the program. Pinned as conformance
+`consequence_suppression` (CS-01…05). It also exposed an A12 cost, reported not fixed:
+normalization flattens `(1 + "x") + (2 * "y") + (3 * "z")` so the site `1 + "x"` no longer
+exists, and diagnostics lose it. Detail in `DECISIONS.md` (2026-08-07).
+
 **Rejected-program residue measured (2026-08-07).** With anchoring inert in pure code,
 normalization reorders operands of programs the analyzer rejects, and 44 of 84 constructed
 two-operand chains change **trap class** (`null.x + {a: 1}.b` → `NullReceiver` raw,
@@ -759,7 +770,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **206 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **211 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

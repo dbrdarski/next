@@ -6703,3 +6703,67 @@ little. **Not taken; left as the author's call. `// [ask-author]`.**
 
 **Verification:** 473 lib passed / 1 ignored; 206 conformance passed / 3 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — A consequence never speaks [user ruling]
+
+**The relation, as the author defined it.** If `d` errors, then `f = d + e` errors, and so
+does everything downstream — those are **descendants** and must not be reported. The actual
+sites (`1 + "x"`, `2 * "y"`, `3 * "z"`) are **siblings** and must all be reported. And the
+enclosing expression that combines failing sub-expressions "is a consequence of that," so it
+is a descendant too. **Ruled: do not show it [user, 2026-08-07].**
+
+That is not a new rule — it is the one already working across bindings, reaching one level
+down. `a = 1 + "x"; b = a + 1` already reported exactly one finding; `(1 + "x") + (2 * "y")`
+reported the child's error **plus two lines from the parent**, which is the same relation
+going unsuppressed inside an expression.
+
+**Landed** in `analyze_primop`: after the operand loop, if analyzing the operands produced any
+`Severity::Error`, the operation returns `Contract::Bottom` with the children's findings and
+demands, and records nothing of its own. It has no obligation to record because it cannot run
+— the operand halts first. Poison flows up, so grandparents stay quiet and a chain reports one
+finding per real site.
+
+**The precision that keeps it sound: only an *Error* suppresses.** A merely **Unproven**
+operand must still earn the seat's unsuppressible Error (§5 late resolution) — that Error is
+what rejects the program, and blanket suppression would let an unproven program compile.
+Pinned as `cs_04_unproven_still_rejects` against the Collatz-shaped case, whose rejection runs
+through exactly that path.
+
+**Measured before → after:**
+
+```
+d = (1 + "x") + (2 * "y")
+  before: Error expected a Number operand
+          Warning cannot prove `Add` safe for these operands      ← consequence
+          Error   cannot prove `Add` safe at this executable seat ← consequence
+  after:  Error expected a Number operand
+```
+
+Siblings are untouched — independent failures all still report (`null.x + {a: 1}.b` → 2,
+`null.x + {a: 1}.b + [1, 2][5]` → 3), the binding chain still reports its root once, and a
+clean program still compiles. Pinned as conformance `consequence_suppression` (CS-01…05).
+
+### A12 cost this exposed, reported not fixed
+
+I predicted the three-site chain would now report three roots. **It reports two, and the
+reason is A12**, not the suppression. Normalization flattens the chain before the analyzer
+sees it:
+
+```
+(1 + "x") + (2 * "y") + (3 * "z")   →   (("x" + 2*"y") + 3*"z") + 1
+```
+
+The node `1 + "x"` **no longer exists** — the literal `1` folded to the tail, leaving `"x"` as
+a bare operand of the flattened Add. Only the two `Mul` sites survive as operations that can
+trap on their own account, so only two are reported. The count is unchanged from before this
+change (it was two then as well, buried under the parent noise), but the cause is worth
+naming: **A12 dissolves source-level sites, and diagnostics lose them.** Same family as the
+already-logged "diagnostics quote normalized operand order," but sharper — this is a site
+disappearing, not an order changing.
+
+The real fix is source provenance on normalized nodes (the kernel AST carries no spans), or
+the analysis/evaluation split already offered under the residue entry. **Neither taken;
+`// [ask-author]`.**
+
+**Verification:** 473 lib passed / 1 ignored; 211 conformance passed / 3 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

@@ -3496,3 +3496,81 @@ mod arithmetic_normal_form {
         );
     }
 }
+
+/// **A consequence never speaks [user, 2026-08-07].** If `d` errors, then `f = d + e`
+/// errors too — and so does the enclosing `+` of a failing sub-expression. Same
+/// descendant relation, once across a binding and once inside one expression. The
+/// statement level already suppressed the first; these rows pin the second, and pin
+/// that suppression does not reach *siblings* (independent failures still all report)
+/// or *Unproven* operands (whose seat Error is what rejects the program).
+mod consequence_suppression {
+    use next::analyzer::Severity;
+
+    fn report(src: &str) -> Vec<String> {
+        let (v, _) = next::oracle::check_source(src).expect("checks");
+        v.findings
+            .iter()
+            .map(|f| format!("{:?}/{:?}", f.severity, f.class))
+            .collect()
+    }
+
+    fn errors(src: &str) -> usize {
+        let (v, _) = next::oracle::check_source(src).expect("checks");
+        v.findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
+            .count()
+    }
+
+    /// The enclosing operation adds nothing once an operand has already failed.
+    #[test]
+    fn cs_01_the_enclosing_operation_goes_quiet() {
+        assert_eq!(
+            report("d = (1 + \"x\") + (2 * \"y\")\n"),
+            vec!["Error/OperationSafety"],
+            "the parent's two 'cannot prove Add safe' lines are consequences"
+        );
+    }
+
+    /// Independent failures are **not** consequences — every one still reports.
+    #[test]
+    fn cs_02_siblings_all_report() {
+        assert_eq!(errors("d = null.x + {a: 1}.b\n"), 2);
+        assert_eq!(errors("d = null.x + [1, 2][5]\n"), 2);
+        assert_eq!(errors("d = null.x + {a: 1}.b + [1, 2][5]\n"), 3);
+    }
+
+    /// Across a binding, unchanged: the chain reports its root once.
+    #[test]
+    fn cs_03_a_chain_reports_its_root_once() {
+        assert_eq!(
+            errors("a = 1 + \"x\"\nb = a + 1\nc = b + 1\ne = c + 1\n"),
+            1
+        );
+    }
+
+    /// **Only an Error suppresses.** An *Unproven* operand still earns the seat's
+    /// unsuppressible Error — suppressing there would let the program compile.
+    #[test]
+    fn cs_04_unproven_still_rejects() {
+        let src = "c = (n) => n == 1 ? 1 : (n % 2 == 0 ? c(n / 2) : c(3 * n + 1))\nc(7)\n";
+        let (v, _) = next::oracle::check_source(src).expect("checks");
+        assert!(!v.accepted(), "an unproven program must not compile");
+        assert!(
+            v.findings
+                .iter()
+                .any(|f| f.severity == Severity::Error
+                    && f.message.contains("at this executable seat")),
+            "the seat Error is what rejects it: {:?}",
+            v.findings
+        );
+    }
+
+    /// And a clean program is still accepted — suppression rejects nothing new.
+    #[test]
+    fn cs_05_a_clean_program_still_compiles() {
+        let (v, _) = next::oracle::check_source("d = (n) => n == 0 ? 0 : d(n - 1)\nx = d(5) + 1\n")
+            .expect("checks");
+        assert!(v.accepted(), "{:?}", v.findings);
+    }
+}
