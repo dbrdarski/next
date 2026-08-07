@@ -6989,3 +6989,48 @@ was re-measured to say so: the row moved from a resolution gap to a safety gap.
 
 **Verification:** 473 lib passed / 1 ignored; 241 conformance passed / 11 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — One compilation, one memo table: the analyzer leaked verdicts between programs
+
+**Found while chasing the body-safety gap; unrelated to it, and worse.** Analyzing one program
+changed the verdict of the next in the same process:
+
+```
+cd = (n) => n == 0 ? 0 : cd(n - 1)                                 ; r = cd(5)
+cd = (k) => k == 0 ? 0 : cd(k - 1) ; run = (n) => { cd(n) }        ; r = run(5)
+```
+
+The second **compiles alone** and **compiles on a fresh thread**. Run the first before it on
+the same thread and the second is **rejected**. Confirmed by construction: thread-locals are
+per-thread, so spawning a thread for the second run restored acceptance.
+
+**Cause.** `factcache::key` builds a `FactKey` from interned contract handles and the callee's
+layer-2 **shape**. Every whole-program analysis brings its **own interner**, but `CACHE` is
+thread-local and outlives it — so a key minted under interner A can equal a key minted under
+interner B while the values behind them are unrelated. The two `cd`s differ only in parameter
+spelling, so they share a canonical shape and collide.
+
+**The code asserted the opposite.** The note on `clear()` read: *"Correctness does not depend on
+clearing: settled entries are facts of complete semantic keys."* That claim is false across
+compilations, and `clear()` was `#[allow(dead_code)]`, called only from test modules — so in
+ordinary use nothing was ever cleared.
+
+**Fix.** `analyze_program_project` — the single entry every whole-program analysis passes
+through — now clears the per-compilation memos first: the fact cache, its layer-2 map, and both
+RT-09 instance-table caches. These are memos of one compilation, never cross-compilation facts,
+so clearing is the correctness boundary and can only ever cost a cache hit. The false note is
+replaced with the witness.
+
+**Verified:** the pair is order-independent in both directions and idempotent within an order; a
+rejected program no longer poisons a later good one, nor the reverse. Pinned as conformance
+`analysis_is_isolated_per_program` (AI-01…03). The suite is green under `--test-threads=1` as
+well as the default, so no existing row depended on the leak.
+
+**A caution about this session's measurements.** Several probes ran multiple `check_source`
+calls in one process, and at least one gave a wrong reading because of this — a case I first
+reported as rejected is accepted in isolation. Findings that were re-measured in a fresh
+process, and every conformance row, stand. Loose probe output from this session should not be
+trusted without re-running.
+
+**Verification:** 473 lib passed / 1 ignored; 244 conformance passed / 11 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

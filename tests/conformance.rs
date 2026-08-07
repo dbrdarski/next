@@ -4148,3 +4148,55 @@ mod local_functions_resolve {
         assert!(v.accepted(), "{:?}", v.findings);
     }
 }
+
+/// **One compilation, one memo table [measured 2026-08-07].** The analyzer's memos key on
+/// interned handles, and every whole-program analysis brings its own interner — so an entry
+/// left by a previous compilation can be *hit* by a key that means something else. Before the
+/// clear, analyzing one program changed the verdict of the next: the second program below
+/// compiled alone and on a fresh thread, and was **rejected** when the first ran first on the
+/// same thread. The code asserted the opposite in a comment — "correctness does not depend on
+/// clearing" — which is why this row exists.
+mod analysis_is_isolated_per_program {
+    fn accepted(src: &str) -> bool {
+        next::oracle::check_source(src)
+            .expect("checks")
+            .0
+            .accepted()
+    }
+
+    /// The witness pair: same function name, same body shape, different parameter spelling,
+    /// so the two share a canonical shape and collide in a shape-derived key.
+    const FIRST: &str = "cd = (n) => n == 0 ? 0 : cd(n - 1)\nr = cd(5)\n";
+    const SECOND: &str = "cd = (k) => k == 0 ? 0 : cd(k - 1)\nrun = (n) => { cd(n) }\nr = run(5)\n";
+
+    #[test]
+    fn ai_01_a_verdict_does_not_depend_on_what_ran_before() {
+        assert!(accepted(FIRST));
+        assert!(
+            accepted(SECOND),
+            "the verdict changed after another program ran"
+        );
+        assert!(accepted(SECOND), "and again");
+        assert!(accepted(FIRST), "and the first is unchanged too");
+    }
+
+    /// Order-independence in both directions, and idempotence within one order.
+    #[test]
+    fn ai_02_either_order_gives_the_same_answers() {
+        assert!(accepted(SECOND));
+        assert!(accepted(FIRST));
+        assert!(accepted(SECOND));
+    }
+
+    /// A rejected program does not poison a later good one, nor vice versa.
+    #[test]
+    fn ai_03_a_rejection_does_not_leak_into_the_next_program() {
+        let diverging = "cd = (n) => cd(n)\nr = cd(5)\n";
+        assert!(!accepted(diverging));
+        assert!(
+            accepted(FIRST),
+            "a good program must still compile after a rejected one"
+        );
+        assert!(!accepted(diverging), "and the rejection must still hold");
+    }
+}

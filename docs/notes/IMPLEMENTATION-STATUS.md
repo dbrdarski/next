@@ -494,6 +494,16 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Analysis is isolated per program (2026-08-07) — a correctness fix.** The analyzer's memos
+key on interned handles while each whole-program analysis brings its own interner, and the
+thread-local caches were never cleared in ordinary use (`clear()` was `#[allow(dead_code)]`,
+called only from tests). Measured: a program that compiles **alone** and **on a fresh thread**
+was **rejected** when another ran before it on the same thread — analyzing one program changed
+the verdict of the next. The code asserted the opposite in a comment. Fixed at
+`analyze_program_project`, the single entry: the fact cache, its layer-2 map, and both RT-09
+instance-table caches are cleared per compilation. Pinned as conformance
+`analysis_is_isolated_per_program`. Detail in `DECISIONS.md` (2026-08-07).
+
 **Local functions resolve (2026-08-07) [author ruling].** A block's named lambda bindings are
 built as closure values *before* any initializer is analyzed, sharing one scope — the
 late-binding law the module pre-pass and the canonicalizer already applied. Before this, a
@@ -812,7 +822,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **241 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **244 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

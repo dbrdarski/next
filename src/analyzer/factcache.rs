@@ -360,12 +360,26 @@ pub(crate) fn record_settled(key: FactKey, verdict: BodySafety) {
     CACHE.with(|c| c.borrow_mut().insert(key, Some(verdict)));
 }
 
-/// Drop everything for test isolation or explicit memory reclamation. Correctness does not
-/// depend on clearing: settled entries are facts of complete semantic keys.
-#[allow(dead_code)]
+/// Drop everything memoized for one compilation.
+///
+/// **This is required for correctness, not an optimization** [measured 2026-08-07]. The
+/// earlier note here — "correctness does not depend on clearing: settled entries are facts
+/// of complete semantic keys" — is false across compilations. A key is built from interned
+/// contract handles, and each whole-program analysis has its **own interner**, so a key
+/// minted under one interner can equal a key minted under another while the values behind
+/// them are unrelated. Witness:
+///
+/// ```text
+/// cd = (n) => n == 0 ? 0 : cd(n - 1)            ; r = cd(5)
+/// cd = (k) => k == 0 ? 0 : cd(k - 1)            ; run = (n) => { cd(n) } ; r = run(5)
+/// ```
+///
+/// The second compiles **alone** and on a fresh thread, and is **rejected** when the first
+/// ran before it on the same thread. Analyzing one program changed the verdict of the next.
 pub(crate) fn clear() {
     CACHE.with(|c| c.borrow_mut().clear());
     DEPTH.with(|d| *d.borrow_mut() = 0);
+    LAYER2.with(|m| m.borrow_mut().clear());
 }
 
 #[cfg(test)]

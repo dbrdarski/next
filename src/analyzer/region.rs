@@ -168,6 +168,13 @@ thread_local! {
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// Drop both RT-09 instance-table caches. Their keys carry interned handles, so they are
+/// facts of **one compilation** only — see [`crate::analyzer::factcache::clear`].
+pub(crate) fn clear_instance_tables() {
+    INSTANCE_TABLES.with(|c| c.borrow_mut().clear());
+    INSTANCE_TABLES_MULTI.with(|c| c.borrow_mut().clear());
+}
+
 /// The instantiated **multi-parameter** table of a closure instance, through the
 /// RT-09 cache — flat plain parameters only (destructuring stays whole-body).
 pub(crate) fn instance_table_multi(
