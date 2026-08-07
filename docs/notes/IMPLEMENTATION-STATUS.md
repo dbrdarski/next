@@ -494,6 +494,18 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Phase GR started (2026-08-07) — 23 specimen rows, 15 green, 8 measured gaps.** Conformance
+`grounding_specimens`, one test per Grounding Specification §15 specimen, with the P-1 flip
+applied (every "unproven" row asserts rejection *and* that no refutation was minted). It was
+proposed to test grounding; **only one of the four gaps it found is in grounding.** GR-08
+oscillator is a grounding gap (cycle composition does not fire); GR-19 is a *safety* gap
+(grounding proves it, body safety rejects it); GR-26 is a *resolution* gap (a recursive
+function inside a block never reaches the prover); GR-13/16 revealed that **act-world
+recursion raises no termination demand and compiles** — `@mutate spin = () => { spin() }` is
+accepted. Principle 9 is enforced in the pure world, partially in the effect world, and not at
+all in the mutation world. The battery also caught a vacuous assertion in its own `gr_30`
+(`all()` over an empty vector). Detail in `DECISIONS.md` (2026-08-07).
+
 **Consequence suppression (2026-08-07) [author ruling].** An operation whose operand already
 produced an Error now records nothing of its own and yields `Bottom` — it cannot run, so it has
 no obligation to report. This extends the descendant-suppression already working across
@@ -770,7 +782,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **211 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **226 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

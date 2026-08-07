@@ -6767,3 +6767,81 @@ the analysis/evaluation split already offered under the residue entry. **Neither
 
 **Verification:** 473 lib passed / 1 ignored; 211 conformance passed / 3 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — Phase GR: the grounding specimens, and what running them found
+
+**Built** [user: "write the GR battery"]: conformance `grounding_specimens`, one test per
+Grounding Specification §15 specimen. 23 rows so far — **15 green, 8 ignored as measured
+gaps**, each ignore string naming the subsystem, the measured verdict, and whether it is a
+false rejection.
+
+Three shared predicates encode §15's vocabulary. `assert_proven` requires a non-empty,
+all-`Grounded` demand set *and* acceptance. `assert_unproven` requires rejection **and no
+`Refuted` verdict** — the specimens the design wrote precisely to forbid claiming a
+divergence proof it does not have (§15 #10, #17, #29). `assert_refuted_with` requires the
+witness §15 states.
+
+**The P-1 flip** is applied as the suite spec directs — "the flip rides the P-1 status, not
+edits to these cases." Every "unproven" row asserts rejection.
+
+### What it found — four gaps, in three different subsystems
+
+The battery was proposed to test grounding. Only **one** of the four gaps is in grounding.
+
+1. **GR-08 oscillator — grounding.** §15 expects proven by cycle composition; the
+   implementation returns `Unproven`. GR-07's per-cycle composed ProgressRange does not fire
+   for the two-function +2/−3 cycle. **False rejection.**
+2. **GR-19 sumUntil — safety, not grounding.** Grounding returns `Grounded`, exactly as §15
+   expects. The program is rejected anyway, by *"callee body safety cannot be proven at this
+   executable seat."* This is the documented multi-parameter/mutual body-safety gap, found
+   here by a grounding specimen. **False rejection.**
+3. **GR-26 fib via a nested `go` — resolution, not grounding.** `grounding_demands` is
+   **empty**; the rejection is *"callee not resolved to a known function."* A recursive
+   function declared inside a block never reaches the termination prover. §15 #26 is the
+   author's own walkthrough. **False rejection.**
+4. **GR-13 / GR-16 — act-world recursion is not adjudicated, and the programs COMPILE.**
+   `@effect loop = (m) => { loop(m) }` is **accepted** with an empty demand set. §15 expects
+   unproven, which under the stamp must reject.
+
+### The sharpest finding: a hole in Principle 9's coverage
+
+Probing (4) directly:
+
+```
+spin = () => spin()                             pure     → rejected  (Unproven)
+@effect spin = () => { spin() }                 effect   → rejected  (Unproven)
+@mutate spin = () => { spin() }                 mutator  → ACCEPTED, no demand raised
+@effect cd = (n) => { n == 0 ? 0 : cd(n - 1) }  effect   → no demand raised
+```
+
+Two distinct holes: **a mutator's recursion raises no termination demand at all**, and an
+**effect recursion carrying a base case** raises none either — while the same effect
+*without* a base case does. Principle 9 is enforced in the pure world and partially in the
+effect world; the mutation world is uncovered. `@mutate spin = () => { spin() }` compiles.
+
+### The battery caught a bug in itself
+
+`gr_30` first asserted `demands.iter().all(|g| g.verdict == Grounded)` and passed — because
+`all()` over an **empty** vector is `true`, and the vector was empty. The row was green while
+testing nothing. Fixed by requiring a non-empty demand set, at which point it failed honestly
+and became gap (4)'s second half. The shared `assert_proven` already carried that guard;
+the hand-written row did not.
+
+### Blocked rows, recorded not written
+
+`GR-03A` and `GR-22B` state **tuple** witnesses (`[3,7,2]`, `[7]`). `Refutation.witness` is a
+`Rational`, so a sequence witness cannot be represented at all — a structural gap, not a
+coverage one. Both specimens are also written with `++` over tuples, which is String-only
+here. Remaining unwritten: #4, #15, #18, #21, #27, #29 — the world-classifier and
+mixed-callee families.
+
+### Normative discrepancy found while writing them
+
+The compendium's **excluded-operator ledger lists `++`** ("`++`/`--` (`+:= 1` covers it)") —
+excluding C-style increment, but it is the same spelling adopted for concatenation
+[user, 2026-08-07]. Separately, the **grounding spec uses ` ++ ` five times for *tuple*
+concatenation** (`f(rest(l)) ++ f(l)`), which the String-only implementation cannot express.
+Both files are manifest-protected; logged alongside the `+`/`++` and P-1 discrepancies.
+
+**Verification:** 473 lib passed / 1 ignored; 226 conformance passed / 11 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

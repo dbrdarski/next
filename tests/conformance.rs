@@ -3574,3 +3574,327 @@ mod consequence_suppression {
         assert!(v.accepted(), "{:?}", v.findings);
     }
 }
+
+/// **Phase GR — the grounding specimens (Grounding Specification §15).** One test per
+/// specimen, IDs per the test-suite spec: `GR-01`–`GR-30`, with `GR-03A`–`GR-03D` for
+/// 3a–3d and `GR-22B` for 22b. Expected verdicts are §15's table verbatim.
+///
+/// **The P-1 flip.** The suite spec writes "unproven → GRAY under current law (the
+/// expectation flips to REJECT if P-1 stamps rejection; the flip rides the P-1 status,
+/// not edits to these cases)." P-1 **is** stamped [user, 2026-08-07], so every unproven
+/// row asserts rejection — and asserts it is reached *honestly*, with no `Refuted`
+/// verdict minted. That second half is the point: specimens 10, 17 and 29 exist only to
+/// assert the compiler does not claim a divergence proof it does not have.
+///
+/// Programs marked **[spec text]** are written in the specification itself. The rest are
+/// constructed from §15's prose description and are noted as such.
+mod grounding_specimens {
+    use next::analyzer::grounding::Verdict;
+    use next::oracle::check_source;
+
+    fn verdicts(src: &str) -> Vec<Verdict> {
+        let (v, _) = check_source(src).expect("parses and checks");
+        v.grounding_demands
+            .iter()
+            .map(|g| g.verdict.clone())
+            .collect()
+    }
+
+    fn accepted(src: &str) -> bool {
+        check_source(src).expect("parses and checks").0.accepted()
+    }
+
+    /// §15 "proven": grounding certifies, and the program compiles.
+    fn assert_proven(src: &str) {
+        let vs = verdicts(src);
+        assert!(
+            !vs.is_empty() && vs.iter().all(|v| *v == Verdict::Grounded),
+            "expected every recursion Grounded, got {vs:?} for:\n{src}"
+        );
+        assert!(accepted(src), "a grounded program must compile:\n{src}");
+    }
+
+    /// §15 "unproven": rejected under the stamp, and **no refutation minted**.
+    fn assert_unproven(src: &str) {
+        let vs = verdicts(src);
+        assert!(
+            !vs.iter().any(|v| matches!(v, Verdict::Refuted(_))),
+            "a failed candidate must never be minted as a refutation, got {vs:?} for:\n{src}"
+        );
+        assert!(
+            vs.contains(&Verdict::Unproven),
+            "expected an honest Unproven, got {vs:?} for:\n{src}"
+        );
+        assert!(
+            !accepted(src),
+            "unproven termination rejects under P-1:\n{src}"
+        );
+    }
+
+    /// §15 "refuted": a witness-bearing divergence proof, with the witness as stated.
+    fn assert_refuted_with(src: &str, witness: i64) {
+        let vs = verdicts(src);
+        let found: Vec<_> = vs
+            .iter()
+            .filter_map(|v| match v {
+                Verdict::Refuted(r) => Some(r.witness.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            found
+                .iter()
+                .any(|w| *w == next::rational::Rational::from(witness)),
+            "expected Refuted with witness {witness}, got {vs:?} for:\n{src}"
+        );
+        assert!(!accepted(src), "a refuted program must not compile:\n{src}");
+    }
+
+    // ── The specimens ────────────────────────────────────────────────────────
+
+    /// **GR-01 — Zeno.** [spec text, §3 GR-05(1)] Steps move forward every time but
+    /// halve, so no positive floor is exposed. This is the case that forced the rule to
+    /// read "at least a fixed amount" rather than "forward"; its proven twin is GR-19.
+    #[test]
+    fn gr_01_zeno_exposes_no_floor() {
+        assert_unproven("f = (x, s) => x >= 100 ? 0 : f(x + s, s / 2)\nr = f(0, 50)\n");
+    }
+
+    /// **GR-02 — factorial.** Constant drift −1 to a point base on the integer grid.
+    #[test]
+    fn gr_02_factorial_is_proven() {
+        assert_proven("factorial = (n) => n == 0 ? 1 : n * factorial(n - 1)\nr = factorial(5)\n");
+    }
+
+    /// **GR-05 — Ackermann.** Proven by a joint lexicographic certificate.
+    #[test]
+    fn gr_05_ackermann_is_proven() {
+        assert_proven(
+            "ack = (m, n) => m == 0 ? n + 1 : (n == 0 ? ack(m - 1, 1) : ack(m - 1, ack(m, n - 1)))\n\
+             r = ack(2, 2)\n",
+        );
+    }
+
+    /// **GR-06 — collatz.** No candidate source; basin derivation is deferred. Both
+    /// starts unproven — and neither may be refuted.
+    #[test]
+    fn gr_06_collatz_is_unproven_at_both_starts() {
+        let c = "c = (n) => n == 1 ? 1 : (n % 2 == 0 ? c(n / 2) : c(3 * n + 1))\n";
+        assert_unproven(&format!("{c}r = c(64)\n"));
+        assert_unproven(&format!("{c}r = c(27)\n"));
+    }
+
+    /// **GR-07 — McCarthy 91.** The negative battery's baseline.
+    #[test]
+    fn gr_07_mccarthy_91_is_proven() {
+        assert_proven("m91 = (n) => n > 100 ? n - 10 : m91(m91(n + 11))\nr = m91(50)\n");
+    }
+
+    /// **GR-08 — oscillator.** [spec text, §3 GR-07] One cycle, +2 then −3; the composed
+    /// progress is `Equals(1)`, so the round trip nets a fixed positive gain.
+    #[test]
+    #[ignore = "GAP (grounding, measured 2026-08-07): §15 #8 expects proven by cycle \
+composition; the implementation returns Unproven. GR-07's per-cycle composed ProgressRange \
+over the completed graph does not fire for this two-function +2/-3 cycle. Under stamped P-1 \
+this is a FALSE REJECTION — a terminating program that will not compile."]
+    fn gr_08_oscillator_proves_by_cycle_composition() {
+        assert_proven("a = (n) => n <= 0 ? 0 : b(n + 2)\nb = (n) => a(n - 3)\nr = a(10)\n");
+    }
+
+    /// **GR-09 — countDown, wide domain.** Well-founded with unbounded depth: the
+    /// certificate is never a bound on how deep the recursion goes.
+    #[test]
+    fn gr_09_countdown_proves_over_a_wide_domain() {
+        assert_proven("countDown = (n) => n == 0 ? 0 : countDown(n - 1)\nr = countDown(5)\n");
+    }
+
+    /// **GR-10 — structural minting.** [spec text, §4 GR-10(1)] `f([x])` builds a new
+    /// container whose element is the prior *state*, not a pooled atom, so the exact-chain
+    /// license fails by provenance. Unproven — and explicitly **no refutation minted**.
+    #[test]
+    fn gr_10_structural_minting_mints_no_refutation() {
+        assert_unproven("f = (x) => f([x])\nr = f(1)\n");
+    }
+
+    /// **GR-11 — 40↔60 alternation.** Every step improves toward *some* exit, never one
+    /// fixed exit, so the multi-base rule declines. Candidate failure is not refutation.
+    #[test]
+    fn gr_11_alternation_has_no_fixed_exit() {
+        assert_unproven(
+            "f = (n) => n == 40 ? 0 : (n == 60 ? 1 : (n < 50 ? f(n + 10) : f(n - 10)))\nr = f(45)\n",
+        );
+    }
+
+    /// **GR-12 — off-grid point base.** [spec text, §3 GR-05(2)] Constant drift −2 from a
+    /// written `1`: the orbit 1, −1, −3 … provably misses the point base 0. Refuted, and
+    /// the witness is the argument as written.
+    #[test]
+    fn gr_12_stepping_over_the_base_is_refuted() {
+        assert_refuted_with("f = (n) => n == 0 ? 0 : f(n - 2)\nr = f(1)\n", 1);
+    }
+
+    /// **GR-19 — sumUntil, variable drift.** GR-01's twin: the step varies, but a floor
+    /// of 1 *is* derivable from the call, so δ = 1 and the certificate closes.
+    #[test]
+    #[ignore = "GAP (safety, not grounding — measured 2026-08-07): grounding returns \
+Grounded, exactly as §15 #19 expects. The program is still rejected, by \
+`callee body safety cannot be proven at this executable seat`. This is the documented \
+multi-parameter/mutual body-safety gap, surfaced here by a grounding specimen. FALSE \
+REJECTION."]
+    fn gr_19_a_derived_floor_proves_a_variable_drift() {
+        assert_proven(
+            "sumUntil = (n, acc) => n <= 0 ? acc : sumUntil(n - 1, acc + n)\nr = sumUntil(5, 0)\n",
+        );
+    }
+
+    /// **GR-22 — `f(n − 1) + f(n)` at `f(1)`.** The shape that mandated multi-dependency
+    /// composition. Numeric exact walking is not admitted in v1, so honestly unproven —
+    /// following one call and not all is the named mistake.
+    #[test]
+    fn gr_22_multi_dependency_numeric_walking_is_unproven() {
+        assert_unproven("f = (n) => n == 0 ? 0 : f(n - 1) + f(n)\nr = f(1)\n");
+    }
+
+    /// **GR-24 — varying step `f(n − step, step + 1)`.** No fixed lattice for the point
+    /// base, and no admitted witness route: honestly unproven in both directions.
+    #[test]
+    fn gr_24_a_varying_step_is_honestly_unproven() {
+        assert_unproven("f = (n, step) => n <= 0 ? 0 : f(n - step, step + 1)\nr = f(10, 1)\n");
+    }
+
+    /// **GR-25 — two-sided stop `a == b`.** The measure route contributes no conclusion.
+    #[test]
+    fn gr_25_a_two_sided_stop_yields_no_conclusion() {
+        assert_unproven("f = (a, b) => a == b ? 0 : f(a + 1, b)\nr = f(0, 5)\n");
+    }
+
+    /// **GR-26 — Fibonacci through a nested function.** [spec text, §15 #26] The path
+    /// closes on `go` alone — `fib` is outside the cycle — and both call edges (drifts −1
+    /// and −2) check against the half-line base `k <= 1`, which lands structurally with no
+    /// grid needed.
+    #[test]
+    #[ignore = "GAP (resolution, not grounding — measured 2026-08-07): grounding is never \
+asked. `grounding_demands` is EMPTY and the rejection is \
+`cannot prove this callee's body safe (callee not resolved to a known function)`. A \
+recursive function declared inside a block (`go` within `fib`) does not resolve, so the \
+termination prover never sees it. §15 #26 is the author's own walkthrough and expects \
+proven. FALSE REJECTION."]
+    fn gr_26_a_nested_recursive_function_is_proven() {
+        assert_proven(
+            "fib = (n) => { go = (k) => k <= 1 ? k : go(k - 1) + go(k - 2)\n go(n) }\nr = fib(6)\n",
+        );
+    }
+
+    /// **GR-28 — composed range straddling zero.** [spec text, §3 GR-07] Edge progresses
+    /// `Equals(2)` and `−s`. Over `s ⊑ GE(1)` the composed range straddles zero and proves
+    /// nothing; pinned at the wide domain, where the answer is no conclusion.
+    #[test]
+    fn gr_28_a_straddling_cycle_proves_nothing() {
+        assert_unproven(
+            "a = (n, s) => n <= 0 ? 0 : b(n - 2, s)\nb = (n, s) => a(n + s, s)\nr = a(10, 3)\n",
+        );
+    }
+
+    /// **GR-03B — literal without 7.** A list peeled one element per step; §15 expects
+    /// proven, folding *after* grounding, in that order.
+    #[test]
+    #[ignore = "GAP (measured 2026-08-07): returns Unproven. The exact-chain license \
+(§4 GR-09/10) does not fire for a written tuple argument peeled by slice. FALSE REJECTION."]
+    fn gr_03b_a_literal_without_the_merge_value_is_proven() {
+        assert_proven("f = (l) => l == [] ? 0 : f(l[1...])\nr = f([3, 2])\n");
+    }
+
+    /// **GR-13 — carried world value.** `loop(msg)` carries a value obtained from the
+    /// world rather than re-reading it, so the region seed is stale: not world-decided,
+    /// and grounding is unproven.
+    #[test]
+    #[ignore = "GAP (measured 2026-08-07): the program is ACCEPTED with an empty \
+`grounding_demands`. §15 #13 expects grounding unproven, which under stamped P-1 must \
+reject. A non-terminating program compiles."]
+    fn gr_13_a_carried_world_value_is_not_world_decided() {
+        assert_unproven(
+            "@effect loop = (m) => { loop(m) }\n@effect main = () => { loop(1) }\nmain()\n",
+        );
+    }
+
+    /// **GR-16 — decorative branch.** `bit ? loop() : loop()` seeds nothing: both arms
+    /// recurse, so the universal closure is empty and no world decision is available.
+    #[test]
+    #[ignore = "GAP (measured 2026-08-07): ACCEPTED with empty `grounding_demands`; \
+§15 #16 expects unproven, which rejects under P-1."]
+    fn gr_16_a_decorative_branch_seeds_nothing() {
+        assert_unproven(
+            "@effect loop = (b) => { b ? loop(b) : loop(b) }\n\
+             @effect main = () => { loop(true) }\nmain()\n",
+        );
+    }
+
+    /// **GR-17 — the pending-write counterexample.** [spec text, §4 GR-10(4)] A mutator
+    /// whose own staged write is what reaches the base. A stability-blind exact-chain walk
+    /// would mint a **false closed-orbit refutation of a terminating program** — the worst
+    /// verdict class. v1 excludes it from chain scope, so the answer is unproven.
+    #[test]
+    fn gr_17_a_pending_write_mints_no_false_refutation() {
+        let src = "@state n = 0\n\
+                   @mutate f = (xs) => { n := n + 1\n n == 10 ? 0 : f(xs) }\n\
+                   @effect main = () => { f(1) }\nmain()\n";
+        let (v, _) = check_source(src).expect("parses and checks");
+        assert!(
+            !v.grounding_demands
+                .iter()
+                .any(|g| matches!(g.verdict, Verdict::Refuted(_))),
+            "a terminating program must never be refuted: {:?}",
+            v.grounding_demands
+        );
+    }
+
+    /// **GR-20 — split at a letter.** A nested non-recursive helper derives the segment
+    /// length; §15 expects the segment facts to close by variable drift.
+    #[test]
+    #[ignore = "GAP (measured 2026-08-07): returns Unproven. GR-08's derived-segment read \
+does not fire here. FALSE REJECTION."]
+    fn gr_20_derived_segment_facts_close_by_variable_drift() {
+        assert_proven("f = (s) => s == \"\" ? 0 : f(s[1...])\nr = f(\"abc\")\n");
+    }
+
+    /// **GR-23 — a multi-cycle SCC with one non-decreasing cycle.** The candidate
+    /// contributes nothing; absent a §7 witness the answer is unproven, never refuted.
+    #[test]
+    fn gr_23_a_non_decreasing_cycle_yields_no_conclusion() {
+        assert_unproven(
+            "a = (n) => n <= 0 ? 0 : b(n - 1)\n\
+             b = (n) => n > 100 ? 0 : (n < 50 ? a(n - 1) : b(n))\nr = a(10)\n",
+        );
+    }
+
+    /// **GR-30 — effect-world countDown.** [spec text, §15 #30] Ordinary proven
+    /// completion; `WorldDecided` is **not** minted, so downstream stays unconditioned.
+    #[test]
+    #[ignore = "GAP (measured 2026-08-07): §15 #30 expects ordinary proven completion. \
+`grounding_demands` is EMPTY — an effect-world recursion *with a base case* raises no \
+termination demand at all (one with no base case does). The program is still rejected, by \
+body safety. Caught only because the first draft of this row asserted `all(...)` over the \
+empty vector and passed vacuously."]
+    fn gr_30_an_effect_countdown_proves_without_a_world_label() {
+        let src = "@effect countDown = (n) => { n == 0 ? 0 : countDown(n - 1) }\n\
+                   @effect main = () => { countDown(5) }\n\
+                   main()\n";
+        let (v, _) = check_source(src).expect("parses and checks");
+        assert!(
+            !v.grounding_demands.is_empty(),
+            "the recursion must be adjudicated at all"
+        );
+        assert!(
+            v.grounding_demands
+                .iter()
+                .all(|g| g.verdict == Verdict::Grounded),
+            "expected ordinary proven completion: {:?}",
+            v.grounding_demands
+        );
+        assert!(
+            v.grounding_demands.iter().all(|g| !g.world_decided),
+            "WorldDecided must not be minted here: {:?}",
+            v.grounding_demands
+        );
+    }
+}
