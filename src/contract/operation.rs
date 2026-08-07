@@ -128,11 +128,12 @@ fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bo
             _ => false,
         },
 
-        // `++` concatenates Strings, and only Strings.
+        // `++` joins two sequences of the **same** kind — two Strings or two Tuples.
+        // Mixed operands are refused: there is no meaning for `"a" ++ [1]`.
         PrimOp::Concat => match inputs {
             [a, b] => {
-                let string = Contract::Kind(Kind::String);
-                sub(a, &string, interner) && sub(b, &string, interner)
+                (is_str(a, interner) && is_str(b, interner))
+                    || (is_tuple(a, interner) && is_tuple(b, interner))
             }
             _ => false,
         },
@@ -302,7 +303,13 @@ fn base_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Cont
         // `+` is numeric addition only; `++` carries the String rail and its
         // grapheme-seam bound (T2.5's §5 lift).
         PrimOp::Add => binary_numeric(inputs, interner, numeric::abs_add),
+        // Two Tuples concatenate through the family's own smart constructor — the
+        // very shape `[...a, ...b]` already produces, so a `++` chain carries exact
+        // segment structure rather than collapsing to `Kind(Tuple)`.
         PrimOp::Concat => match inputs {
+            [a, b] if is_tuple(a, interner) && is_tuple(b, interner) => {
+                Contract::concat([a.clone(), b.clone()], interner)
+            }
             [a, b] => string_or_mixed(a, b, interner),
             _ => Contract::Kind(Kind::String),
         },
@@ -458,6 +465,13 @@ fn decide_equality(op: PrimOp, a: &Contract, b: &Contract, interner: &mut Intern
         }
         None => Contract::Kind(Kind::Boolean),
     }
+}
+
+fn is_tuple(c: &Contract, interner: &mut Interner) -> bool {
+    matches!(
+        subcontract(c, &Contract::Kind(Kind::Tuple), interner),
+        Verdict::Proven
+    )
 }
 
 fn is_str(c: &Contract, interner: &mut Interner) -> bool {

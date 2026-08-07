@@ -6847,3 +6847,31 @@ also concatenates tuples is an implementation question owed to the author. `// [
 
 **Verification:** 473 lib passed / 1 ignored; 226 conformance passed / 11 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — `++` joins Tuples too [user ruling]
+
+**Ruled: `++` concatenates tuples as well as Strings [user, 2026-08-07].** Two sequences of
+the **same** kind; mixed operands (`"a" ++ [1]`) are refused, and it is still never numeric.
+
+`eval_concat` gained the Tuple arm; the rulebook's safety row now reads
+`(both String) || (both Tuple)`. The output rule routes two tuples through
+`Contract::concat` — **the family's own smart constructor, the same one `[...a, ...b]`
+already uses** — so a `++` chain keeps its exact segment structure (associative flattening,
+empty-segment erasure, adjacent-exact fusion) instead of collapsing to `Kind(Tuple)`.
+
+Verified: `[1, 2] ++ [3]` → `[1, 2, 3]`; `[] ++ [1]` → `[1]`; nested tuples join; every mixed
+and numeric operand traps; and the list recursions the grounding spec writes with `++` now
+run (`f(l[1...]) ++ l[0...1]` reverses). `++` stays outside the arithmetic slice, so
+concatenation order survives canonicalization for tuples exactly as for Strings — pinned as
+conformance `concat_over_tuples` (CT-01…04).
+
+**Two GR specimens unblocked, and one still isn't.** `GR-29` now runs and **passes**: the
+`f↔g` cycle whose prefix `stall([7])` is outside the exact-chain license correctly mints *no*
+refutation — one of the three rows the design wrote specifically to forbid a false divergence
+claim. `GR-22B` and `GR-03A` still cannot be asserted: §15 states **sequence** witnesses
+(`[7]`, `[3,7,2]`) and `Refutation.witness` is a `Rational`, which cannot hold one. That is a
+structural gap in the refutation type, separate from the exact-chain candidate not firing for
+tuple states. Both recorded as ignored rows naming the two gaps.
+
+**Verification:** 473 lib passed / 1 ignored; 231 conformance passed / 13 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

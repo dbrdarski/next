@@ -626,6 +626,8 @@ impl<'a> Oracle<'a> {
     /// `++`: String concatenation, and only that. Numeric `+` is a separate operator
     /// [author, 2026-08-07] — one token across both rails made commutative reordering
     /// unsound, since concatenation does not commute.
+    /// `++` joins two sequences of the same kind — two Strings or two Tuples
+    /// [author, 2026-08-07]. Never mixed, and never numeric: `+` counts, `++` joins.
     fn eval_concat(&mut self, a: &ValueRef, b: &ValueRef) -> Result<ValueRef, Trap> {
         match (a.data(), b.data()) {
             (ValueData::Str(x), ValueData::Str(y)) => {
@@ -633,7 +635,15 @@ impl<'a> Oracle<'a> {
                 units.extend_from_slice(y);
                 Ok(self.interner.string_units(units))
             }
-            _ => Self::trap(TrapClass::OperationSafety, "`++` requires two Strings"),
+            (ValueData::Tuple(x), ValueData::Tuple(y)) => {
+                let mut items = x.clone();
+                items.extend_from_slice(y);
+                Ok(self.interner.tuple(items))
+            }
+            _ => Self::trap(
+                TrapClass::OperationSafety,
+                "`++` requires two Strings or two Tuples",
+            ),
         }
     }
 

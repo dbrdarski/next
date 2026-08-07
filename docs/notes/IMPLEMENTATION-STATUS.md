@@ -494,6 +494,14 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**`++` joins Tuples too (2026-08-07) [author ruling].** Two sequences of the same kind —
+Strings or Tuples, never mixed, never numeric. Tuple results route through
+`Contract::concat`, the same smart constructor `[...a, ...b]` uses, so segment structure
+survives. Pinned as conformance `concat_over_tuples`. It unblocked `GR-29`, which now passes —
+the row asserting no false cycle refutation is minted from an unestablished path. `GR-22B` and
+`GR-03A` remain blocked on a *structural* gap: §15 states sequence witnesses and
+`Refutation.witness` is a `Rational`. Detail in `DECISIONS.md` (2026-08-07).
+
 **Phase GR started (2026-08-07) — 23 specimen rows, 15 green, 8 measured gaps.** Conformance
 `grounding_specimens`, one test per Grounding Specification §15 specimen, with the P-1 flip
 applied (every "unproven" row asserts rejection *and* that no refutation was minted). It was
@@ -782,7 +790,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **226 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **231 passed, 0 failed, 13 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

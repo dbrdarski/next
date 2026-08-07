@@ -3801,7 +3801,49 @@ proven. FALSE REJECTION."]
     #[ignore = "GAP (measured 2026-08-07): returns Unproven. The exact-chain license \
 (§4 GR-09/10) does not fire for a written tuple argument peeled by slice. FALSE REJECTION."]
     fn gr_03b_a_literal_without_the_merge_value_is_proven() {
-        assert_proven("f = (l) => l == [] ? 0 : f(l[1...])\nr = f([3, 2])\n");
+        assert_proven("f = (l) => l == [] ? 0 : (l[0] == 7 ? f(l) : f(l[1...]))\nr = f([3, 2])\n");
+    }
+
+    /// **GR-22B — the closed orbit, generalized.** [spec text, §4 GR-11] The exact-chain
+    /// license holds (7 is a pooled element; drifts −1 and 0; flat varying state; pure).
+    /// Required dependencies are `f([])`, which grounds and completes, then `f([7])` —
+    /// the cycle. §15 expects **refuted**, witness `[7]`.
+    #[test]
+    #[ignore = "BLOCKED, structural (measured 2026-08-07): returns Unproven. §15 #22b \
+expects Refuted with witness `[7]` — a *sequence* witness — but `Refutation.witness` is a \
+`Rational` and cannot represent one. The exact-chain candidate (§4) does not fire for tuple \
+states either. Two separate gaps; the witness type is the harder one."]
+    fn gr_22b_a_required_dependency_cycle_is_refuted() {
+        assert_refuted_with(
+            "f = (l) => l == [] ? [] : f(l[1...]) ++ f(l)\nr = f([7])\n",
+            7,
+        );
+    }
+
+    /// **GR-29 — no false cycle refutation.** [spec text, §15 #29] The `f↔g` cycle's
+    /// prefix `stall([7])` is outside the exact-chain license and unproven, so the whole
+    /// candidate must contribute nothing. The row exists to assert the compiler does *not*
+    /// mint a refutation from an unestablished path — and it holds.
+    #[test]
+    fn gr_29_an_unproven_prefix_mints_no_cycle_refutation() {
+        assert_unproven(
+            "stall = (l) => stall([l])\n\
+             f = (l) => g(l)\n\
+             g = (l) => stall(l) ++ f(l)\nr = f([7])\n",
+        );
+    }
+
+    /// **GR-03A — the 7-literal, with the merge value present.** §15 expects refuted, the
+    /// written argument being the witness.
+    #[test]
+    #[ignore = "BLOCKED, structural (measured 2026-08-07): returns Unproven; §15 #3a \
+expects Refuted with witness `[3,7,2]`, a sequence witness `Refutation.witness` \
+(a `Rational`) cannot hold. Same blocker as GR-22B."]
+    fn gr_03a_the_seven_literal_is_refuted() {
+        assert_refuted_with(
+            "f = (l) => l == [] ? 0 : (l[0] == 7 ? f(l) : f(l[1...]))\nr = f([3, 7, 2])\n",
+            7,
+        );
     }
 
     /// **GR-13 — carried world value.** `loop(msg)` carries a value obtained from the
@@ -3895,6 +3937,63 @@ empty vector and passed vacuously."]
             v.grounding_demands.iter().all(|g| !g.world_decided),
             "WorldDecided must not be minted here: {:?}",
             v.grounding_demands
+        );
+    }
+}
+
+/// **`++` joins two sequences of the same kind [user, 2026-08-07].** Strings or Tuples,
+/// never mixed and never numeric. Tuple concatenation reuses the family's own smart
+/// constructor — the shape `[...a, ...b]` already produces — so a `++` chain keeps exact
+/// segment structure instead of collapsing to `Kind(Tuple)`.
+mod concat_over_tuples {
+    fn run(src: &str) -> String {
+        format!("{:?}", next::oracle::run_program_bounded(src, 4000))
+    }
+    fn value(src: &str) -> String {
+        match next::oracle::run_program_bounded(src, 4000) {
+            next::oracle::BoundedRun::Completed { value, .. } => value,
+            other => panic!("expected a value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ct_01_tuples_join() {
+        assert_eq!(value("[1, 2] ++ [3]"), "[1, 2, 3]");
+        assert_eq!(value("[] ++ [1]"), "[1]");
+        assert_eq!(value("[1] ++ []"), "[1]");
+        assert_eq!(value("[[1], [2]] ++ [[3]]"), "[[1], [2], [3]]");
+        assert_eq!(value("\"a\" ++ \"b\""), "ab");
+    }
+
+    /// Mixed kinds have no meaning, and `++` is still never numeric.
+    #[test]
+    fn ct_02_mixed_and_numeric_operands_trap() {
+        for src in ["\"a\" ++ [1]", "[1] ++ \"a\"", "1 ++ 2", "[1] ++ 2"] {
+            assert!(
+                run(src).contains("OperationSafety"),
+                "{src} must trap, got {}",
+                run(src)
+            );
+        }
+    }
+
+    /// The whole point of admitting tuples: the list recursions the grounding spec
+    /// writes with `++` now run.
+    #[test]
+    fn ct_03_a_recursive_list_build_runs() {
+        assert_eq!(
+            value("f = (l) => l == [] ? [] : f(l[1...]) ++ l[0...1]\nr = f([1, 2, 3])\nr"),
+            "[3, 2, 1]"
+        );
+    }
+
+    /// `++` stays outside the arithmetic slice, so concatenation order is never
+    /// rearranged — for tuples exactly as for Strings.
+    #[test]
+    fn ct_04_concatenation_order_survives_canonicalization() {
+        assert_eq!(
+            value("f = (l) => l ++ [9]\ng = (l) => [9] ++ l\n[f([1]), g([1])]"),
+            "[[1, 9], [9, 1]]"
         );
     }
 }
