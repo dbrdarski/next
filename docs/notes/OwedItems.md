@@ -377,8 +377,10 @@ dissolves with it.
   integer contracts), and a third candidate rule modelled on region-table §8's parked
   held-relation suspension (hold the image, let the consuming seat force it; the coarse
   form answers `Proven`, anything else forces and re-asks — RT-14's discipline).
-  `HANDOVER-hull-vs-distribution-2026-08-05.md`. **No test moves if ruled** — the case
-  lives in the handover, not the suite; pinning it is part of whatever is ruled.
+  `HANDOVER-hull-vs-distribution-2026-08-05.md`, superseded for the design by
+  `DRAFT-demand-stopping-and-branch-routing-v0-1.md` (author's demand-stopping spec, with
+  the branch-routing draft folded in as §12–15). **First slice landed 2026-08-07** — the
+  routing-forced exact operation image; conformance `exact_images` pins it.
 
 ## 6. Author-flagged opens (implemented per stated law)
 

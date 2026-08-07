@@ -6188,3 +6188,32 @@ example, not before it.
 
 **Verification:** 467 lib passed / 1 ignored; 191 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — The two drafts become one document
+
+`DRAFT-branch-routing-v0-1.md` (drafter) is **deleted**; its surviving content is folded into
+the author's `DRAFT-demand-stopping-and-branch-routing-v0-1.md` as §§12–15. The author's
+§§1–11 are reproduced unchanged.
+
+**Two of the folded rules were wrong and are corrected in place (§12.0).** BR-06 claimed
+routing is the *only* question a branch set is asked; DR-09 refutes it — the result-contract
+judgment asks a branch set nothing, because it stops at the producer's result mapping.
+Routing is what **completion** asks, so the rule survives only as BR-06′. BR-07 fell with it,
+and its conclusion — that the backward existential search has no customer — was right for the
+wrong reason: no customer because completion routes every branch anyway, not because seats
+ask nothing.
+
+**What the fold keeps:** the branch-set object and cell index (BR-01…BR-04, with correlation
+structural rather than a rule), routing demand and narrowing-by-arrival (BR-08/BR-09, the
+branch generalization of DR-12/DR-13), keyed-vs-iterative lookup with the first-match
+constraint (BR-10/BR-11), the hull's four cases itemized under DR-18 (BR-13/BR-14), collapse
+points (BR-15), and the honest cost statement (BR-16). §13 carries the killed list with the
+session's specific history — preimage, the backward search, eager distribution, the hull as
+an answer — so the same ground is not retaken. §14 lists discharge obligations. §15 records
+implementation status, including the editorial nit that `Union` is binary, so §7's
+three-argument form must be nested to parse.
+
+`OwedItems` Thread D now points at the merged document.
+
+**Verification:** documentation only; 467 lib / 191 conformance / 10 machinery unchanged;
+manifest 19/19 OK.
