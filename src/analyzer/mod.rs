@@ -417,6 +417,70 @@ fn analyze_lambda(l: &crate::ast::Lambda, env: &TypeEnv, interner: &mut Interner
     Analysis::produced_annotated(AnalysisContract::of_value(value), vec![], interner)
 }
 
+/// Build the block's named lambda bindings as closure **values** before any initializer
+/// is analyzed, so a self- or mutually-recursive local function can see itself and its
+/// siblings — exactly as `program::define` does for module functions.
+///
+/// The closures share one scope, and a closure holds that scope by reference, so a
+/// member created before its sibling is defined still resolves it afterwards. That is
+/// what makes `a = () => b(); b = () => a()` inside a block work as well as at module
+/// level.
+///
+/// A lambda whose other captures are not single values is skipped: no closure value can
+/// be made for it, and the contract-level instance path (C§13.2) remains its route.
+fn prebind_sibling_lambdas(m: &crate::ast::Match, body_env: &mut TypeEnv, interner: &mut Interner) {
+    let siblings: Vec<(&String, &crate::ast::Lambda)> = m
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            crate::ast::MatchItem::Bind(crate::ast::Bind {
+                target: crate::ast::BindTarget::Name(name),
+                value: Expr::Lambda(l),
+                ..
+            }) => Some((name, l)),
+            _ => None,
+        })
+        .collect();
+    if siblings.is_empty() {
+        return;
+    }
+
+    let scope = crate::env::Scope::root();
+    let names: Vec<&str> = siblings.iter().map(|(n, _)| n.as_str()).collect();
+    // Seed the shared scope with every singleton already visible, so a local lambda
+    // may capture enclosing values as well as its siblings.
+    let mut seeded: Vec<String> = Vec::new();
+    for (_, l) in &siblings {
+        for name in crate::oracle::lambda_free_vars(l, interner) {
+            if names.contains(&name.as_str()) || seeded.contains(&name) {
+                continue;
+            }
+            if let Some(Contract::Equals(v)) = body_env.get(&name).map(|a| a.erase(interner)) {
+                scope.define(&name, crate::env::Binding::Value(v));
+                seeded.push(name);
+            }
+        }
+    }
+
+    // A sibling whose captures are still unresolved cannot become a value; leave it to
+    // the ordinary path rather than binding something coarser than what is already there.
+    let mut built: Vec<(String, ValueRef)> = Vec::new();
+    for (name, l) in &siblings {
+        let resolvable = crate::oracle::lambda_free_vars(l, interner)
+            .iter()
+            .all(|f| names.contains(&f.as_str()) || seeded.contains(f));
+        if !resolvable {
+            continue;
+        }
+        let v = crate::oracle::make_closure_in(l, &scope, interner);
+        scope.define(name, crate::env::Binding::Value(v.clone()));
+        built.push(((*name).clone(), v));
+    }
+    for (name, v) in built {
+        body_env.insert(name, AnalysisContract::of_value(v));
+    }
+}
+
 /// The world a function body owns, independent of the world where its closure was
 /// constructed or called (B5/E14).
 pub(crate) fn world_for_act(kind: ActKind) -> World {
@@ -1959,6 +2023,13 @@ fn analyze_match(
 
     // `body_env` accumulates Bind / Stmt bindings; each item runs against it.
     let mut body_env = env.clone();
+    // **Named block bindings are late-bound siblings** — the same law the module
+    // pre-pass and the canonicalizer already apply, now applied here. Without it a
+    // locally-bound recursive function has *itself* free while its own initializer is
+    // analyzed, no closure value can be built, and every call to it resolves as
+    // "not a known function" — so `fib = (n) => { go = (k) => … go(k - 1) …; go(n) }`
+    // is rejected outright and its termination is never adjudicated at all.
+    prebind_sibling_lambdas(m, &mut body_env, interner);
     let mut remainder = scrut.clone();
     let mut results: Vec<Contract> = Vec::new();
     let mut annotated_results: Vec<AnalysisContract> = Vec::new();

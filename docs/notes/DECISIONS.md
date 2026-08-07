@@ -6937,3 +6937,55 @@ re-measured accordingly.
 
 **Verification:** 473 lib passed / 1 ignored; 237 conformance passed / 11 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — A block's named lambdas are late-bound siblings [user ruling]
+
+**The bug.** `analyze_lambda` can only build a closure **value** when every free variable
+resolves to a single value. A locally-bound recursive function has *itself* free, and it is
+not yet bound while its own initializer is analyzed — so no closure value exists, and every
+call to it resolved as `UnknownFunction`:
+
+```
+fib = (n) => { go = (k) => k <= 1 ? k : go(k - 1) + go(k - 2)
+ go(n) }
+r = fib(6)
+→ Error: cannot prove this callee's body safe (callee not resolved to a known function)
+```
+
+The function was invisible to the **whole** analysis, not only to grounding —
+`grounding_demands` came back empty, so termination was never adjudicated at all. Module-level
+recursion has always worked, because `program::define` pre-registers module functions in a
+shared scope. Block bindings had no such pass.
+
+**The fix: apply the law that was already applied twice elsewhere.** The canonicalizer's own
+comment states it — *"Named block bindings are late-bound siblings: assign every sibling's
+positional identity before canonicalizing any initializer"* — and the module pre-pass does the
+same at value level. `prebind_sibling_lambdas` now builds every named lambda binding of a block
+as a closure value **before** any initializer is analyzed, all sharing one scope. A closure
+holds its scope by reference, so a member built before its sibling still resolves it
+afterwards — which is exactly why module-level mutual recursion works, and now block-level
+does too.
+
+A sibling whose *other* captures are not single values is skipped rather than bound coarser
+than it already is: no closure value can be made for it, and C§13.2's contract-level instance
+path remains its route.
+
+**Measured, before → after:**
+
+| program | before | after |
+|---|---|---|
+| `fib` via local `go` | not resolved; **no** grounding demand | **Grounded** on both call edges |
+| `wrap = (k) => { g = (n) => g(n); g(k) }` | not resolved | **Refuted**, witness 1 |
+| local mutual `even`/`odd` | not resolved | adjudicated (Unproven — a grounding coverage gap) |
+| local capturing an outer value | — | still compiles |
+
+Pinned as conformance `local_functions_resolve` (LF-01…04).
+
+**GR-26 re-measured.** Its termination half is now exactly what §15 #26 expects — **Grounded on
+both edges**, drifts −1 and −2 against the half-line base. It is still rejected, by
+*"callee body safety cannot be proven at this executable seat"* — the same
+multi-parameter/mutual body-safety gap as GR-19, in a different subsystem. Its ignore reason
+was re-measured to say so: the row moved from a resolution gap to a safety gap.
+
+**Verification:** 473 lib passed / 1 ignored; 241 conformance passed / 11 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

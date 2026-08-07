@@ -494,6 +494,16 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Local functions resolve (2026-08-07) [author ruling].** A block's named lambda bindings are
+built as closure values *before* any initializer is analyzed, sharing one scope — the
+late-binding law the module pre-pass and the canonicalizer already applied. Before this, a
+locally-bound recursive function had itself free while its own initializer was analyzed, no
+closure value could be made, and every call resolved as "not a known function": the function
+was invisible to the whole analysis and its termination was never adjudicated. Now `fib`'s
+local `go` is **Grounded on both edges** and a diverging local is **Refuted** with the arriving
+argument. Pinned as conformance `local_functions_resolve`. GR-26 moved from a resolution gap to
+the same body-safety gap as GR-19. Detail in `DECISIONS.md` (2026-08-07).
+
 **Principle 9's coverage hole closed (2026-08-07) [author ruling] — a soundness fix.**
 `ground_demand` opened with `if !is_recursive(callee) { return; }`, so a seat whose callee
 merely *reached* a diverging function was never checked and the program compiled. Measured:
@@ -802,7 +812,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **237 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **241 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

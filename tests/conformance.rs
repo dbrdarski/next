@@ -3773,12 +3773,11 @@ REJECTION."]
     /// and −2) check against the half-line base `k <= 1`, which lands structurally with no
     /// grid needed.
     #[test]
-    #[ignore = "GAP (resolution, not grounding — measured 2026-08-07): grounding is never \
-asked. `grounding_demands` is EMPTY and the rejection is \
-`cannot prove this callee's body safe (callee not resolved to a known function)`. A \
-recursive function declared inside a block (`go` within `fib`) does not resolve, so the \
-termination prover never sees it. §15 #26 is the author's own walkthrough and expects \
-proven. FALSE REJECTION."]
+    #[ignore = "GAP (safety — re-measured 2026-08-07 after local-callee resolution): grounding \
+now adjudicates `go` and returns **Grounded on both call edges**, exactly as §15 #26 expects. \
+The program is still rejected, by `callee body safety cannot be proven at this executable \
+seat` — the same multi-parameter/mutual body-safety gap as GR-19, in a different subsystem. \
+The resolution half is fixed and pinned by conformance `local_functions_resolve`."]
     fn gr_26_a_nested_recursive_function_is_proven() {
         assert_proven(
             "fib = (n) => { go = (k) => k <= 1 ? k : go(k - 1) + go(k - 2)\n go(n) }\nr = fib(6)\n",
@@ -4073,5 +4072,79 @@ mod termination_reaches_through_a_caller {
             "expected a refutation witnessed by 7: {:?}",
             v.grounding_demands
         );
+    }
+}
+
+/// **A block's named lambdas are late-bound siblings [user, 2026-08-07].** They are now
+/// built as closure values *before* any initializer is analyzed — the same law the module
+/// pre-pass and the canonicalizer already applied. Without it a locally-bound recursive
+/// function has itself free while its own initializer is analyzed, no closure value can be
+/// made, and every call to it resolved as "not a known function": the function was invisible
+/// to the whole analysis, termination included.
+mod local_functions_resolve {
+    use next::analyzer::grounding::Verdict;
+
+    fn verdicts(src: &str) -> Vec<Verdict> {
+        let (v, _) = next::oracle::check_source(src).expect("checks");
+        v.grounding_demands
+            .iter()
+            .map(|g| g.verdict.clone())
+            .collect()
+    }
+
+    fn has_error(src: &str, needle: &str) -> bool {
+        let (v, _) = next::oracle::check_source(src).expect("checks");
+        v.findings.iter().any(|f| f.message.contains(needle))
+    }
+
+    /// A local recursive function is adjudicated, and its termination is *proven*.
+    #[test]
+    fn lf_01_a_local_recursive_function_is_grounded() {
+        let src =
+            "fib = (n) => { go = (k) => k <= 1 ? k : go(k - 1) + go(k - 2)\n go(n) }\nr = fib(6)\n";
+        let vs = verdicts(src);
+        assert!(
+            !vs.is_empty() && vs.iter().all(|v| *v == Verdict::Grounded),
+            "both call edges must ground: {vs:?}"
+        );
+        assert!(
+            !has_error(src, "not resolved to a known function"),
+            "a local function must resolve"
+        );
+    }
+
+    /// And a diverging one is refuted, by the argument that actually arrived — where
+    /// before it was rejected for the unrelated resolution failure.
+    #[test]
+    fn lf_02_a_diverging_local_function_is_refuted() {
+        let src = "wrap = (k) => { g = (n) => g(n)\n g(k) }\nr = wrap(1)\n";
+        assert!(
+            verdicts(src).iter().any(|v| matches!(
+                v, Verdict::Refuted(r) if r.witness == next::rational::Rational::from(1)
+            )),
+            "expected a refutation witnessed by 1: {:?}",
+            verdicts(src)
+        );
+        assert!(!has_error(src, "not resolved to a known function"));
+    }
+
+    /// Mutually recursive locals see each other: the closures share one scope, so a
+    /// member built before its sibling still resolves it.
+    #[test]
+    fn lf_03_mutually_recursive_locals_see_each_other() {
+        let src = "f = (n) => { even = (k) => k == 0 ? true : odd(k - 1)\n\
+                    odd = (k) => k == 0 ? false : even(k - 1)\n even(n) }\nr = f(4)\n";
+        assert!(!verdicts(src).is_empty(), "the cycle must be adjudicated");
+        assert!(!has_error(src, "not resolved to a known function"));
+    }
+
+    /// A local that captures an enclosing value still resolves and still compiles.
+    #[test]
+    fn lf_04_a_local_capturing_an_outer_value_compiles() {
+        let (v, _) = next::oracle::check_source(
+            "run = (n, m) => { add = (k) => k + m\n add(n) }\nr = run(1, 2)\n",
+        )
+        .expect("checks");
+        assert!(v.accepted(), "{:?}", v.findings);
     }
 }
