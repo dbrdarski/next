@@ -30,7 +30,6 @@ use crate::ast::{
     AccessForm, Arg, Bind, BindTarget, BindingRef, Element, Expr, Field, Item, Match, MatchItem,
     Module, Pat, PatElem, PatField, Ref, TemplatePart,
 };
-use crate::desugar::Desugarer;
 use crate::env::{Binding, Env, Scope};
 use crate::interner::Interner;
 use crate::lex::lex;
@@ -324,9 +323,7 @@ fn front(src: &str, source: usize, interner: &mut Interner) -> Result<Module, Li
     let fail = |message: String| LinkError::Front { source, message };
     let toks = lex(src).map_err(|e| fail(format!("{e:?}")))?;
     let sp = parse_program(toks).map_err(|e| fail(format!("{e:?}")))?;
-    Desugarer::new(interner)
-        .program(&sp)
-        .map_err(|e| fail(e.message))
+    crate::desugar::lower_program(&sp, interner).map_err(|e| fail(e.message))
 }
 
 fn exported_names(m: &Module) -> Vec<String> {

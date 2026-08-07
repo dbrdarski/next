@@ -6368,3 +6368,51 @@ rather than wrong; and the 256-combination budget, still the drafter's and unrat
 
 **Verification:** 467 lib passed / 1 ignored; 199 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — The normalization phase is wired; its harness was already built
+
+**The finding that prompted this.** The author asked why the canonical form is not the form
+analysis works on. The answer, from μ §8's master law: every rewrite in the `==`-set must
+preserve *"operation-safety demands and the accepted domain … **plus demand preservation so
+shape-level analysis never forgets an obligation**."* Demand preservation is only needed if
+**analysis reads the normalized form**. `poly.rs`'s header claim that "shapes drive identity
+only" is an implementation narrowing that no ruling supports; I had repeated it from the
+comment without checking the spec — the same error as the Group-B mis-filings.
+
+**What was actually missing.** Not a mechanism, and not the "bridge" I described. Two
+corrections to my own account:
+
+1. **`src/normalize/`, the kernel-AST §5 phase, existed and was never called.** Its rules
+   (template segment folding; literal template → constant), its corpus and its harness were
+   all written. `grep` for its entry points outside its own module found only test code.
+2. **The obstacle I claimed was not real.** I said the canonical shape's `$0`/`@cap0`
+   renaming made it unusable by a name-keyed analyzer. That renaming belongs to `canon.rs`'s
+   α pass, which runs *before* `poly` and is separate from it; `poly` clones `Ref` nodes
+   untouched and keys like-terms by a structure string containing the **source name**.
+
+**What landed.** One lowering step — `desugar::lower_program` = desugar ∘ normalize — and
+every production front end routed through it: the three drivers in `oracle/harness.rs`, the
+three in `oracle/eval.rs`, and `link.rs`'s per-source loader. The oracle and the analyzer
+can no longer be handed different spellings of the same program.
+
+**The one thing the harness could not have caught, now pinned.** Normalization is
+evaluation-preserving *by construction*, so no program run can detect whether the pipeline
+applies it — unwire it and every existing row still passes. `the_pipeline_lowers_through_
+normalization` observes the **form**: lowering a literal template must yield a `Const` where
+bare desugaring leaves a `Template`, and lowering must equal desugar-then-normalize exactly.
+It is the only test that fails if a front end stops routing through `lower_program`.
+
+**Deliberately not done:** relocating `poly`'s arithmetic rewrites (`x + x → 2*x`) into the
+normalization phase. That is what would let the analyzer see `2 * a` where the source wrote
+`a + a` — dissolving the inline-correlation case entirely — but μ §8 calls the `==`-set's
+composition "a semantics-version event," so moving where those rules apply wants a stamp
+even though the list itself is unchanged. Recorded as the open question it is.
+
+**Also reverted today, uncommitted and now gone:** a slot-keyed correlation mechanism for
+held images. It duplicated what `x + x → 2*x` already knows, and its cross-image form was
+unsound under shadowing (an inner lambda parameter named `a` correlating with an outer `a`
+baked into an image). Dropped on the author's instruction not to build one optimization
+doing another's job.
+
+**Verification:** 468 lib passed / 1 ignored; 199 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

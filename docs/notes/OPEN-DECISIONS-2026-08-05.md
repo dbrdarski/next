@@ -176,6 +176,18 @@ machinery (RT-09) can already analyze the product; this is purely a *surface* de
 may `where` attach to any binding proven to hold an exact function value, or only to
 module-level function definitions?
 
+### A12. Should the arithmetic `==`-slice govern the **analyzed** form? [new, 2026-08-07]
+μ §8's master law requires the frozen rewrite set to preserve demands *"so shape-level
+analysis never forgets an obligation"* — which only signifies if analysis reads the
+normalized form. Today `poly`'s three rewrites (commutative reordering, constant folding,
+`x + x → 2*x`) apply **only** to function-shape identity in `canon.rs`; the kernel-AST
+normalization phase, now wired, carries only the two template rules. Moving the arithmetic
+rewrites into the phase would make the analyzer see `2 * a` where the source wrote `a + a`,
+dissolving the inline-correlation case with no new mechanism. **The list is unchanged
+either way** — but §8 calls the composition of the `==`-set "a semantics-version event," so
+changing *where* those rewrites apply is yours to stamp. It would not reach sharing through
+a binding (`b = a * 2; a + b`), which is syntactically invisible.
+
 ### A8. Exported slots in check mode (MOD-03 residue)
 Runtime linking installs an exported `@state` slot **itself** into the consumer (shared
 store). Check-mode project analysis has no runtime store, so an exported slot has no scope

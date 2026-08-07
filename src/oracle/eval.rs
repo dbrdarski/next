@@ -9,16 +9,13 @@ use super::*;
 /// Convenience: lex → parse → desugar → evaluate a whole program, returning the
 /// value produced by its last statement (used by tests and as the entry shape).
 pub fn run_program_value(src: &str) -> Result<ValueRef, Trap> {
-    use crate::desugar::Desugarer;
     use crate::lex::lex;
     use crate::parse::parse_program;
 
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(&mut interner)
-        .program(&sprogram)
-        .expect("desugar ok");
+    let module = crate::desugar::lower_program(&sprogram, &mut interner).expect("desugar ok");
 
     let env = super::harness::prelude_env(&mut interner);
     let mut oracle = Oracle::new(&mut interner);
@@ -120,16 +117,13 @@ pub fn run_program_bounded(src: &str, fuel: u64) -> BoundedRun {
 }
 
 fn run_program_bounded_here(src: &str, fuel: u64) -> BoundedRun {
-    use crate::desugar::Desugarer;
     use crate::lex::lex;
     use crate::parse::parse_program;
 
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(&mut interner)
-        .program(&sprogram)
-        .expect("desugar ok");
+    let module = crate::desugar::lower_program(&sprogram, &mut interner).expect("desugar ok");
 
     let env = super::harness::prelude_env(&mut interner);
     let mut oracle = Oracle::new_fueled_with_depth(&mut interner, fuel, BOUNDED_RUN_MAX_CALL_DEPTH);
@@ -150,16 +144,13 @@ fn run_program_bounded_here(src: &str, fuel: u64) -> BoundedRun {
 /// Like [`run_program_value`], but also returns the number of *actual* slot
 /// commits — test-observable evidence of the interning-exact equality guard.
 pub fn run_program_commits(src: &str) -> Result<(ValueRef, usize), Trap> {
-    use crate::desugar::Desugarer;
     use crate::lex::lex;
     use crate::parse::parse_program;
 
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(&mut interner)
-        .program(&sprogram)
-        .expect("desugar ok");
+    let module = crate::desugar::lower_program(&sprogram, &mut interner).expect("desugar ok");
 
     let env = super::harness::prelude_env(&mut interner);
     let mut oracle = Oracle::new(&mut interner);

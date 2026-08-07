@@ -11,7 +11,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::analyzer::program::{ProgramVerdict, analyze_program_in};
-use crate::desugar::Desugarer;
 use crate::env::{Binding, Env, Scope};
 use crate::interner::Interner;
 use crate::lex::lex;
@@ -183,9 +182,7 @@ pub fn run_with_io(src: &str) -> Result<(ValueRef, HostIo), Trap> {
     let mut interner = Interner::new();
     let toks = lex(src).expect("lex ok");
     let sprogram = parse_program(toks).expect("parse ok");
-    let module = Desugarer::new(&mut interner)
-        .program(&sprogram)
-        .expect("desugar ok");
+    let module = crate::desugar::lower_program(&sprogram, &mut interner).expect("desugar ok");
 
     let io = Rc::new(RefCell::new(HostIo::default()));
     let env = prelude_env(&mut interner);
@@ -240,9 +237,7 @@ pub fn check_source(src: &str) -> Result<(ProgramVerdict, Interner), RunError> {
 pub fn check_source_in(src: &str, interner: &mut Interner) -> Result<ProgramVerdict, RunError> {
     let toks = lex(src).map_err(RunError::Lex)?;
     let sprogram = parse_program(toks).map_err(RunError::Parse)?;
-    let module = Desugarer::new(interner)
-        .program(&sprogram)
-        .map_err(RunError::Desugar)?;
+    let module = crate::desugar::lower_program(&sprogram, interner).map_err(RunError::Desugar)?;
     let io = Rc::new(RefCell::new(HostIo::default()));
     let env = prelude_env(interner);
     install_host_effects(interner, &env, &io);
@@ -262,9 +257,7 @@ pub fn check_source_in(src: &str, interner: &mut Interner) -> Result<ProgramVerd
 pub fn run_source_in(src: &str, interner: &mut Interner) -> Result<(ValueRef, HostIo), RunError> {
     let toks = lex(src).map_err(RunError::Lex)?;
     let sprogram = parse_program(toks).map_err(RunError::Parse)?;
-    let module = Desugarer::new(interner)
-        .program(&sprogram)
-        .map_err(RunError::Desugar)?;
+    let module = crate::desugar::lower_program(&sprogram, interner).map_err(RunError::Desugar)?;
 
     let io = Rc::new(RefCell::new(HostIo::default()));
     let env = prelude_env(interner);

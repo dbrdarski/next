@@ -484,6 +484,16 @@ memo-key field are **deleted** — one mechanism, and the draft's §11 items 2 a
 closed. Pinned as conformance `exact_images` (6 rows). Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Normalization wired (2026-08-07).** The kernel-AST §5 phase existed with its rules,
+corpus and harness — and was never called. `desugar::lower_program` (desugar ∘ normalize) is
+now the single lowering step, and every production front end routes through it, so the
+oracle and the analyzer cannot be handed different spellings. Pinned by
+`the_pipeline_lowers_through_normalization`, which observes the *form* — the one thing an
+evaluation-preserving pass cannot be caught by. **Open:** whether `poly`'s arithmetic
+rewrites (`x + x → 2*x`, today applied only to function-shape identity) should move into
+the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
+(2026-08-07).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -701,7 +711,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **468 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **199 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |

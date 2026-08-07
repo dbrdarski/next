@@ -30,6 +30,19 @@ fn err<T>(message: impl Into<String>) -> Result<T, DesugarError> {
 }
 
 /// Lowers surface syntax to kernel AST, interning constants through `interner`.
+/// **Lowering**: desugar to kernel AST, then apply the §5 normalization phase.
+///
+/// The kernel AST specification makes normalization part of reaching the analyzable
+/// form, not an optional pass: its law is `eval ∘ normalize = eval` with idempotence,
+/// so nothing downstream can observe a difference in *results* — but everything
+/// downstream, the oracle and the analyzer alike, sees **one** canonical spelling.
+/// Routing every front end through here is what stops those two from being handed
+/// different forms of the same program.
+pub fn lower_program(p: &SProgram, interner: &mut Interner) -> Result<Module, DesugarError> {
+    let module = Desugarer::new(interner).program(p)?;
+    Ok(crate::normalize::normalize_module(&module, interner))
+}
+
 pub struct Desugarer<'a> {
     interner: &'a mut Interner,
     gensym: u32,

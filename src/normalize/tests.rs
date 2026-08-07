@@ -88,6 +88,46 @@ fn normalization_preserves_evaluation_over_corpus() {
     }
 }
 
+/// **The wiring pin.** Normalization is evaluation-preserving *by construction*, so no
+/// amount of running programs can tell whether the pipeline actually applies it — unwire
+/// it and every other row in this file still passes. This row observes the **form**
+/// instead: lowering a literal template must yield a `Const`, where bare desugaring
+/// leaves a `Template`. It is the only test that fails if the front ends stop routing
+/// through `lower_program`.
+#[test]
+fn the_pipeline_lowers_through_normalization() {
+    fn last_expr(m: &Module) -> &Expr {
+        match m.items.last() {
+            Some(Item::Stmt(e)) | Some(Item::Bind(crate::ast::Bind { value: e, .. })) => e,
+            other => panic!("expected a trailing expression, got {other:?}"),
+        }
+    }
+
+    let src = "`hello`\n";
+    let mut interner = Interner::new();
+    let sprogram = parse_program(lex(src).expect("lex")).expect("parse");
+
+    let raw = Desugarer::new(&mut interner)
+        .program(&sprogram)
+        .expect("desugar");
+    assert!(
+        matches!(last_expr(&raw), Expr::Template(_)),
+        "bare desugaring keeps the template node: {:?}",
+        last_expr(&raw)
+    );
+
+    let lowered = crate::desugar::lower_program(&sprogram, &mut interner).expect("lower");
+    assert!(
+        matches!(last_expr(&lowered), Expr::Const(_)),
+        "lowering must fold a literal template to a constant: {:?}",
+        last_expr(&lowered)
+    );
+
+    // And lowering is exactly desugar-then-normalize, not some other pass.
+    let expected = normalize_module(&raw, &mut interner);
+    assert_eq!(lowered, expected, "lowering is desugar ∘ normalize");
+}
+
 // ── Per-rule checks of the template normalizations ───────────────────────────
 
 fn normalize_src_expr(src: &str) -> Expr {
