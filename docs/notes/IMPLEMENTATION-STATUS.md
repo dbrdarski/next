@@ -455,6 +455,17 @@ a three-member union were not proven exhaustive (two were). Pinned as conformanc
 `union_remainders`. The author's worked example's inner matches now prove; its exit match
 still needs the operation-image work (A6/Thread D). Detail in `DECISIONS.md` (2026-08-07).
 
+**Exact operation images, routing-forced (2026-08-07) — A6's first slice [author scope].**
+Completion is judged coarsely first; **only** if that fails does the same judgment re-run
+with the rulebook distributing over finite point operands (capped at 256 combinations;
+beyond it the coarse verdict stands). The mode is part of the memo key, so a cached coarse
+`Unproven` cannot short-circuit the retry. Soundness is one-directional: the exact image is
+a subset of the hull, so the retry only ever turns unproven into proven — the missing-arm
+variant is still refused. The author's six-arm `subtotal = rate * seats` example and the A6
+flagship both pass now. Pinned as conformance `exact_images`. Chaining, provenance sharing
+and the general lazy-image representation are deliberately not built. Detail in
+`DECISIONS.md` (2026-08-07).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -673,7 +684,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **467 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **188 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **191 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

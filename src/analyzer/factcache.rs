@@ -72,6 +72,11 @@ pub(crate) struct FactKey {
     named_contracts: Interned<NamedContractEnvironment>,
     input: Vec<Interned<Contract>>,
     claim: MemoClaim,
+    /// Whether the settlement ran in exact-image mode. A coarse answer and an exact
+    /// one are **different questions**, so they key separately — otherwise a cached
+    /// coarse `Unproven` would short-circuit the very retry that exists to improve
+    /// on it. (The draft's open item 3, answered for this slice.)
+    exact_images: bool,
 }
 
 /// The **layer-2 shape** (C§12.3 layer 2 / C§13.4): a lone acyclic function keys by
@@ -271,6 +276,7 @@ pub(crate) fn key(
         named_contracts,
         input,
         claim,
+        exact_images: crate::contract::exact_images_active(),
     })
 }
 

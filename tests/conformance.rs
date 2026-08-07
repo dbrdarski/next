@@ -1953,6 +1953,77 @@ mod union_remainders {
     }
 }
 
+// **Exact operation images, forced only by routing** [author, 2026-08-07]. A completion
+// judgment tries the coarse (hull) reading first; if and only if that cannot prove it, the
+// same judgment re-runs with the operation rulebook distributing over finite point
+// operands. Coarse stays authoritative for positive proofs — the exact image is a subset
+// of the hull, so the retry can only turn unproven into proven. Deterministic: one retry,
+// no search, no budget, no inversion.
+mod exact_images {
+    use super::*;
+
+    const HEAD: &str = "Plan = Union(Equals(\"basic\"), Union(Equals(\"pro\"), Equals(\"enterprise\")))\n\
+         Size = Union(Equals(\"small\"), Equals(\"large\"))\n\
+         price where (Plan, Size) => Numeric\n\
+         price = (plan, size) => {\n\
+           rate = plan :: { \"basic\" => 1\n    \"pro\" => 3\n    \"enterprise\" => 5 }\n\
+           seats = size :: { \"small\" => 2\n    \"large\" => 4 }\n\
+           subtotal = rate * seats\n";
+
+    /// The author's worked example: `subtotal = rate * seats` over `{1,3,5} × {2,4}`
+    /// produces exactly `{2,4,6,10,12,20}`, and six point arms cover it. The coarse
+    /// hull is an interval, which point arms can never consume; the exact image can.
+    #[test]
+    fn ei_six_arms_cover_the_exact_product() {
+        let src = format!(
+            "{HEAD}  => subtotal :: {{ 2 => rate + seats\n\
+               4 => seats * 10\n    6 => subtotal - rate\n    10 => rate * 2\n\
+               12 => subtotal + seats\n    20 => subtotal }}\n}}\n\
+             x = price(\"pro\", \"large\")\nx\n"
+        );
+        let v = check_source(&src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(&src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "16"
+        );
+    }
+
+    /// The sound converse: drop one arm and the product is genuinely uncovered, so the
+    /// exact retry must *also* fail. The retry improves precision, never soundness.
+    #[test]
+    fn ei_a_missing_arm_is_still_refused() {
+        let src = format!(
+            "{HEAD}  => subtotal :: {{ 2 => rate + seats\n\
+               4 => seats * 10\n    6 => subtotal - rate\n    10 => rate * 2\n\
+               12 => subtotal + seats }}\n}}\n\
+             x = price(\"pro\", \"large\")\nx\n"
+        );
+        assert!(
+            !check_source(&src).expect("parses and checks").0.accepted(),
+            "20 is producible and uncovered"
+        );
+    }
+
+    /// The original A6 flagship, which the hull rejected: total over its domain, and
+    /// now accepted.
+    #[test]
+    fn ei_the_a6_flagship_is_accepted() {
+        let src = "Plan = Union(Equals(\"free\"), Equals(\"pro\"))\n\
+                   f where (Plan) => Number\n\
+                   f = (p) => {\n  rate = p :: { \"pro\" => 2\n    _ => 1 }\n\
+                     doubled = rate * 2\n  => doubled :: { 2 => 10\n    4 => 20 }\n}\n\
+                   a = f(\"pro\")\nb = f(\"free\")\nb\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+    }
+}
+
 // **The `where`-isolation invariant** [author, 2026-08-06]: E11 makes a `where` a
 // verified assertion — "never trusted, never a mode … hence no new caller obligations."
 // So the presence of a signature must never change what a *call site* concludes. Before

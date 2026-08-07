@@ -6136,3 +6136,55 @@ and six point arms cannot consume an interval. That is A6 / Thread D, untouched 
 
 **Verification:** 467 lib passed / 1 ignored; 188 conformance passed / 3 ignored; 10
 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — The smallest exact operation image, forced only by routing (A6, first slice)
+
+**Scope set by the author, and kept:** implement only enough to carry the six-arm
+`subtotal = rate * seats` routing case; coarse stays authoritative for positive proofs;
+exact resolution fires **only** when routing/completion cannot be proven coarsely; no
+backward inversion, no symbolic execution, no search machinery, no abstraction beyond the
+pinned example.
+
+**The control flow is deterministic — one retry, no heuristic step:**
+
+```
+coarse completion judgment
+    ├─ proven → stop
+    └─ not proven → is an exact operation image available?
+                       ├─ yes → force it and re-run the same judgment
+                       └─ no  → the coarse verdict stands
+```
+
+**Three pieces.**
+
+1. **Exact-image mode** (`contract::operation`): a thread-local, off by default. When on,
+   `analyze_output` distributes over operands that are finite point sets — applying the
+   ordinary leaf rule to each combination and joining — instead of reading their hull.
+   Exact by construction. Capped at 256 combinations for this slice; beyond it the coarse
+   reading stands, which is exactly today's verdict, never an invented one.
+2. **The memo key carries the mode** (`FactKey::exact_images`). A coarse settlement and an
+   exact one are *different questions*; without this the cached coarse `Unproven` would
+   short-circuit the very retry meant to improve on it. This answers the draft's open
+   item 3 for this slice.
+3. **The trigger** (`completes_coarse_then_exact` in `analyze_where`): coarse first, exact
+   once, never the reverse. Soundness is one-directional by construction — the exact image
+   is a **subset** of the hull, so the retry can only turn unproven into proven.
+
+**Measured.** The author's worked example — `rate ∈ {1,3,5}`, `seats ∈ {2,4}`, product
+exactly `{2,4,6,10,12,20}`, six point arms — now checks `ok` and runs to `16`. The A6
+flagship `hull.next`, a total function the hull rejected all session, is accepted. Drop one
+arm and it is **still refused**: the retry improves precision, never soundness. Zero
+movement anywhere else.
+
+**Pinned** as conformance `exact_images`: the six-arm example accepted and running; the
+missing-arm variant refused; the A6 flagship accepted.
+
+**Not done, deliberately** — chaining, shared versus independent provenance, deeper
+operation graphs, result-demand interaction (DR-16 already holds: no result demand forces
+anything), and the general lazy-image representation. Those generalize *after* the pinned
+example, not before it.
+
+**`// [ask-author]`: none** — the shape and the scope are the author's, given in session.
+
+**Verification:** 467 lib passed / 1 ignored; 191 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

@@ -229,7 +229,88 @@ fn find_trap(
 
 // ── Output (image over-approximation) ────────────────────────────────────────
 
+thread_local! {
+    /// **Exact-image mode** — off by default. When a routing or completion judgment
+    /// cannot be proven from the coarse (hull) reading, the analyzer re-runs the
+    /// judgment with this on; the operation rulebook then distributes over finite
+    /// point operands instead of taking their hull. Coarse remains authoritative for
+    /// positive proofs: the exact image is a *subset* of the hull, so anything the
+    /// hull proved the exact image proves too. Nothing here searches, and nothing is
+    /// forced by an ordinary result demand.
+    static EXACT_IMAGES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether exact-image mode is active. Part of the memo key, so a coarse settlement
+/// and an exact one are different questions with different answers.
+pub(crate) fn exact_images_active() -> bool {
+    EXACT_IMAGES.with(std::cell::Cell::get)
+}
+
+/// Run `body` in exact-image mode, restoring the previous setting afterwards.
+pub(crate) fn with_exact_images<T>(body: impl FnOnce() -> T) -> T {
+    let saved = EXACT_IMAGES.with(|f| f.replace(true));
+    let out = body();
+    EXACT_IMAGES.with(|f| f.set(saved));
+    out
+}
+
+/// The product of the operand point-counts this slice will distribute. Beyond it the
+/// coarse reading stands — the same verdict as today, never an invented one.
+const EXACT_IMAGE_LIMIT: usize = 256;
+
+/// Flatten a contract into its finite point set, or `None` when it is not one.
+fn point_set(c: &Contract) -> Option<Vec<Contract>> {
+    match c {
+        Contract::Equals(_) => Some(vec![c.clone()]),
+        Contract::Union(a, b) => {
+            let mut out = point_set(a)?;
+            out.extend(point_set(b)?);
+            Some(out)
+        }
+        Contract::Bottom => Some(Vec::new()),
+        _ => None,
+    }
+}
+
+/// The **exact image** of `op` over finite point operands: apply the leaf rule to
+/// every combination and join. Exact by construction — each combination is a
+/// singleton application, and the join is their union. `None` when an operand is not
+/// a finite point set or the combination count exceeds [`EXACT_IMAGE_LIMIT`].
+fn exact_point_image(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Option<Contract> {
+    let sets: Vec<Vec<Contract>> = inputs.iter().map(point_set).collect::<Option<_>>()?;
+    let count: usize = sets.iter().map(Vec::len).product();
+    if count == 0 || count > EXACT_IMAGE_LIMIT || sets.iter().all(|s| s.len() <= 1) {
+        return None; // nothing to distribute, or too wide for this slice
+    }
+    let mut combos: Vec<Vec<Contract>> = vec![Vec::new()];
+    for set in &sets {
+        let mut next = Vec::with_capacity(combos.len() * set.len());
+        for prefix in &combos {
+            for point in set {
+                let mut t = prefix.clone();
+                t.push(point.clone());
+                next.push(t);
+            }
+        }
+        combos = next;
+    }
+    let mut out: Option<Contract> = None;
+    for tuple in combos {
+        let image = base_output(op, &tuple, interner);
+        out = Some(match out {
+            None => image,
+            Some(acc) => Contract::union(acc, image, interner),
+        });
+    }
+    out
+}
+
 fn analyze_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Contract {
+    if exact_images_active()
+        && let Some(exact) = exact_point_image(op, inputs, interner)
+    {
+        return exact;
+    }
     base_output(op, inputs, interner)
 }
 

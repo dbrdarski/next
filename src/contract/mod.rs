@@ -34,6 +34,7 @@ pub use expr::{
 };
 pub use length::{Len, Stamp, intersection_empty_by_length, len, restrict_len};
 pub use operation::{OpResult, OpSafety, analyze_operation};
+pub(crate) use operation::{exact_images_active, with_exact_images};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};
 pub use subcontract::{RecGroupGuard, Verdict, rec_group_guard, subcontract};
 
