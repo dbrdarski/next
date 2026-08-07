@@ -108,6 +108,16 @@ thread_local! {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct InstanceKey {
     shape: crate::analyzer::factcache::ShapeKey,
+    /// **The parameter names, spelled.** The `shape` is α-renamed, so `f = (n) => … n …`
+    /// and `f = (k) => … k …` share it — but a cached `Row`'s `result` is an expression
+    /// in the *original* spelling, and the lookup hands back this closure's parameter
+    /// beside those rows. Without this field the two collide: the analyzer binds `k`
+    /// while the cached rows reference `n`, nothing resolves, and a provable body reads
+    /// as unproven. Measured 2026-08-07 — one program's table answered another's query.
+    ///
+    /// A memo's key must determine its value; α-canonicalizing the rows themselves would
+    /// be the other way to close it, and is the better long-term shape.
+    params: Vec<String>,
     captures: Vec<crate::intern::Interned<Contract>>,
     named: Vec<(String, crate::intern::Interned<Contract>)>,
 }
@@ -144,6 +154,7 @@ pub(crate) fn instance_table(
     named.sort_by(|a, b| a.0.cmp(&b.0));
     let key = InstanceKey {
         shape: layer2.shape,
+        params: vec![param.clone()],
         captures,
         named,
     };
@@ -166,13 +177,6 @@ thread_local! {
     static INSTANCE_TABLES_MULTI: std::cell::RefCell<
         std::collections::HashMap<InstanceKey, std::rc::Rc<Vec<RowN>>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-/// Drop both RT-09 instance-table caches. Their keys carry interned handles, so they are
-/// facts of **one compilation** only — see [`crate::analyzer::factcache::clear`].
-pub(crate) fn clear_instance_tables() {
-    INSTANCE_TABLES.with(|c| c.borrow_mut().clear());
-    INSTANCE_TABLES_MULTI.with(|c| c.borrow_mut().clear());
 }
 
 /// The instantiated **multi-parameter** table of a closure instance, through the
@@ -206,6 +210,7 @@ pub(crate) fn instance_table_multi(
     named.sort_by(|a, b| a.0.cmp(&b.0));
     let key = InstanceKey {
         shape: layer2.shape,
+        params: params.clone(),
         captures,
         named,
     };

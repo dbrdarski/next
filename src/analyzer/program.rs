@@ -168,15 +168,6 @@ pub(crate) fn analyze_program_project(
     seed_cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> (ProgramVerdict, ContractEnv) {
-    // **One compilation, one memo table** [measured 2026-08-07]. The analyzer's memos key
-    // on interned handles, and this analysis brings its own interner — so entries left by a
-    // previous compilation can be *hit* by keys that mean something else here. Measured:
-    // a program that compiles alone was rejected when another ran before it on the same
-    // thread. These are per-compilation memos, never cross-compilation facts, so clearing
-    // is the correctness boundary and can only ever cost a cache hit.
-    super::factcache::clear();
-    super::region::clear_instance_tables();
-
     // Snapshot before `collect`: that pass installs every lambda into the shared
     // late-binding scope, but eager item analysis must still see module bindings
     // only after their source-order declaration.

@@ -360,22 +360,15 @@ pub(crate) fn record_settled(key: FactKey, verdict: BodySafety) {
     CACHE.with(|c| c.borrow_mut().insert(key, Some(verdict)));
 }
 
-/// Drop everything memoized for one compilation.
+/// TEMPORARY probe: (settled entries, in-progress markers, depth).
+/// Drop everything memoized, for test isolation or memory reclamation.
 ///
-/// **This is required for correctness, not an optimization** [measured 2026-08-07]. The
-/// earlier note here — "correctness does not depend on clearing: settled entries are facts
-/// of complete semantic keys" — is false across compilations. A key is built from interned
-/// contract handles, and each whole-program analysis has its **own interner**, so a key
-/// minted under one interner can equal a key minted under another while the values behind
-/// them are unrelated. Witness:
-///
-/// ```text
-/// cd = (n) => n == 0 ? 0 : cd(n - 1)            ; r = cd(5)
-/// cd = (k) => k == 0 ? 0 : cd(k - 1)            ; run = (n) => { cd(n) } ; r = run(5)
-/// ```
-///
-/// The second compiles **alone** and on a fresh thread, and is **rejected** when the first
-/// ran before it on the same thread. Analyzing one program changed the verdict of the next.
+/// Correctness does not depend on this: a `FactKey` determines its verdict. That claim
+/// used to be made here *and* be false one module over — `region`'s instance-table key
+/// erased parameter spelling while its cached rows kept it, so one program's table
+/// answered another's query. Keeping this note honest means the same discipline has to
+/// hold for every memo: **if clearing can change an answer, the key is incomplete.**
+#[allow(dead_code)]
 pub(crate) fn clear() {
     CACHE.with(|c| c.borrow_mut().clear());
     DEPTH.with(|d| *d.borrow_mut() = 0);
