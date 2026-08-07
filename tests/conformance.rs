@@ -3851,9 +3851,6 @@ route is unimplemented; the numeric drift-away certificate is the only one there
     /// world rather than re-reading it, so the region seed is stale: not world-decided,
     /// and grounding is unproven.
     #[test]
-    #[ignore = "GAP (measured 2026-08-07): the program is ACCEPTED with an empty \
-`grounding_demands`. §15 #13 expects grounding unproven, which under stamped P-1 must \
-reject. A non-terminating program compiles."]
     fn gr_13_a_carried_world_value_is_not_world_decided() {
         assert_unproven(
             "@effect loop = (m) => { loop(m) }\n@effect main = () => { loop(1) }\nmain()\n",
@@ -3863,8 +3860,6 @@ reject. A non-terminating program compiles."]
     /// **GR-16 — decorative branch.** `bit ? loop() : loop()` seeds nothing: both arms
     /// recurse, so the universal closure is empty and no world decision is available.
     #[test]
-    #[ignore = "GAP (measured 2026-08-07): ACCEPTED with empty `grounding_demands`; \
-§15 #16 expects unproven, which rejects under P-1."]
     fn gr_16_a_decorative_branch_seeds_nothing() {
         assert_unproven(
             "@effect loop = (b) => { b ? loop(b) : loop(b) }\n\
@@ -3913,11 +3908,10 @@ does not fire here. FALSE REJECTION."]
     /// **GR-30 — effect-world countDown.** [spec text, §15 #30] Ordinary proven
     /// completion; `WorldDecided` is **not** minted, so downstream stays unconditioned.
     #[test]
-    #[ignore = "GAP (measured 2026-08-07): §15 #30 expects ordinary proven completion. \
-`grounding_demands` is EMPTY — an effect-world recursion *with a base case* raises no \
-termination demand at all (one with no base case does). The program is still rejected, by \
-body safety. Caught only because the first draft of this row asserted `all(...)` over the \
-empty vector and passed vacuously."]
+    #[ignore = "GAP (grounding, re-measured 2026-08-07 after the lazy grounding walk): the \
+recursion is now adjudicated — before the walk `grounding_demands` was EMPTY and the row was \
+invisible. It returns `Unproven` where §15 #30 expects ordinary proven completion, so this is \
+now an honest coverage gap on an effect-world countDown rather than an unchecked program."]
     fn gr_30_an_effect_countdown_proves_without_a_world_label() {
         let src = "@effect countDown = (n) => { n == 0 ? 0 : countDown(n - 1) }\n\
                    @effect main = () => { countDown(5) }\n\
@@ -3995,6 +3989,89 @@ mod concat_over_tuples {
         assert_eq!(
             value("f = (l) => l ++ [9]\ng = (l) => [9] ++ l\n[f([1]), g([1])]"),
             "[[1, 9], [9, 1]]"
+        );
+    }
+}
+
+/// **Termination is adjudicated by walking, not by asking first [user, 2026-08-07].**
+/// `ground_demand` used to open with `if !is_recursive(callee) { return; }` — a seat whose
+/// callee sat on no cycle was never checked at all, so a diverging call one level down
+/// compiled. It now walks the callee's body under the domain that arrived and adjudicates
+/// what it actually calls, with the arguments those calls actually receive.
+mod termination_reaches_through_a_caller {
+    fn accepted(src: &str) -> bool {
+        next::oracle::check_source(src)
+            .expect("checks")
+            .0
+            .accepted()
+    }
+
+    const SPIN: &str = "spin = (k) => spin(k)\n";
+    const COUNTDOWN: &str = "countDown = (n) => n == 0 ? 0 : countDown(n - 1)\n";
+
+    /// A diverging call embedded in any larger expression is caught. Each of these
+    /// compiled before the walk.
+    #[test]
+    fn tr_01_a_diverging_call_one_level_down_is_caught() {
+        for wrapper in [
+            "wrap = (k) => [spin(k)]\nr = wrap(1)\n",
+            "wrap = (k) => { spin(k) }\nr = wrap(1)\n",
+            "wrap = (k) => { a = spin(k)\n a }\nr = wrap(1)\n",
+            "wrap = (k) => [1, spin(k), 3]\nr = wrap(1)\n",
+            "wrap = (k) => { v: spin(k) }\nr = wrap(1)\n",
+        ] {
+            assert!(
+                !accepted(&format!("{SPIN}{wrapper}")),
+                "a non-terminating program compiled:\n{SPIN}{wrapper}"
+            );
+        }
+    }
+
+    /// Act bodies are blocks by the grammar, so every act was in the hole. All three
+    /// worlds are covered now.
+    #[test]
+    fn tr_02_every_world_is_covered() {
+        for src in [
+            "spin = (k) => spin(k)\n@effect main = () => { spin(1) }\nmain()\n",
+            "@effect spin = (k) => { spin(k) }\n@effect main = () => { spin(1) }\nmain()\n",
+            "@state n = 0\n@mutate spin = () => { spin() }\n@effect main = () => { spin() }\nmain()\n",
+        ] {
+            assert!(!accepted(src), "a non-terminating program compiled:\n{src}");
+        }
+    }
+
+    /// **The arguments are carried down, and that is what keeps good programs compiling.**
+    /// Grounding `countDown` over every Number would fail — a negative or fractional start
+    /// never reaches 0 — so a blunt fix would reject all of these.
+    #[test]
+    fn tr_03_the_arriving_arguments_are_what_gets_checked() {
+        for wrapper in [
+            "run = (n) => [countDown(n)]\nr = run(5)\n",
+            "run = (n) => { countDown(n) }\nr = run(5)\n",
+            "run = (n) => countDown(n) + 1\nr = run(5)\n",
+            "outer = (n) => inner(n)\ninner = (n) => [countDown(n)]\nr = outer(5)\n",
+        ] {
+            assert!(
+                accepted(&format!("{COUNTDOWN}{wrapper}")),
+                "a terminating program was rejected:\n{COUNTDOWN}{wrapper}"
+            );
+        }
+    }
+
+    /// The refutation names the argument that actually arrived, not a synthesized one.
+    #[test]
+    fn tr_04_the_witness_is_the_argument_that_arrived() {
+        let (v, _) =
+            next::oracle::check_source(&format!("{SPIN}wrap = (k) => [spin(k)]\nr = wrap(7)\n"))
+                .expect("checks");
+        assert!(
+            v.grounding_demands.iter().any(|g| matches!(
+                &g.verdict,
+                next::analyzer::grounding::Verdict::Refuted(r)
+                    if r.witness == next::rational::Rational::from(7)
+            )),
+            "expected a refutation witnessed by 7: {:?}",
+            v.grounding_demands
         );
     }
 }

@@ -6877,3 +6877,63 @@ cycle. Both recorded as ignored rows naming the real gap.
 
 **Verification:** 473 lib passed / 1 ignored; 231 conformance passed / 13 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — Termination is adjudicated by walking, not by asking first [user ruling]
+
+**The bug.** `ground_demand` opened with
+
+```rust
+if !induction::is_recursive(callee) { return; }
+```
+
+`is_recursive` means *this callee is itself on a cycle*. So a seat whose callee merely
+**reached** a diverging function was never checked — nothing was recorded, and the program
+compiled. Measured, all five compiled before this change:
+
+```
+spin = (k) => spin(k)
+wrap = (k) => [spin(k)]     ; r = wrap(1)              → ACCEPTED
+wrap = (k) => { spin(k) }   ; r = wrap(1)              → ACCEPTED
+@effect main = () => { spin(1) }                       → ACCEPTED
+@effect spin = (k) => { spin(k) }                      → ACCEPTED
+@mutate spin = () => { spin() }                        → ACCEPTED
+```
+
+Only `wrap = (k) => spin(k)` — a body that is *exactly* a call — was caught. Act bodies are
+blocks by the grammar, so **every act was in the hole**: Principle 9 was effectively
+unenforced for any program with an effect entry point.
+
+I twice reported this smaller than it is — first as "the mutation world is uncovered," then as
+"act bodies aren't walked." Neither was right. It is not about acts and not about blocks: it
+is any diverging call sitting inside a larger expression, `[spin(k)]` included.
+
+**The fix [user]: don't ask in advance. Walk.** When the seat's callee is not itself on a
+cycle, analyze its body under the domain that arrived and adjudicate the calls it actually
+makes, with the arguments those calls actually receive. Recursion is what the walk arrives at
+again — the same late-resolution law the rest of the analyzer follows, and the shape
+`analyzer::safety` already uses for body safety.
+
+**Carrying the arguments down is what keeps good programs compiling.** The blunt alternative —
+grounding every reachable recursive function over `Top` — is sound but rejects
+`run = (n) => [countDown(n)]` at `run(5)`, because `countDown` over *every* Number cannot be
+proven (a negative or fractional start never reaches 0). Walking with the arriving domain
+grounds `countDown` at 5 and proves it.
+
+**No new machinery.** `outcome::analyze_instance_body` already carries a shape-repeat guard,
+so the descent needs no cycle detection of its own; anything on a cycle is adjudicated rather
+than descended through. The added depth bound is a backstop for a wrong call graph, not a
+limit.
+
+**Verified:** every case above now rejects; `run(5)`, `{ countDown(n) }`, `countDown(n) + 1`
+and a two-level wrapper chain all still compile; the refutation names the argument that
+arrived (`wrap(7)` → witness 7, not a synthesized value). Pinned as conformance
+`termination_reaches_through_a_caller` (TR-01…04).
+
+**Two Phase GR rows went green** — `GR-13` and `GR-16`, both non-terminating act programs that
+compiled — and are un-ignored. **`GR-30` moved from invisible to visible:** its
+`grounding_demands` was empty; it is now adjudicated and returns `Unproven` where §15 expects
+proven, so it is an honest coverage gap instead of an unchecked program. Its ignore reason was
+re-measured accordingly.
+
+**Verification:** 473 lib passed / 1 ignored; 237 conformance passed / 11 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

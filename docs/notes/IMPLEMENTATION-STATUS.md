@@ -494,6 +494,18 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Principle 9's coverage hole closed (2026-08-07) [author ruling] — a soundness fix.**
+`ground_demand` opened with `if !is_recursive(callee) { return; }`, so a seat whose callee
+merely *reached* a diverging function was never checked and the program compiled. Measured:
+`wrap = (k) => [spin(k)]`, the block form, and all three act worlds all **compiled**. Only a
+body that was exactly a call was caught; act bodies are blocks, so every act was in the hole.
+Fixed by late resolution — when the seat callee is not itself on a cycle, walk its body under
+the arriving domain and adjudicate what it actually calls, with the arguments those calls
+receive. Carrying arguments down is what keeps `run = (n) => [countDown(n)]` at `run(5)`
+accepted. No new machinery: `analyze_instance_body` already guards repeated shapes. Pinned as
+conformance `termination_reaches_through_a_caller`. Closed Phase GR rows GR-13 and GR-16;
+GR-30 moved from unchecked to an honest coverage gap. Detail in `DECISIONS.md` (2026-08-07).
+
 **`++` joins Tuples too (2026-08-07) [author ruling].** Two sequences of the same kind —
 Strings or Tuples, never mixed, never numeric. Tuple results route through
 `Contract::concat`, the same smart constructor `[...a, ...b]` uses, so segment structure
@@ -790,7 +802,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **231 passed, 0 failed, 13 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **237 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

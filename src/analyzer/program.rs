@@ -1069,6 +1069,11 @@ fn uncalled_unsafe_lints(
 /// never finishes from that written start); `Unproven` errors honestly (termination is
 /// not shown — the gray warn-and-compile tier is gone). Non-recursive callees carry no
 /// demand, and each `(callee, domain)` is adjudicated once.
+/// The walk's backstop. The spine between a seat and the cycle it reaches is a DAG —
+/// anything *on* a cycle is caught by the recursive branch and stops the descent — so
+/// this bounds only the pathological case where the call graph itself is wrong.
+const GROUND_WALK_DEPTH: u32 = 32;
+
 fn ground_demand(
     callee: &ValueRef,
     arguments: &[Contract],
@@ -1077,13 +1082,79 @@ fn ground_demand(
     grounding_demands: &mut Vec<GroundingDemand>,
     interner: &mut Interner,
 ) {
-    if !induction::is_recursive(callee) {
-        return;
-    }
+    ground_demand_within(
+        callee,
+        arguments,
+        cenv,
+        findings,
+        grounding_demands,
+        interner,
+        0,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ground_demand_within(
+    callee: &ValueRef,
+    arguments: &[Contract],
+    cenv: &ContractEnv,
+    findings: &mut Vec<Finding>,
+    grounding_demands: &mut Vec<GroundingDemand>,
+    interner: &mut Interner,
+    depth: u32,
+) {
     if grounding_demands
         .iter()
         .any(|g| g.callee == *callee && g.domain == arguments)
     {
+        return;
+    }
+
+    // **Late resolution.** A callee that is not itself on a cycle may still *reach* one,
+    // and asking "is this recursive?" up front and giving up on `no` is what let
+    //
+    //     spin = (k) => spin(k)
+    //     wrap = (k) => [spin(k)]
+    //     r = wrap(1)
+    //
+    // compile: the seat's demand names `wrap`, `wrap` is on no cycle, and nothing was
+    // ever checked. So walk the body under the domain that actually arrived and
+    // adjudicate the calls it actually makes, with the arguments they actually receive.
+    // Carrying the arguments down is what keeps `run = (n) => [countDown(n)]` at `run(5)`
+    // *accepted* — `countDown` is grounded at 5, not over every Number, where it could
+    // not be proven and a working program would start being rejected.
+    //
+    // The descent needs no cycle detection of its own: `analyze_instance_body` already
+    // stops on a repeated shape, and anything on a cycle is adjudicated here rather than
+    // descended through.
+    if !induction::is_recursive(callee) {
+        if depth >= GROUND_WALK_DEPTH {
+            return;
+        }
+        let Some(analysis) =
+            crate::analyzer::outcome::analyze_instance_body(callee, arguments, cenv, interner)
+        else {
+            return;
+        };
+        let reached: Vec<(ValueRef, Vec<Contract>)> = analysis
+            .safety_demands
+            .iter()
+            .filter_map(|demand| match demand {
+                SafetyDemand::Body(body) => Some((body.callee.clone(), body.arguments.clone())),
+                SafetyDemand::Operation(_) => None,
+            })
+            .collect();
+        for (inner, domain) in reached {
+            ground_demand_within(
+                &inner,
+                &domain,
+                cenv,
+                findings,
+                grounding_demands,
+                interner,
+                depth + 1,
+            );
+        }
         return;
     }
     let verdict = grounding::ground_args(callee, arguments, cenv, interner);
