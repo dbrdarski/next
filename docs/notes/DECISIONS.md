@@ -7036,3 +7036,56 @@ output from earlier in the session should be re-run before it is trusted.
 
 **Verification:** 473 lib passed / 1 ignored; 244 conformance passed / 11 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — Local groups are built once; and a note on how the last two probes were run
+
+**The defect, in code added earlier the same day.** `prebind_sibling_lambdas` builds a block's
+named lambdas as closure values. A block is analyzed several times in one pass — region rows,
+safety verification, return inference — and each pass rebuilt the group. Because a member's
+captures are self-referential, a fresh scope makes a fresh cycle rather than the same interned
+value: **four distinct addresses for one source function**, measured. That contradicts the
+identity law outright (same value = same pointer) and means a fact keyed on a callee says
+nothing about the next pass's copy of it. The module pre-pass never had this problem because it
+builds once, into the shared module scope.
+
+**Fixed** by constructing each group once, keyed on the whole input to the construction — which
+lambdas, under which names, over which captured values. Verified by probe: one construction,
+then hits at a single address.
+
+**It does not fix the body-safety gap**, and that is now a measured statement rather than an
+assumed one — see below.
+
+### Method correction [user]
+
+I first added this memo, checked whether the *verdict* changed, saw it had not, and reverted it
+as unmeasured. The author's question — *"Is the memo implemented correctly? Or you're just
+winging it, change something look if it'll fix the issue?"* — was right: **I had verified the
+outcome I wanted and not the mechanism I changed.** I never confirmed the memo made the
+addresses stable, so "instability is not the cause" was a conclusion I had not earned; the memo
+might have done nothing at all.
+
+Re-run with the mechanism instrumented, it does exactly what it claims — one BUILD, three HITs,
+one address — and body safety still fails. Same conclusion, now supported. The memo is kept,
+because it fixes an identity violation in code introduced this session, independent of the gap
+it failed to close.
+
+**The rule this session keeps re-teaching: verify the change did what it claims before reading
+what it changed.**
+
+### Gap B — what is actually known
+
+Two hypotheses tested and **both refuted**:
+
+1. *The local closure falls back to a `Solo` group identity.* No — it is
+   `Group siblings={"cd"}`, identical to the module-level one.
+2. *Unstable closure identity blocks fact settlement.* Real instability, genuinely fixed, and
+   body safety still fails.
+
+What remains measured and true: single parameter, grounding **Grounded**, only body safety
+fails; the sole variable is definition site; non-recursive locals prove fine, so it is local
+*and* recursive together. The untested mechanism is `safety::discover`/`settle` — whether the
+self-call resolves to the same node as the seed or spawns one that never converges.
+`covering_node` is the next place to look.
+
+**Verification:** 473 lib passed / 1 ignored; 244 conformance passed / 11 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

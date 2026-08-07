@@ -462,6 +462,38 @@ fn prebind_sibling_lambdas(m: &crate::ast::Match, body_env: &mut TypeEnv, intern
         }
     }
 
+    // **Build the group once.** A block is analyzed several times in one pass — region
+    // rows, safety verification, return inference — and rebuilding gives a *different*
+    // closure each time: a member's captures are self-referential, so a fresh scope makes
+    // a fresh cycle rather than the same interned value. Measured: four distinct addresses
+    // for one source function, which contradicts the identity law outright (same value =
+    // same pointer) and means facts keyed on a callee say nothing about the next pass's
+    // copy of it. Verified by probe: one construction, then hits at one address.
+    //
+    // The key is the whole input to the construction — which lambdas, under which names,
+    // over which captured values — so it determines what it returns.
+    let key = GroupKey {
+        siblings: siblings
+            .iter()
+            .map(|(n, l)| ((*n).clone(), (*l).clone()))
+            .collect(),
+        seeds: seeded
+            .iter()
+            .filter_map(|n| {
+                scope.lookup(n).and_then(|b| match b {
+                    crate::env::Binding::Value(v) => Some((n.clone(), v)),
+                    _ => None,
+                })
+            })
+            .collect(),
+    };
+    if let Some(hit) = LOCAL_GROUPS.with(|m| m.borrow().get(&key).cloned()) {
+        for (name, v) in hit {
+            body_env.insert(name, AnalysisContract::of_value(v));
+        }
+        return;
+    }
+
     // A sibling whose captures are still unresolved cannot become a value; leave it to
     // the ordinary path rather than binding something coarser than what is already there.
     let mut built: Vec<(String, ValueRef)> = Vec::new();
@@ -476,9 +508,25 @@ fn prebind_sibling_lambdas(m: &crate::ast::Match, body_env: &mut TypeEnv, intern
         scope.define(name, crate::env::Binding::Value(v.clone()));
         built.push(((*name).clone(), v));
     }
+    LOCAL_GROUPS.with(|m| m.borrow_mut().insert(key, built.clone()));
     for (name, v) in built {
         body_env.insert(name, AnalysisContract::of_value(v));
     }
+}
+
+/// The complete input to a local group's construction.
+#[derive(PartialEq, Eq, Hash)]
+struct GroupKey {
+    siblings: Vec<(String, crate::ast::Lambda)>,
+    seeds: Vec<(String, ValueRef)>,
+}
+
+thread_local! {
+    /// One construction per distinct group. Not an optimization: rebuilding changes
+    /// identity, and identity is what every fact is keyed on.
+    static LOCAL_GROUPS: std::cell::RefCell<
+        std::collections::HashMap<GroupKey, Vec<(String, ValueRef)>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// The world a function body owns, independent of the world where its closure was
