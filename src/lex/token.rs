@@ -78,6 +78,7 @@ pub enum TokenKind {
     Gt,               // >
     Ge,               // >=
     Plus,             // +
+    PlusPlus,         // ++  (String concatenation — never numeric)
     Minus,            // -
     Star,             // *
     Slash,            // /

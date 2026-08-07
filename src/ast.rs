@@ -140,6 +140,10 @@ pub enum Field {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PrimOp {
     Add,
+    /// `++` — String concatenation. Deliberately **not** `Add`: overloading one
+    /// operator across the numeric and String rails made the frozen arithmetic
+    /// rewrite set unsound (commutative reordering reverses concatenation).
+    Concat,
     Sub,
     Mul,
     Div,

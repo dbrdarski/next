@@ -109,6 +109,7 @@ pub enum BinOp {
     Gt,
     Ge,
     Add,
+    Concat, // ++ (Strings only)
     Sub,
     Mul,
     Div,

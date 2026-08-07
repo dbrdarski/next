@@ -6434,3 +6434,48 @@ discipline.
 
 **Verification:** records only; 468 lib / 199 conformance / 10 machinery unchanged; manifest
 19/19 OK.
+
+## 2026-08-07 — `++` is String concatenation: the rails are spelled apart [author ruling]
+
+**The bug that forced it, found by wiring the normalization phase.** Moving μ §8's frozen
+arithmetic slice into the phase changed evaluation — `s = "x"; t = s ++ "y"` produced
+`"yx"` — because commutative reordering treats `+` as commutative and `+` was *also* String
+concatenation, which does not commute. Reverting the wiring did **not** remove the defect:
+`poly` already runs in `canon.rs`, so on the shipped implementation
+
+```
+g = (s) => "y" + s ; g("x")                        →  "yx"    correct
+f = (s) => s + "y" ; g = (s) => "y" + s ; g("x")   →  "xy"    WRONG
+```
+
+Defining an unrelated function changed what `g` computed: the two bodies canonicalized to
+one shape and interned to one value, so `g` *became* `f`. H-05 itself was reachable the same
+way — `(s) => s + s` and `(s) => 2 * s` compared **equal**, though the second traps on a
+String. §8's master law ("preserve the produced value for all inputs") did not hold on the
+String rail.
+
+**The ruling [user, 2026-08-07]: change concatenation to `++`.** One operator per rail, so
+the arithmetic rewrites are sound by construction and **the frozen list needs no amendment**.
+
+**What landed.** A `PlusPlus` token (maximal munch over `+`); `BinOp::Concat` at the additive
+precedence level; `PrimOp::Concat` in the kernel; `eval_concat` (two Strings, else trap) with
+`eval_add` reduced to numeric addition; and in the rulebook, `Add` joins `Sub`/`Mul`/`Div`/
+`Rem` as Number-demanding while `Concat` inherits the String rail — including T2.5's
+grapheme-seam bound (`concat_image`, the `[left.lo, hi_a + hi_b]` law), which was always a
+concatenation rule sitting under `Add`'s name. Templates were unaffected: they are their own
+kernel node, never desugared through `+`.
+
+**Verified:** `"x" ++ "y"` → `"xy"`; `"a" + "b"` traps; `1 ++ 2` traps; and the regression is
+closed — `f == g` is now **false**, `f("x")` is `"xy"`, `g("x")` is `"yx"`, and defining `f`
+no longer changes `g`. Pinned as conformance `concat_operator`, including the H-05 row.
+
+**Four existing tests moved with the ruling**, each because its premise was the overload: two
+string-seam rows now name `PrimOp::Concat`; a divergence row spells its append `++`; and a
+factory row's assertion quoted the old overloaded message text.
+
+**Normative discrepancy, logged not reconciled.** The grammar and compendium still describe
+`+` as numeric-or-String and do not list `++`; both are manifest-protected and were not
+edited. The author's ruling supersedes them in effect.
+
+**Verification:** 468 lib passed / 1 ignored; 202 conformance passed / 3 ignored; 10
+machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

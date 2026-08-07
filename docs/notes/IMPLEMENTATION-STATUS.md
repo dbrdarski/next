@@ -494,6 +494,17 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**`++` for String concatenation (2026-08-07) [author ruling] — closes a shipped
+unsoundness.** Wiring the normalization phase exposed it: μ §8's commutative reordering
+treats `+` as commutative, but `+` also concatenated, so `s + "y"` and `"y" + s`
+canonicalized to one shape and interned to one value — **defining one function changed what
+another computed**, and `(s) => s + s` compared equal to `(s) => 2 * s`. The rails are now
+separate operators: `PlusPlus` token, `PrimOp::Concat`, `eval_concat`, and the String rail
+(with T2.5's grapheme-seam bound) moved off `Add`, which is Number-demanding like the other
+arithmetic. The frozen rewrite list needed no amendment. Pinned as conformance
+`concat_operator`. The grammar and compendium still describe the overload and are
+manifest-protected — discrepancy logged. Detail in `DECISIONS.md` (2026-08-07).
+
 **Recovery order:** memo-key completeness, ruled Indeterminate-form/Numeric semantics, typed
 executable program demands, ordinary-application fact wiring, the structured completion witness /
 typed seat boundary (T2.2), application-path unification (T2.3), and the existing `where` return
@@ -712,7 +723,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 | Suite | Result |
 |---|---|
 | `cargo test --lib` | **468 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **199 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
+| `cargo test --test conformance` | **202 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |

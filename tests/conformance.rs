@@ -1795,8 +1795,7 @@ mod factory_instances {
         .0;
         assert!(!v.accepted());
         assert!(
-            v.errors()
-                .any(|e| e.message.contains("two Numbers or two Strings")),
+            v.errors().any(|e| e.message.contains("Number operand")),
             "{:#?}",
             v.findings
         );
@@ -2185,6 +2184,74 @@ mod where_on_products {
         .expect("parses and checks")
         .0;
         assert!(v.accepted(), "{:#?}", v.findings);
+    }
+}
+
+// **`++` is String concatenation; `+` is numeric** [author ruling, 2026-08-07]. One token
+// across both rails made μ §8's frozen arithmetic slice unsound: commutative reordering
+// reverses concatenation, and `x + x → 2 * x` turns a producing computation into a trap.
+// Splitting the operators restores the slice's master law — "preserve the produced value
+// for all inputs" — without amending the rewrite list.
+mod concat_operator {
+    /// `++` concatenates; `+` on Strings now traps.
+    #[test]
+    fn co_the_two_rails_are_separate() {
+        assert_eq!(
+            next::oracle::run_source("r = \"x\" ++ \"y\"\nr\n")
+                .unwrap()
+                .0
+                .as_string_lossy()
+                .unwrap(),
+            "xy"
+        );
+        assert!(
+            next::oracle::run_source("r = \"a\" + \"b\"\nr\n").is_err(),
+            "`+` no longer accepts Strings"
+        );
+        assert!(
+            next::oracle::run_source("r = 1 ++ 2\nr\n").is_err(),
+            "`++` no longer accepts Numbers"
+        );
+    }
+
+    /// **The regression this closes.** With one overloaded `+`, `s + "y"` and `"y" + s`
+    /// canonicalized to the same shape and interned to one value — so defining an
+    /// unrelated function changed what another computed: `g("x")` returned `"xy"` when
+    /// `f` was defined above it, and `"yx"` when it was not.
+    #[test]
+    fn co_concatenation_order_survives_canonicalization() {
+        let src =
+            "f = (s) => s ++ \"y\"\ng = (s) => \"y\" ++ s\nr = [f == g, f(\"x\"), g(\"x\")]\nr\n";
+        let out = format!("{:?}", next::oracle::run_source(src).unwrap().0);
+        assert!(
+            out.contains("false"),
+            "the two functions must not be equal: {out}"
+        );
+        let alone = next::oracle::run_source("g = (s) => \"y\" ++ s\nr = g(\"x\")\nr\n")
+            .unwrap()
+            .0
+            .as_string_lossy()
+            .unwrap();
+        let after = next::oracle::run_source(
+            "f = (s) => s ++ \"y\"\ng = (s) => \"y\" ++ s\nr = g(\"x\")\nr\n",
+        )
+        .unwrap()
+        .0
+        .as_string_lossy()
+        .unwrap();
+        assert_eq!(alone, "yx");
+        assert_eq!(
+            after, alone,
+            "defining `f` must not change what `g` computes"
+        );
+    }
+
+    /// `s ++ s` is not `2 * s` — the H-05 rewrite cannot reach the String rail now.
+    #[test]
+    fn co_h05_cannot_reach_strings() {
+        let src = "h = (s) => s ++ s\nd = (s) => 2 * s\nr = [h == d, h(\"a\")]\nr\n";
+        let out = format!("{:?}", next::oracle::run_source(src).unwrap().0);
+        assert!(out.contains("false"), "distinct functions: {out}");
     }
 }
 

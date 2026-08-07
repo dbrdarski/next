@@ -128,19 +128,18 @@ fn demand_proven(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> bo
             _ => false,
         },
 
-        // `+` is numeric addition or String concatenation.
-        PrimOp::Add => match inputs {
+        // `++` concatenates Strings, and only Strings.
+        PrimOp::Concat => match inputs {
             [a, b] => {
                 let string = Contract::Kind(Kind::String);
-                (is_number(a, interner) && is_number(b, interner))
-                    || (sub(a, &string, interner) && sub(b, &string, interner))
+                sub(a, &string, interner) && sub(b, &string, interner)
             }
             _ => false,
         },
 
-        // `-` `*` `/` `%` require Number operands. Division/remainder stay total
+        // `+` `-` `*` `/` `%` require Number operands. Division/remainder stay total
         // within that domain: a zero divisor constructs an Indeterminate.
-        PrimOp::Sub | PrimOp::Mul | PrimOp::Div | PrimOp::Rem => match inputs {
+        PrimOp::Add | PrimOp::Sub | PrimOp::Mul | PrimOp::Div | PrimOp::Rem => match inputs {
             [a, b] => is_number(a, interner) && is_number(b, interner),
             _ => false,
         },
@@ -300,15 +299,12 @@ fn analyze_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> C
 /// abstraction is the total fallback.
 fn base_output(op: PrimOp, inputs: &[Contract], interner: &mut Interner) -> Contract {
     match op {
-        // `+` is numeric addition or String concatenation.
-        PrimOp::Add => match inputs {
-            [a, b] => {
-                if let (Some(x), Some(y)) = (num_abs(a), num_abs(b)) {
-                    return numeric::to_contract(numeric::abs_add(&x, &y), interner);
-                }
-                string_or_mixed(a, b, interner)
-            }
-            _ => Contract::Kind(Kind::Number),
+        // `+` is numeric addition only; `++` carries the String rail and its
+        // grapheme-seam bound (T2.5's §5 lift).
+        PrimOp::Add => binary_numeric(inputs, interner, numeric::abs_add),
+        PrimOp::Concat => match inputs {
+            [a, b] => string_or_mixed(a, b, interner),
+            _ => Contract::Kind(Kind::String),
         },
         PrimOp::Sub => binary_numeric(inputs, interner, numeric::abs_sub),
         PrimOp::Mul => match inputs {

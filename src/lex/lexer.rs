@@ -302,7 +302,18 @@ impl Lexer {
             ':' => Colon,
             '<' => Lt,
             '>' => Gt,
-            '+' => Plus,
+            '+' => {
+                // Maximal munch: `++` is String concatenation, a separate operator from
+                // numeric `+` [author, 2026-08-07]. Overloading one token across the two
+                // rails made the arithmetic `==`-slice unsound — commutative reordering
+                // reversed concatenation — so the rails are now spelled apart.
+                if self.peek() == Some('+') {
+                    self.bump();
+                    PlusPlus
+                } else {
+                    Plus
+                }
+            }
             '-' => Minus,
             '*' => Star,
             '/' => Slash,

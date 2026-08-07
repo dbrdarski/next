@@ -438,6 +438,7 @@ impl<'a> Desugarer<'a> {
                     BinOp::Gt => PrimOp::Gt,
                     BinOp::Ge => PrimOp::Ge,
                     BinOp::Add => PrimOp::Add,
+                    BinOp::Concat => PrimOp::Concat,
                     BinOp::Sub => PrimOp::Sub,
                     BinOp::Mul => PrimOp::Mul,
                     BinOp::Div => PrimOp::Div,

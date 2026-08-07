@@ -751,6 +751,7 @@ impl Parser {
         loop {
             let op = match self.kind() {
                 TokenKind::Plus => BinOp::Add,
+                TokenKind::PlusPlus => BinOp::Concat,
                 TokenKind::Minus => BinOp::Sub,
                 _ => break,
             };

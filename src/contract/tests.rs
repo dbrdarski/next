@@ -2788,13 +2788,13 @@ mod string_length {
 
     #[test]
     fn concat_floor_is_the_left_operands_minimum_only() {
-        // `"ab" + s` is at least 2 graphemes — merges only reduce toward the left
-        // count. `s + "ab"` promises nothing: a leading joiner on the right can be
+        // `"ab" ++ s` is at least 2 graphemes — merges only reduce toward the left
+        // count. `s ++ "ab"` promises nothing: a leading joiner on the right can be
         // absorbed into the left's trailing state, so count(b) is not a floor.
         let mut i = Interner::new();
         let ab = Contract::Equals(i.string("ab"));
         let string = Contract::Kind(Kind::String);
-        let left = analyze_operation(PrimOp::Add, &[ab.clone(), string.clone()], &mut i).output;
+        let left = analyze_operation(PrimOp::Concat, &[ab.clone(), string.clone()], &mut i).output;
         let ge2 = Contract::intersection(
             Contract::GreaterEq(2.into()),
             Contract::Mod {
@@ -2815,7 +2815,7 @@ mod string_length {
             Verdict::Proven
         ));
 
-        let right = analyze_operation(PrimOp::Add, &[string.clone(), ab], &mut i).output;
+        let right = analyze_operation(PrimOp::Concat, &[string.clone(), ab], &mut i).output;
         assert_eq!(right, string, "no floor may be claimed from the right");
     }
 
@@ -2827,7 +2827,7 @@ mod string_length {
         let mut i = Interner::new();
         let woman = Contract::Equals(i.string("\u{1F469}"));
         let zwj_fire = Contract::Equals(i.string("\u{200D}\u{1F692}"));
-        let out = analyze_operation(PrimOp::Add, &[woman, zwj_fire], &mut i).output;
+        let out = analyze_operation(PrimOp::Concat, &[woman, zwj_fire], &mut i).output;
         let composed = i.string("\u{1F469}\u{200D}\u{1F692}");
         assert!(out.contains(&composed), "{out:?}");
     }

@@ -580,7 +580,10 @@ impl<'a> Oracle<'a> {
                 let n = self.demand_number(&vals[0])?;
                 self.interner.number(-n)
             }
-            PrimOp::Add => return self.eval_add(&vals[0], &vals[1]).map(Outcome::Produced),
+            PrimOp::Add => self.num_binop(vals, |a, b| a + b)?,
+            PrimOp::Concat => {
+                return self.eval_concat(&vals[0], &vals[1]).map(Outcome::Produced);
+            }
             PrimOp::Sub => self.num_binop(vals, |a, b| a - b)?,
             PrimOp::Mul => self.num_binop(vals, |a, b| a * b)?,
             PrimOp::Div => return self.eval_div(&vals[0], &vals[1]).map(Outcome::Produced),
@@ -620,21 +623,17 @@ impl<'a> Oracle<'a> {
         Ok(self.interner.number(f(a, b)))
     }
 
-    /// `+`: numeric addition, or string concatenation when both are Strings.
-    fn eval_add(&mut self, a: &ValueRef, b: &ValueRef) -> Result<ValueRef, Trap> {
+    /// `++`: String concatenation, and only that. Numeric `+` is a separate operator
+    /// [author, 2026-08-07] — one token across both rails made commutative reordering
+    /// unsound, since concatenation does not commute.
+    fn eval_concat(&mut self, a: &ValueRef, b: &ValueRef) -> Result<ValueRef, Trap> {
         match (a.data(), b.data()) {
-            (ValueData::Number(x), ValueData::Number(y)) => {
-                Ok(self.interner.number(x.clone() + y.clone()))
-            }
             (ValueData::Str(x), ValueData::Str(y)) => {
                 let mut units = x.clone();
                 units.extend_from_slice(y);
                 Ok(self.interner.string_units(units))
             }
-            _ => Self::trap(
-                TrapClass::OperationSafety,
-                "`+` requires two Numbers or two Strings",
-            ),
+            _ => Self::trap(TrapClass::OperationSafety, "`++` requires two Strings"),
         }
     }
 

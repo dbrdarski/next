@@ -1157,7 +1157,7 @@ mod tests {
     /// never a manufactured verdict; refutations need represented witnesses.
     #[test]
     fn a_divergent_recursion_is_not_falsely_refuted_from_a_sampled_top() {
-        let (v, _) = check("g = (n) => n == 0 ? \"a\" : g(n / 2) + \"s\"\nx = g(3)\n");
+        let (v, _) = check("g = (n) => n == 0 ? \"a\" : g(n / 2) ++ \"s\"\nx = g(3)\n");
         assert!(!v.accepted(), "safety stays unproven and blocks the seat");
         let refuted = v
             .executable_demands
