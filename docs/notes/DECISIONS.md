@@ -6830,10 +6830,9 @@ the hand-written row did not.
 
 ### Blocked rows, recorded not written
 
-`GR-03A` and `GR-22B` state **tuple** witnesses (`[3,7,2]`, `[7]`). `Refutation.witness` is a
-`Rational`, so a sequence witness cannot be represented at all — a structural gap, not a
-coverage one. Both specimens are also written with `++` over tuples, which is String-only
-here. Remaining unwritten: #4, #15, #18, #21, #27, #29 — the world-classifier and
+`GR-03A` and `GR-22B` expect refutations from **GR-11's closed-orbit route, which is not
+implemented** — the numeric drift-away certificate is the only refutation producer. Remaining
+unwritten: #4, #15, #18, #21, #27, #29 — the world-classifier and
 mixed-callee families.
 
 ### One open implementation question found while writing them
@@ -6868,10 +6867,13 @@ conformance `concat_over_tuples` (CT-01…04).
 **Two GR specimens unblocked, and one still isn't.** `GR-29` now runs and **passes**: the
 `f↔g` cycle whose prefix `stall([7])` is outside the exact-chain license correctly mints *no*
 refutation — one of the three rows the design wrote specifically to forbid a false divergence
-claim. `GR-22B` and `GR-03A` still cannot be asserted: §15 states **sequence** witnesses
-(`[7]`, `[3,7,2]`) and `Refutation.witness` is a `Rational`, which cannot hold one. That is a
-structural gap in the refutation type, separate from the exact-chain candidate not firing for
-tuple states. Both recorded as ignored rows naming the two gaps.
+claim. `GR-22B` and `GR-03A` still cannot be asserted, and the cause is **an unimplemented route,
+not a type**: GR-11's closed-orbit refutation — a required-dependency cycle with its proven
+completing prefix — was never built. `drift_away`, the numeric drift-away certificate, is the
+only refutation producer there is, and it is reached only when the domain is an exact number.
+`Refutation.witness` being a `Rational` is a *consequence* of that, not a constraint; widening
+it would produce a witness with `drift` and `missed_bases` beside it that mean nothing for a
+cycle. Both recorded as ignored rows naming the real gap.
 
 **Verification:** 473 lib passed / 1 ignored; 231 conformance passed / 13 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.

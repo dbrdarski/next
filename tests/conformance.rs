@@ -3809,10 +3809,11 @@ proven. FALSE REJECTION."]
     /// Required dependencies are `f([])`, which grounds and completes, then `f([7])` —
     /// the cycle. §15 expects **refuted**, witness `[7]`.
     #[test]
-    #[ignore = "BLOCKED, structural (measured 2026-08-07): returns Unproven. §15 #22b \
-expects Refuted with witness `[7]` — a *sequence* witness — but `Refutation.witness` is a \
-`Rational` and cannot represent one. The exact-chain candidate (§4) does not fire for tuple \
-states either. Two separate gaps; the witness type is the harder one."]
+    #[ignore = "GAP (grounding, measured 2026-08-07): returns Unproven; §15 #22b expects \
+Refuted with witness `[7]`. **GR-11's closed-orbit refutation route is not implemented.** \
+The only refutation producer is `drift_away`, the numeric drift-away certificate, reached \
+only when the domain is an exact number. The second certificate — a required-dependency \
+cycle with its proven completing prefix — was never built."]
     fn gr_22b_a_required_dependency_cycle_is_refuted() {
         assert_refuted_with(
             "f = (l) => l == [] ? [] : f(l[1...]) ++ f(l)\nr = f([7])\n",
@@ -3836,9 +3837,9 @@ states either. Two separate gaps; the witness type is the harder one."]
     /// **GR-03A — the 7-literal, with the merge value present.** §15 expects refuted, the
     /// written argument being the witness.
     #[test]
-    #[ignore = "BLOCKED, structural (measured 2026-08-07): returns Unproven; §15 #3a \
-expects Refuted with witness `[3,7,2]`, a sequence witness `Refutation.witness` \
-(a `Rational`) cannot hold. Same blocker as GR-22B."]
+    #[ignore = "GAP (grounding, measured 2026-08-07): returns Unproven; §15 #3a expects \
+Refuted with witness `[3,7,2]`. Same cause as GR-22B — GR-11's closed-orbit refutation \
+route is unimplemented; the numeric drift-away certificate is the only one there is."]
     fn gr_03a_the_seven_literal_is_refuted() {
         assert_refuted_with(
             "f = (l) => l == [] ? 0 : (l[0] == 7 ? f(l) : f(l[1...]))\nr = f([3, 7, 2])\n",

@@ -498,9 +498,9 @@ the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS
 Strings or Tuples, never mixed, never numeric. Tuple results route through
 `Contract::concat`, the same smart constructor `[...a, ...b]` uses, so segment structure
 survives. Pinned as conformance `concat_over_tuples`. It unblocked `GR-29`, which now passes —
-the row asserting no false cycle refutation is minted from an unestablished path. `GR-22B` and
-`GR-03A` remain blocked on a *structural* gap: §15 states sequence witnesses and
-`Refutation.witness` is a `Rational`. Detail in `DECISIONS.md` (2026-08-07).
+the row asserting no false cycle refutation is minted from an unestablished path. `GR-22B` and `GR-03A` remain blocked on an
+**unimplemented refutation route**: GR-11's closed orbit was never built, so `drift_away` — the
+numeric drift-away certificate — is the only refutation producer. Detail in `DECISIONS.md` (2026-08-07).
 
 **Phase GR started (2026-08-07) — 23 specimen rows, 15 green, 8 measured gaps.** Conformance
 `grounding_specimens`, one test per Grounding Specification §15 specimen, with the P-1 flip
