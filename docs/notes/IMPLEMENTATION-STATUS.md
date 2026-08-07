@@ -494,6 +494,16 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
+**Rejected-program residue measured (2026-08-07).** With anchoring inert in pure code,
+normalization reorders operands of programs the analyzer rejects, and 44 of 84 constructed
+two-operand chains change **trap class** (`null.x + {a: 1}.b` → `NullReceiver` raw,
+`AbsentField` normalized). My earlier "narrow, all `OperationSafety`" estimate was wrong.
+What holds: all sixteen §6 suite rows are stable (single trapping site, nothing to reorder) and
+are now pinned; and the analyzer reports **every** independent failure, so no compile-time
+error is hidden. What is given up: the oracle no longer runs a *rejected* program strictly
+left-to-right. Option left open for the author — normalize for analysis/identity only and let
+the oracle evaluate the raw form. Detail in `DECISIONS.md` (2026-08-07).
+
 **Anchoring narrowed to act bodies (2026-08-07) [author rulings].** Principle 9 is stamped —
 unproven termination is an **error**, already implemented and verified, though the termination
 doc still reads "warns and compiles" and is manifest-protected (discrepancy logged). Purity is
@@ -748,7 +758,7 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **472 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
 | `cargo test --test conformance` | **206 passed, 0 failed, 3 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
 | `cargo test --test machinery_gate` | **10 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |

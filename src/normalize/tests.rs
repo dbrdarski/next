@@ -210,6 +210,44 @@ fn normalization_preserves_divergence_at_every_budget() {
     }
 }
 
+/// **The residue check (DECISIONS 2026-08-07).** Anchoring is inert in pure code,
+/// so normalization may reorder the operands of a program the analyzer *rejects*
+/// — and the entire §6 trap-class suite consists of such programs.
+///
+/// **Measured result:** every §6 suite row is stable, because each is a single
+/// trapping site with nothing to reorder. What is *not* stable is a chain with
+/// two operands that trap in **different** classes: there, reordering changes
+/// which class fires. That is recorded as a known boundary in DECISIONS, not a
+/// silent one — this row pins the half that holds.
+#[test]
+fn normalization_preserves_the_trap_class_of_every_suite_row() {
+    const SUITE: &[&str] = &[
+        "f()\nf = () => 1",         // T-01 unbound-evaluation
+        "x := 1",                   // T-02 world-admission
+        "x = (5 :: { 1 => 2 })\nx", // T-03 expecting-seat
+        "((a, b) => a)(1)",         // T-04 argument-obligation
+        "1 + \"a\"",                // T-05 operation-safety
+        "(1/0) < 3",                // T-06 undischarged-indeterminate
+        "null.x",                   // T-07 null-receiver
+        "{a: 1}.b",                 // T-08 absent-field
+        "[1, 2][5]",                // T-09 index-bounds
+        "[1, 2][-3]",
+        "5 ? 1 : 2",              // T-10 tested-seat
+        "1 :: { _ when 5 => 2 }", // T-10a
+        "[a, b] = [1]\na",        // T-11 refuted-binding
+        "[...5]",                 // T-12 spread-kind
+        "{ ...[1] }",
+        "{ [5]: 1 }", // T-13 computed-key
+    ];
+    for src in SUITE {
+        assert_eq!(
+            observe(src, false, Some(20_000)),
+            observe(src, true, Some(20_000)),
+            "normalization changed the trap class of a §6 row:\n{src}"
+        );
+    }
+}
+
 /// **The wiring pin.** Normalization is evaluation-preserving *by construction*, so no
 /// amount of running programs can tell whether the pipeline actually applies it — unwire
 /// it and every other row in this file still passes. This row observes the **form**

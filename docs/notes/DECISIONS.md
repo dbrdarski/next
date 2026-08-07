@@ -6652,3 +6652,54 @@ is later made illegal.
 
 **Verification:** 472 lib passed / 1 ignored; 206 conformance passed / 3 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-07 — The rejected-program residue, measured
+
+I logged this residue the same day as "narrow, since arithmetic operands all trap
+`OperationSafety` regardless of which one fired." **That estimate was wrong**, and the sweep
+says so. Operands that trap are mostly *not* arithmetic — `null.x`, `{a: 1}.b`, `[1, 2][5]`,
+an unbound name, a non-Boolean tested seat, a short call — and those trap in **distinct**
+classes, so reordering changes which class fires. Of 84 constructed two-operand chains,
+**44 changed class** under normalization, e.g.
+
+```
+null.x + {a: 1}.b     raw → NullReceiver      normalized → AbsentField
+"a" * 2 + null.x      raw → OperationSafety   normalized → NullReceiver
+```
+
+### What actually holds, and what it costs
+
+**Every §6 suite row is stable** — all sixteen — because each is a single trapping site with
+nothing to reorder. Pinned as `normalization_preserves_the_trap_class_of_every_suite_row`, so
+a future row with two trapping operands cannot be added silently.
+
+**The compile-time surface loses nothing.** Measured: the analyzer reports *every* independent
+failure, not just the first.
+
+```
+null.x + {a: 1}.b   → analyzer errors: ["AbsentField", "NullReceiver"]
+null.x + [1, 2][5]  → analyzer errors: ["IndexBounds", "NullReceiver"]
+```
+
+Both classes surface either way. No error is hidden, and the program is rejected regardless.
+
+**And the two spellings now agree with each other:** `null.x + {a: 1}.b` and
+`{a: 1}.b + null.x` produce the *same* trap, where before they produced different ones. Same
+normal form, same behaviour — more consistent than the source-order rule, not less.
+
+### What is genuinely given up
+
+The oracle no longer evaluates a **rejected** program strictly left to right. That is a
+truth-source purity matter — CLAUDE.md's rule 2 asks the oracle to implement the semantics
+exactly, and §6's ordering is part of it — with no user-visible consequence I can find, since
+rejected programs do not run and the analyzer reports everything anyway.
+
+**The option, if the author wants exactness restored:** have `lower_program` normalize for
+analysis and identity while the oracle evaluates the raw desugared form. Cheap, and it makes
+the oracle exact for every program. The cost is that it re-splits the two forms A12 deliberately
+unified, and the analyzer would then reason about a form the oracle does not run — for accepted
+programs they agree, so the split is invisible there, which is also the argument that it buys
+little. **Not taken; left as the author's call. `// [ask-author]`.**
+
+**Verification:** 473 lib passed / 1 ignored; 206 conformance passed / 3 ignored; 10 machinery
+gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
