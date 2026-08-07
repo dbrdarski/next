@@ -649,6 +649,7 @@ noted so no one implements a phantom; correcting them is an author/design action
 | **`IMPLEMENTATION-STATUS.md`** (this file) | **CURRENT** | The implementation-status authority |
 | The 19 manifest'd specs (§1) | **CURRENT** | Design authority; staleness recorded above, not edited |
 | `DECISIONS.md` | **CURRENT** as an append-only provenance log | Newest dated entry wins per topic; **individual older entries are HISTORICAL** and must not be read as present-tense guidance |
+| `SNAPSHOT-2026-08-07.md` | **CURRENT (subordinate)** | A session record for 2026-08-07: what was resolved, the 11-row gap map, and the decisions waiting on the author. Reasoning lives in `DECISIONS.md`; this file wins on any conflict |
 | `NEXT-completion-plan.md` | **CURRENT (subordinate)** | Tier structure and the owed/liveness synthesis stand; where it conflicts with this file, this file wins |
 | `PROGRESS.md` | **SUPERSEDED** | Snapshot, doc-sync rows, "§6 next increments", and the increment-ledger detail are stale (they describe the retired app-induction-tail plan, cite `SAFETY_STACK` which does not exist, and list 10 analyzer modules where there are 13). Retained as history |
 | `OwedItems.md` | **SUPERSEDED as guidance; CURRENT as an owed catalogue** | §0.1 is the later framing; §0.1-history and the "swap is DONE / LANDED" passages are **HISTORICAL**. Item lists remain useful; ordering/priority claims do not bind |
