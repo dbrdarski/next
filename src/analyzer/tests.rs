@@ -3185,7 +3185,7 @@ mod region {
     use super::{arm, konst, matchx, name, prim};
     use crate::analyzer::region::{region_table, select};
     use crate::ast::{Bind, BindTarget, Expr, MatchItem, Pat, PrimOp};
-    use crate::contract::{Contract, ContractEnv};
+    use crate::contract::{Contract, ContractEnv, Kind};
     use crate::interner::Interner;
     use crate::rational::Rational;
 
@@ -3227,6 +3227,36 @@ mod region {
         assert!(
             matches!(rows[1].region, Contract::Top) && rows[1].exact,
             "row1 Top exact"
+        );
+    }
+
+    #[test]
+    fn represented_string_equality_is_an_exact_region() {
+        let mut i = Interner::new();
+        let empty = i.string("");
+        let one = i.integer(1);
+        let two = i.integer(2);
+        let body = matchx(
+            None,
+            vec![
+                arm(
+                    None,
+                    Some(prim(PrimOp::Eq, vec![name("s"), konst(empty.clone())])),
+                    konst(one),
+                ),
+                arm(None, None, konst(two)),
+            ],
+        );
+        let rows = region_table(&body, "s", &cenv(), &mut i);
+        assert!(
+            matches!(&rows[0].region, Contract::Equals(value) if value == &empty) && rows[0].exact,
+            "pointer equality against a represented String is an exact region"
+        );
+        let selected = select(&rows, &Contract::Kind(Kind::String), &mut i);
+        assert_eq!(selected.len(), 2);
+        assert!(
+            crate::contract::disjoint(&selected[1].region, &Contract::Equals(empty)),
+            "the else arm's ordinary remainder excludes the empty String"
         );
     }
 

@@ -7724,3 +7724,46 @@ GR-20 is the sole remaining measured Phase-GR coverage target. `// [ask-author]`
 serial order; 13 machinery gates passed; clippy `-D warnings`, formatting, and `git diff --check`
 clean; all 19 canonical-manifest entries verify (the manifest parser retains its pre-existing
 one-line formatting warning).
+
+## 2026-08-08 — GR-20 release: the recursive remainder exposes segment progress
+
+**Numbering.** GR-20 is specimen 20; its governing rule is GR-08's derived segment facts, not
+GR-20's refutation-form rule. The program is `s == "" ? 0 : f(s[1...])` at `f("abc")`.
+
+**Missing read path.** Region-table case (a) treated only numeric singleton comparisons as exact,
+even though runtime equality is universal pointer equality. Consequently `s == ""` was opaque,
+the else arm had no proven non-empty input region, and the clamped slice exposed no positive
+progress floor. Grounding correctly declined on the information it had; the missing information
+belonged to ordinary region/operation analysis.
+
+**Ordinary facts restored.** Equality/inequality against any represented singleton now forms an
+exact `Equals(value)` region (numeric equality retains its existing point-Range spelling; ordered
+comparisons remain numeric-only). The ordered remainder walk therefore supplies
+`Kind(String) ∖ Equals("")` to the recursive arm. GR-08 reads that effective region through the
+existing length derivation; exclusion of the unique empty sequence proves length ≥ 1. For a
+direct `s[k...]` tail slice with an integer `k > 0`, a proven input length ≥ `k` makes clamp
+arithmetic exact on that arm: `len(next) = len(current) − k`; when only non-emptiness is known,
+clamping still exposes the floor δ = 1. This is a positive Progress floor, not a recursive walk
+or a synthesized counter.
+
+**Fact closure.** The segment certificate proposes the ordinary String/Tuple Kind carrier as the
+containing orbit domain. Open slice analysis now proves that a sliceable receiver with integer
+bounds preserves that carrier; slices remain clamped-total on their window. Safety, completion,
+and return facts then settle through the existing shared graph. No runtime call is memoized or
+executed by analysis.
+
+**Negative boundary.** The candidate requires one direct-self Pure function, one String/Tuple
+argument, definite exact row arrival, a direct tail slice, and a proven positive lower bound.
+An unguarded `f(s[1...])` declines because empty input yields zero progress; `s[0...]`, mutation,
+uncertain rows, mutual control locations, and unproved slice amounts also decline. General
+nested-helper segment exposure remains ordinary-analysis breadth. Unit pins cover represented
+String equality, the positive carrier, and all three principal negative shapes.
+
+**Status.** GR-20 is unignored. Every measured Phase-GR specimen row is live; the three remaining
+conformance ignores are unrelated author-gated adoption/world-runner rows. `// [ask-author]`:
+none.
+
+**Verification:** 492 lib passed / 1 ignored; 262 conformance passed / 3 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings`, formatting, and `git diff --check`
+clean; all 19 canonical-manifest entries verify (the manifest parser retains its pre-existing
+one-line formatting warning).

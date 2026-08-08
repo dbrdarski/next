@@ -4089,11 +4089,9 @@ mod grounding_specimens {
         );
     }
 
-    /// **GR-20 — split at a letter.** A nested non-recursive helper derives the segment
-    /// length; §15 expects the segment facts to close by variable drift.
+    /// **GR-20 — split at a letter.** The recursive arm's non-empty input region and
+    /// direct tail slice derive the segment length drop; §15 expects variable drift to close.
     #[test]
-    #[ignore = "GAP (measured 2026-08-07): returns Unproven. GR-08's derived-segment read \
-does not fire here. FALSE REJECTION."]
     fn gr_20_derived_segment_facts_close_by_variable_drift() {
         assert_proven("f = (s) => s == \"\" ? 0 : f(s[1...])\nr = f(\"abc\")\n");
     }

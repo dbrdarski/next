@@ -1305,9 +1305,10 @@ fn analyze_template(
 /// on the window but still demand a sliceable receiver and integer bounds.
 ///
 /// Closed accesses are constant-folded through the oracle (`eval_expr`) for an
-/// exact verdict. Field access is fully reasoned on open receivers; index/slice
-/// *bounds* reasoning needs the tuple-length family (**C§17 owed**, see
-/// `OwedItems.md`), so open index/slice out-of-fold cases are warnings.
+/// exact verdict. Field access is fully reasoned on open receivers. Open slices
+/// prove the receiver's String/Tuple carrier and integer bounds (the clamped window
+/// is total); GR-08 separately reads direct tail-slice progress. General index
+/// bounds and wider slice-length transfer remain tuple-family breadth.
 fn analyze_access(
     target: &Expr,
     form: &AccessForm,
@@ -1404,7 +1405,9 @@ fn analyze_access(
     let contract = match form {
         AccessForm::Field(name) => analyze_field(&tc, name, total, &mut findings, interner),
         AccessForm::Index(_) => analyze_index(&tc, total, &mut findings, interner),
-        AccessForm::Slice { .. } => analyze_slice(&tc, &mut findings, interner),
+        AccessForm::Slice { .. } => {
+            analyze_slice(&tc, lo_c.as_ref(), hi_c.as_ref(), &mut findings, interner)
+        }
     };
     Analysis::produced_with_safety(contract, findings, safety_demands)
 }
@@ -1598,7 +1601,16 @@ fn analyze_index(
     Contract::Top
 }
 
-fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Interner) -> Contract {
+fn analyze_slice(
+    tc: &Contract,
+    lo: Option<&Contract>,
+    hi: Option<&Contract>,
+    findings: &mut Vec<Finding>,
+    interner: &mut Interner,
+) -> Contract {
+    if matches!(tc, Contract::Bottom) {
+        return Contract::Bottom;
+    }
     // Slices trap on a non-sliceable receiver (operation-safety); null is not
     // totalized. Provably-null ⇒ always traps.
     if matches!(
@@ -1611,6 +1623,33 @@ fn analyze_slice(tc: &Contract, findings: &mut Vec<Finding>, interner: &mut Inte
             message: "slice of a null receiver".into(),
         });
         return Contract::Bottom;
+    }
+
+    let string = Contract::Kind(Kind::String);
+    let tuple = Contract::Kind(Kind::Tuple);
+    let output = if matches!(subcontract(tc, &string, interner), Verdict::Proven) {
+        Some(string.clone())
+    } else if matches!(subcontract(tc, &tuple, interner), Verdict::Proven) {
+        Some(tuple.clone())
+    } else {
+        let sliceable = Contract::union(string, tuple, interner);
+        matches!(subcontract(tc, &sliceable, interner), Verdict::Proven).then_some(sliceable)
+    };
+    let integers = Contract::Mod {
+        n: num_bigint::BigInt::from(1),
+        r: num_bigint::BigInt::from(0),
+    };
+    let bounds_are_integers = [lo, hi]
+        .into_iter()
+        .flatten()
+        .all(|bound| matches!(subcontract(bound, &integers, interner), Verdict::Proven));
+    if let Some(output) = output
+        && bounds_are_integers
+    {
+        // The window itself is clamped-total. Kind is preserved; the grounding
+        // segment candidate separately reads the relational length drop from the
+        // recursive arm's effective input region.
+        return output;
     }
     findings.push(Finding {
         class: TrapClass::OperationSafety,

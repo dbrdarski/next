@@ -214,8 +214,8 @@ honestly pinned at T1.4; T2.2 has since released 3.
   direct-self fragment and GR-11's corresponding required-dependency closed orbit are live),
   **§8 WorldDecided classifier**, multi-param mutual. The constant single-parameter oscillator
   composition is live. The Phase-GR specimen battery is live; GR-08, GR-19, GR-26, GR-30,
-  GR-03A/B and GR-22B were released on 2026-08-08, leaving GR-20 as its one measured ignored
-  coverage target.
+  GR-03A/B, GR-20 and GR-22B were released on 2026-08-08. Every measured Phase-GR row is live;
+  general nested-helper segment exposure remains ordinary-analysis breadth.
 - **T3.3 μ §5/§6 runtime canonicalizer — identity + Pure closure conversion LANDED
   2026-08-08:** universal construction interning and group windows are live; MU-18,
   FE-03/04/05/06 and H-05 are green. Invocation now executes canonical code over a positional

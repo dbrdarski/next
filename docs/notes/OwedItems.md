@@ -261,8 +261,9 @@ built in code, §16 proofs owed**.
   lengths `0..k-1`), `restrict_len` structural facts (GR-08), nonlinear measures,
   variable/multi-parameter ProgressRange cycle composition, the remaining §4 mutual-control and
   body-constant exact-chain extensions (the strict-decreasing direct-self fragment and its GR-11
-  required-dependency closed orbit are live as GR-03A/B and GR-22B), GR-20's derived segment
-  facts, §8 WorldDecided; multi-param mutual;
+  required-dependency closed orbit are live as GR-03A/B and GR-22B), general nested-helper
+  segment exposure beyond GR-20's live direct tail-slice route, §8 WorldDecided; multi-param
+  mutual;
   §13/§16 discharge (exact-chain bound theorem; lex joint-settlement; multigraph decomposition
   lemma; per-rule soundness; GR-27 preservation check). Grounding is wired at executable and
   declared-domain seats; remaining items are coverage/discharge, not a missing consumer.

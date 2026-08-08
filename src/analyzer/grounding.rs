@@ -60,6 +60,11 @@
 //! `GE(0) ∧ Mod(1, 0)`) strictly decreases and is bounded below by 0 — terminates
 //! regardless of the base, no domain needed.
 //!
+//! **Derived segment descent (GR-08)** — the ordered region walk can establish that a
+//! recursive String/Tuple arm excludes the empty sequence. A direct tail slice `s[k...]`
+//! then reads its positive length drop from the ordinary length contract and clamp law;
+//! the shared fact graph closes over the sequence Kind carrier. No recursive call is run.
+//!
 //! **Mutual recursion (G-8, §5 GR-07)** — over a shared single-parameter constant-drift
 //! measure, every edge-labelled simple cycle of the completed reachable call multigraph is
 //! enumerated and its oriented progress is composed. Every cycle must have strictly positive
@@ -217,6 +222,7 @@ pub fn ground(
         Some(Verdict::Grounded)
     ) || measure_descent(callee)
         || lex_descent(callee)
+        || segment_descent(callee, domain, cenv, interner)
         || structural_descent(callee)
         || exact_tuple_chain(callee, domain, cenv, interner)
         || mutual_descent(callee)
@@ -1054,6 +1060,25 @@ pub(crate) fn derived_orbit_domain(
     {
         return group_orbit_domain(callee, &group, start, interner)
             .or_else(|| composed_group_orbit_domain(callee, &group, start, interner));
+    }
+
+    // GR-08's sequence orbit: the segment certificate proves that every
+    // recursive successor stays in the same String/Tuple carrier and strictly
+    // decreases its natural length. The carrier is therefore the ordinary
+    // containing fact domain proposed to safety/completion/return induction.
+    if segment_descent(callee, start, cenv, interner) {
+        if matches!(
+            subcontract(start, &Contract::Kind(Kind::String), interner),
+            Sub::Proven
+        ) {
+            return Some(Contract::Kind(Kind::String));
+        }
+        if matches!(
+            subcontract(start, &Contract::Kind(Kind::Tuple), interner),
+            Sub::Proven
+        ) {
+            return Some(Contract::Kind(Kind::Tuple));
+        }
     }
 
     // The **ascending-stop zone envelope** — the derived domain of the grid-§6 closed
@@ -2436,6 +2461,138 @@ fn injective_seqs(items: &[usize]) -> Vec<Vec<usize>> {
     out
 }
 
+// ── Derived segment descent (GR-08) ───────────────────────────────────────────
+
+/// GR-08's derived-segment candidate. The ordinary ordered region walk supplies
+/// each recursive arm's effective input contract. A direct tail slice `s[k...]`
+/// contributes progress when the existing length derivation proves either length
+/// at least `k` (drop `k`) or exclusion of the unique empty sequence (clamping still
+/// drops at least one). No function is evaluated and no quantity is synthesized.
+///
+/// This increment covers direct-self Pure recursion over one String or Tuple
+/// parameter. A nested helper can expose the same fact through ordinary analysis
+/// later; unsupported transfer shapes remain candidate-local `Unproven`.
+fn segment_descent(
+    callee: &ValueRef,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    let Some(closure) = callee.as_closure() else {
+        return false;
+    };
+    if !matches!(closure.lambda.act_kind, ActKind::Pure) {
+        return false;
+    }
+    let Some(param) = single_param(&closure.lambda.params) else {
+        return false;
+    };
+
+    // Prove one stable sequence carrier from the arrived domain. Working over the
+    // whole carrier, rather than only the written point, establishes the recursive
+    // invariant for every successor.
+    let (carrier, empty) = if matches!(
+        subcontract(domain, &Contract::Kind(Kind::String), interner),
+        Sub::Proven
+    ) {
+        (
+            Contract::Kind(Kind::String),
+            Contract::Equals(interner.string("")),
+        )
+    } else if matches!(
+        subcontract(domain, &Contract::Kind(Kind::Tuple), interner),
+        Sub::Proven
+    ) {
+        (
+            Contract::Kind(Kind::Tuple),
+            Contract::Equals(interner.tuple(Vec::new())),
+        )
+    } else {
+        return false;
+    };
+
+    // Mutual control locations require GR-07/Q composition; this candidate owns
+    // only a direct-self control node.
+    if reachable_closures(callee.clone())
+        .iter()
+        .any(|member| member != callee && callee_targets(member).contains(callee))
+    {
+        return false;
+    }
+
+    let Some((_, rows)) = grounding_instance_table(callee, cenv, interner) else {
+        return false;
+    };
+    let group = crate::contract::RecGroup::new([]);
+    let mut saw_recursive = false;
+    let mut valid = true;
+    crate::analyzer::region::walk_rows(&rows, &carrier, interner, |interner, visit| {
+        if visit.empty || !valid {
+            return;
+        }
+        let mut calls = Vec::new();
+        collect_self_calls(&visit.row.result, &closure, callee, &mut calls);
+        if calls.is_empty() {
+            return;
+        }
+        saw_recursive = true;
+        if !visit.definite_prior || !visit.row.exact {
+            valid = false;
+            return;
+        }
+        valid = calls.iter().all(|arguments| {
+            let [argument] = arguments.as_slice() else {
+                return false;
+            };
+            tail_slice_has_positive_progress(
+                argument,
+                &param,
+                &visit.candidate,
+                &empty,
+                &group,
+                interner,
+            )
+        });
+    });
+    saw_recursive && valid
+}
+
+fn tail_slice_has_positive_progress(
+    argument: &Expr,
+    param: &str,
+    input: &Contract,
+    empty: &Contract,
+    group: &crate::contract::RecGroup,
+    interner: &mut Interner,
+) -> bool {
+    let Expr::Access {
+        target,
+        form: AccessForm::Slice {
+            lo: Some(lo),
+            hi: None,
+        },
+        ..
+    } = argument
+    else {
+        return false;
+    };
+    if !is_param(target, param) {
+        return false;
+    }
+    let Some(amount) = const_num(lo) else {
+        return false;
+    };
+    if !amount.is_integer() || amount <= Rational::from(0) {
+        return false;
+    }
+
+    let lengths = crate::contract::length::len(group, input, interner).contract;
+    matches!(
+        subcontract(&lengths, &Contract::GreaterEq(amount.clone()), interner),
+        Sub::Proven
+    ) || crate::contract::disjoint(input, empty)
+}
+
 // ── Structural descent (§2b) ──────────────────────────────────────────────────
 
 /// **Structural descent** (§2b) — recursion that **peels** a tuple parameter. The body
@@ -3471,6 +3628,46 @@ mod tests {
         assert_eq!(
             ground(&chain, &start, &ContractEnv::new(), &mut i),
             Verdict::Grounded
+        );
+    }
+
+    #[test]
+    fn derived_segment_descent_reads_the_recursive_input_region() {
+        let mut i = Interner::new();
+        let split = f("f = (s) => s == \"\" ? 0 : f(s[1...])\nf", &mut i);
+        let start = Contract::Equals(i.string("abc"));
+        assert_eq!(
+            ground(&split, &start, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
+        assert_eq!(
+            derived_orbit_domain(&split, &start, &ContractEnv::new(), &mut i),
+            Some(Contract::Kind(Kind::String)),
+            "the segment certificate proposes the ordinary String fact carrier"
+        );
+
+        let unguarded = f("f = (s) => f(s[1...])\nf", &mut i);
+        assert_eq!(
+            ground(&unguarded, &start, &ContractEnv::new(), &mut i),
+            Verdict::Unproven,
+            "at empty, the clamped slice has zero progress"
+        );
+
+        let zero = f("f = (s) => s == \"\" ? 0 : f(s[0...])\nf", &mut i);
+        assert_eq!(
+            ground(&zero, &start, &ContractEnv::new(), &mut i),
+            Verdict::Unproven,
+            "a zero-width tail slice exposes no positive floor"
+        );
+
+        let mutating = f(
+            "@state n = 0\n@mutate f = (s) => { n := n + 1\n s == \"\" ? 0 : f(s[1...]) }\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&mutating, &start, &ContractEnv::new(), &mut i),
+            Verdict::Unproven,
+            "GR-08's v1 segment carrier is Pure/snapshot-stable"
         );
     }
 

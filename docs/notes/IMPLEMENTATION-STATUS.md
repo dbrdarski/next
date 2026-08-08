@@ -692,8 +692,8 @@ annotated singleton value in the oracle-backed primitive fold, so `[] == []` and
 select exact Match paths instead of falling back to `Boolean`. The same canonical singleton
 normalization is used by fact-domain coverage, integrating the chain with the shared interner
 rather than creating a chain-local identity table. GR-03B is live. The following GR-11 increment
-reuses this graph for the cyclic ending; GR-20 remains the separate derived-segment gap. Detail in
-`DECISIONS.md` (2026-08-08).
+reuses this graph for the cyclic ending; the later GR-20 increment closes the measured
+derived-segment row. Detail in `DECISIONS.md` (2026-08-08).
 
 **GR-11 exact closed-orbit refutation released (2026-08-08).** The direct-self exact tuple graph
 now keeps GR-09's ordered strict dependencies. A reached back edge refutes only when every earlier
@@ -708,8 +708,22 @@ self-loops. GR-22B records `f([])` as the completing prefix before the `[7] → 
 with written witness `[7]`. This is finite symbolic graph discovery over pooled root leaves, not
 runtime execution or a recursive termination solver. The landed scope remains one direct-self
 Pure function over one flat exact tuple; mutual control factor Q, body-constant insertion, and
-the wider GR-10 exact-chain license remain conservative `Unproven`. GR-20 is now the only ignored
-measured Phase-GR coverage target. Detail in `DECISIONS.md` (2026-08-08).
+the wider GR-10 exact-chain license remain conservative `Unproven`. The subsequent GR-20 release
+leaves no measured Phase-GR coverage row ignored. Detail in `DECISIONS.md` (2026-08-08).
+
+**GR-20 derived segment descent released (2026-08-08).** Equality against any represented
+singleton is now an exact region-table row, not a numeric-only privilege. For
+`s == "" ? 0 : f(s[1...])`, the ordinary ordered remainder therefore gives the recursive arm
+`String ∖ Equals("")`. GR-08 reads that arm's ordinary length fact, sees the direct tail slice's
+one-cluster positive progress, and proposes `Kind(String)` as the containing fact domain. Open
+slice analysis proves an integer-bounded slice preserves String/Tuple kind, allowing the shared
+safety/completion/return graph to close over that carrier. Nothing executes the recursive call.
+
+The candidate is intentionally direct-self, one-parameter, Pure String/Tuple recursion. An
+unguarded clamped slice (zero progress at empty), `s[0...]`, mutation, uncertain row arrival,
+mutual control locations, and an unproved lower bound all remain `Unproven`. General nested-helper
+segment exposure remains ordinary-analysis breadth, not a hidden count/search mechanism. GR-20 is
+live; every measured Phase-GR specimen row is now active. Detail in `DECISIONS.md` (2026-08-08).
 
 **Consequence suppression (2026-08-07) [author ruling].** An operation whose operand already
 produced an Error now records nothing of its own and yields `Bottom` — it cannot run, so it has
@@ -832,7 +846,7 @@ noted so no one implements a phantom; correcting them is an author/design action
 |---|---|---|
 | `analyzer::bodycheck` and its reaching core | **DELETED 2026-08-01** | The known-unsound forward reaching-domain checker is no longer compiled or present. `machinery_gate` bans the file, module identifier, and `check_recursive_body` / `reachable_rows` / `grow` identifiers from `src/` |
 | Safety-unproven policy | **RESOLVED 2026-08-01 — RULED [user]: it blocks** | `BodySafety::Unproven` and `OpSafety::Unproven` remain typed through `Analysis` and program records. Their fact-layer diagnostics are advisory; executable/declared consumers add the unsuppressible Error after retaining the typed verdict. Completion (`MayFallThrough`) remains a different judgment class (application §1.6) |
-| `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **WIRED AT PROGRAM SEATS 2026-08-03** under the stamped Principle 9 [user: gray is dead — unproven grounding is an error, never a warning]. Every distinct (recursive callee, argument domain) at an executable seat, and every `where` over its declared domain, adjudicates a typed `GroundingDemand`; `Refuted` errors with its canonical root witness, `Unproven` errors honestly | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Constant single-parameter mutual SCCs check every edge-labelled simple cycle and close member-specific safety orbits (GR-08). The direct-self exact tuple graph proves strict descent and carries GR-11 required-dependency closed-orbit evidence. Remaining *coverage* gaps include peel-k/restrict-len, variable and multi-parameter ProgressRange composition, mutual/body-constant exact-chain extensions, and GR-20's derived segment facts — incompleteness (→ `Unproven`), which under the stamp **rejects**; broadening coverage is precision work with a live consumer |
+| `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **WIRED AT PROGRAM SEATS 2026-08-03** under the stamped Principle 9 [user: gray is dead — unproven grounding is an error, never a warning]. Every distinct (recursive callee, argument domain) at an executable seat, and every `where` over its declared domain, adjudicates a typed `GroundingDemand`; `Refuted` errors with its canonical root witness, `Unproven` errors honestly | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Constant single-parameter mutual SCCs check every edge-labelled simple cycle and close member-specific safety orbits (GR-08). The direct-self exact tuple graph proves strict descent and carries GR-11 required-dependency closed-orbit evidence; GR-08 direct tail-segment descent closes over an ordinary String/Tuple fact carrier. Remaining *coverage* gaps include peel-k/restrict-len, variable and multi-parameter ProgressRange composition, nested-helper segment exposure, and mutual/body-constant exact-chain extensions — incompleteness (→ `Unproven`), which under the stamp **rejects**; broadening coverage is precision work with a live consumer |
 | `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT AND WIRED 2026-08-01; CARRIED/NUMERIC-PAYLOAD DOMAINS 2026-08-08** | Ordinary known-closure application consumes `BodySafe(instance, I)`. Discovery closure → SCC collapse → reverse-topological → one joint vector pass; dependencies proved by the outer pass are memoized under their own complete keys. `countDown`, invariant multi-argument descent, GR-19's operation-verified numeric payload, and a divergent self-loop prove. An unsupported uncovered repeated-shape chain remains **Unproven**, never a manufactured refutation; general call-edge-derived domains remain separately owed. |
 | `oracle::mu` — recursive construction windows | **WIRED; IDENTITY-FREE [user, 2026-08-08]** | The reference-SCC walk only schedules allocation and joint closure during module/block evaluation. The serialized group artifact, μ-ref serializer, and slot-permutation search are deleted. Canonical code plus the closed positional value graph owns identity; Algorithm-B exact verification remains inside recursive value interning. |
 | `oracle::canon` — per-lambda shape | **BUILT, wired** | α-renaming (`$0`), capture slots (`@cap0`), polynomial NF. This is what `make_closure` (`eval.rs:239`) actually calls |
@@ -874,9 +888,10 @@ Resolved by the 2026-08-01 wiring:
 - Direct tests of the deleted checker were removed with it. They tested implementation internals,
   not stable language IDs; their live application/graph counterparts remain.
 
-Conformance holds 4 `#[ignore]`s: 1 measured Phase-GR coverage gap and 3 author-gated
-adoption/world-runner rows. GR-19, GR-26, the split A-VER union-boundary/Indeterminate row,
-module/linking rows, M-04, MU-18, GR-30, GR-08, GR-03A, GR-03B and GR-22B are live and green.
+Conformance holds 3 `#[ignore]`s, all author-gated adoption/world-runner rows; no measured
+Phase-GR implementation row remains ignored. GR-19, GR-20, GR-26, the split A-VER
+union-boundary/Indeterminate row, module/linking rows, M-04, MU-18, GR-30, GR-08, GR-03A,
+GR-03B and GR-22B are live and green.
 
 ---
 
@@ -992,8 +1007,8 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **490 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **261 passed, 0 failed, 4 ignored** in default and serial order (1 measured Phase-GR gap + 3 adoption/world-runner gates) |
+| `cargo test --lib` | **492 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **262 passed, 0 failed, 3 ignored** in default and serial order (the 3 adoption/world-runner gates) |
 | `cargo test --test machinery_gate` | **13 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
@@ -1002,6 +1017,6 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
 417 / 421 / 424 / 426 / 438 / 439 / 447 / 452 / 455 / 244 / 250 / 473) are
 **HISTORICAL**; this table is current.
-**Green ≠ complete:** the deferred finite-product extension's acceptance twin, one Phase-GR
-coverage target, three author-gated conformance rows, and the staged work recorded elsewhere in
+**Green ≠ complete:** the deferred finite-product extension's acceptance twin, three author-gated
+conformance rows, and the staged work recorded elsewhere in
 this file remain open.

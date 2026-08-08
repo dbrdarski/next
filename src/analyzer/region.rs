@@ -22,6 +22,7 @@ use crate::ast::{BindingRef, Expr, Match, MatchItem, Pat, PatElem, PatField, Pri
 use crate::contract::{Contract, ContractEnv, Verdict, disjoint, subcontract};
 use crate::interner::Interner;
 use crate::rational::Rational;
+use crate::value::ValueRef;
 
 /// A region-table row (§1): where an input may go, its exactness, and the arm's result.
 #[derive(Clone, Debug)]
@@ -395,11 +396,11 @@ pub(crate) fn regionalize_guard_in(
     {
         return (region, true);
     }
-    // The leaf reading, after capture substitution. Case (a): the operand is a
-    // literal, or a capture whose contract is a singleton number — exact. Case (b):
-    // a capture with a bounded numeric contract — the finite operator transfer,
-    // never exact. Anything else — including a sibling parameter (case (c)) — is
-    // the total case-(d) fallback.
+    // The leaf reading, after capture substitution. Case (a): equality against any
+    // represented singleton is exact; ordered comparisons additionally require a
+    // numeric singleton. Case (b): a bounded non-singleton numeric capture feeds the
+    // finite operator transfer, never exact. Anything else — including a sibling
+    // parameter (case (c)) — is the total case-(d) fallback.
     let (operand, flipped) = if is_param(&args[0], param) {
         (guard_operand(&args[1], caps, i), false)
     } else if is_param(&args[1], param) {
@@ -419,8 +420,8 @@ pub(crate) fn regionalize_guard_in(
 
 /// A guard operand after capture substitution (the regionalization law).
 enum GuardOperand {
-    /// A literal, or a capture proven to be exactly this number — case (a).
-    Const(Rational),
+    /// A literal, or a capture proven to be exactly this represented value — case (a).
+    Const(ValueRef),
     /// A capture with a (possibly bounded) numeric contract — case (b).
     Bounded(Contract),
     /// Everything else — cases (c)/(d).
@@ -428,17 +429,15 @@ enum GuardOperand {
 }
 
 fn guard_operand(e: &Expr, caps: &TypeEnv, i: &mut Interner) -> GuardOperand {
-    if let Some(v) = const_num(e) {
-        return GuardOperand::Const(v);
+    if let Expr::Const(value) = e {
+        return GuardOperand::Const(value.clone());
     }
     if let Expr::Ref(Ref::Immutable(BindingRef::Name(name))) = e
         && let Some(annotated) = caps.get(name)
     {
         let c = annotated.erase(i);
-        if let Contract::Equals(v) = &c
-            && let Some(n) = v.as_number()
-        {
-            return GuardOperand::Const(n.clone());
+        if let Contract::Equals(value) = &c {
+            return GuardOperand::Const(value.clone());
         }
         return GuardOperand::Bounded(c);
     }
@@ -530,15 +529,18 @@ fn integer_test(a: &Expr, b: &Expr, param: &str) -> Option<Contract> {
 
 /// The region of `param OP v` (or `v OP param` when `flipped`), for the supported
 /// direct comparison forms; `None` for an unsupported operator (→ case d).
-fn cmp_region(op: PrimOp, v: &Rational, flipped: bool, i: &mut Interner) -> Option<Contract> {
-    let eq = Contract::Range(v.clone(), v.clone());
+fn cmp_region(op: PrimOp, v: &ValueRef, flipped: bool, i: &mut Interner) -> Option<Contract> {
+    let eq = v
+        .as_number()
+        .map(|number| Contract::Range(number.clone(), number.clone()))
+        .unwrap_or_else(|| Contract::Equals(v.clone()));
     Some(match (op, flipped) {
         (PrimOp::Eq, _) => eq,
         (PrimOp::Ne, _) => Contract::difference(Contract::Top, eq, i),
-        (PrimOp::Lt, false) | (PrimOp::Gt, true) => Contract::Less(v.clone()),
-        (PrimOp::Le, false) | (PrimOp::Ge, true) => Contract::LessEq(v.clone()),
-        (PrimOp::Gt, false) | (PrimOp::Lt, true) => Contract::Greater(v.clone()),
-        (PrimOp::Ge, false) | (PrimOp::Le, true) => Contract::GreaterEq(v.clone()),
+        (PrimOp::Lt, false) | (PrimOp::Gt, true) => Contract::Less(v.as_number()?.clone()),
+        (PrimOp::Le, false) | (PrimOp::Ge, true) => Contract::LessEq(v.as_number()?.clone()),
+        (PrimOp::Gt, false) | (PrimOp::Lt, true) => Contract::Greater(v.as_number()?.clone()),
+        (PrimOp::Ge, false) | (PrimOp::Le, true) => Contract::GreaterEq(v.as_number()?.clone()),
         _ => return None,
     })
 }
