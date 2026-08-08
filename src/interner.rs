@@ -10,13 +10,18 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::Lambda;
 use crate::contract::Contract;
-use crate::env::{Binding, SlotId};
-use crate::intern::{EnumInterner, Interned};
+use crate::env::{Binding, Env, SlotId};
+use crate::intern::{EnumInterner, Interned, MemoInterner};
 use crate::rational::Rational;
-use crate::value::{FnValue, IndeterminateForm, NativeRef, RecordEntry, ValueData, ValueRef};
+use crate::value::{
+    Closure, ClosureCapture, FnValue, IndeterminateForm, NativeRef, RecordEntry, RecursiveGroup,
+    ValueData, ValueRef,
+};
 
-/// Owns every interned value for a program. Not `Send`/`Sync` (uses `Rc`); the
-/// oracle is sequential (semantics §3).
+/// Owns one semantic identity universe: canonical values, implementation terms, and
+/// immutable facts about them. Callers may deliberately share an `Interner` across source
+/// checks; the convenience entry points currently create a fresh owner. Not `Send`/`Sync`
+/// (uses `Rc`); the oracle is sequential (semantics §3).
 #[derive(Default)]
 pub struct Interner {
     table: HashMap<ValueData, ValueRef>,
@@ -30,13 +35,17 @@ pub struct Interner {
     function_buckets: HashMap<usize, Vec<ValueRef>>,
     /// Provisional construction handles that collapsed when their graph closed.
     /// Constructor inputs are normalized through this map before hash-consing.
-    redirects: HashMap<usize, ValueRef>,
+    redirects: HashMap<usize, (std::rc::Weak<ValueData>, ValueRef)>,
     /// Hash-consing for the tagged data the implementation is built from — canonical
     /// function code and contracts today, NEXT's enum values when that feature lands
     /// (author ruling 2026-08-01: NEXT enums map to Rust enums directly, so one mechanism
     /// serves both). These are not NEXT values, so they cannot live in `table`; they need
     /// the same treatment for the same reason — identity must be a pointer test.
     enums: EnumInterner,
+    /// Immutable analyzer knowledge, indexed by interned queries from `enums`.
+    /// Keeping both under one owner prevents a memo from mixing identities minted by
+    /// unrelated semantic universes; a future globally shared owner needs no key change.
+    memos: MemoInterner,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -49,6 +58,13 @@ struct FunctionKey {
 enum FunctionCapture {
     Value(ValueRef),
     Location(SlotId),
+}
+
+struct GroupContext {
+    env: Env,
+    indices: HashMap<String, usize>,
+    addresses: HashMap<usize, usize>,
+    group: std::rc::Rc<RecursiveGroup>,
 }
 
 impl Interner {
@@ -75,6 +91,49 @@ impl Interner {
         value: T,
     ) -> Interned<T> {
         self.enums.intern(value)
+    }
+
+    /// Intern a complete immutable memo query.
+    pub(crate) fn memo_query<T: std::any::Any + std::hash::Hash + Eq + Clone>(
+        &mut self,
+        query: T,
+    ) -> Interned<T> {
+        self.intern_enum(query)
+    }
+
+    /// Read the answer published for an interned memo query.
+    pub(crate) fn memo_get<Q: std::any::Any, A: std::any::Any>(
+        &self,
+        query: &Interned<Q>,
+    ) -> Option<std::rc::Rc<A>> {
+        self.memos.get(query)
+    }
+
+    /// Publish the first immutable answer for a memo query.
+    pub(crate) fn memo_publish<Q: std::any::Any, A: std::any::Any>(
+        &mut self,
+        query: Interned<Q>,
+        answer: A,
+    ) -> std::rc::Rc<A> {
+        self.memos.publish(query, answer)
+    }
+
+    /// Snapshot one memo family for semantic searches such as fact coverage.
+    pub(crate) fn memo_entries<Q: std::any::Any, A: std::any::Any>(
+        &self,
+    ) -> Vec<(Interned<Q>, std::rc::Rc<A>)> {
+        self.memos.entries()
+    }
+
+    /// Drop one memo family for tests or explicit memory reclamation.
+    pub(crate) fn memo_clear<Q: std::any::Any, A: std::any::Any>(&mut self) {
+        self.memos.clear::<Q, A>();
+    }
+
+    /// Published answers in one memo family — tests/diagnostics only.
+    #[allow(dead_code)]
+    pub(crate) fn memo_count<Q: std::any::Any, A: std::any::Any>(&self) -> usize {
+        self.memos.count::<Q, A>()
     }
 
     /// The canonical `Rc` for a function shape, creating it if absent.
@@ -185,7 +244,11 @@ impl Interner {
     }
 
     pub fn function(&mut self, f: FnValue) -> ValueRef {
-        let value = self.intern(ValueData::Function(f));
+        // Function payload equality is settled by `function_keys` / verified
+        // recursive buckets, not by `ValueData`'s provisional allocation key.
+        // Keeping open construction handles out of `table` also lets their
+        // deferred environments die when a window closes.
+        let value = ValueRef::from_data(ValueData::Function(f));
         self.close_function(value)
     }
 
@@ -202,13 +265,15 @@ impl Interner {
                 return true;
             }
             match value.data() {
-                ValueData::Function(function) => function.free_vars().iter().all(|name| {
-                    match function.closure().env.lookup(name) {
-                        Some(Binding::Value(capture)) => visit(&capture, seen),
-                        Some(Binding::Slot(_)) => true,
-                        Some(Binding::Open(_)) | Some(Binding::UnderInit) | None => false,
-                    }
-                }),
+                ValueData::Function(function) => {
+                    function.free_vars().iter().enumerate().all(|(index, _)| {
+                        match function.capture_binding_at(index) {
+                            Some(Binding::Value(capture)) => visit(&capture, seen),
+                            Some(Binding::Slot(_)) => true,
+                            Some(Binding::Open(_)) | Some(Binding::UnderInit) | None => false,
+                        }
+                    })
+                }
                 ValueData::Tuple(items) => items.iter().all(|item| visit(item, seen)),
                 ValueData::Record(fields) => fields.iter().all(|field| visit(&field.value, seen)),
                 _ => true,
@@ -222,6 +287,70 @@ impl Interner {
     /// environments, so stored tuple/record edges remain acyclic; recursive
     /// closure equality is settled inside [`close_function`].
     pub(crate) fn close_value_graph(&mut self, value: ValueRef) -> ValueRef {
+        let mut finalized = HashMap::new();
+        let value = self.finalize_value_graph(value, None, &mut finalized);
+        self.close_finalized_graph(value)
+    }
+
+    /// Close all roots of one recursive construction window. Deferred capture
+    /// names that resolve to members of this exact scope become positional,
+    /// non-owning group edges; all other captures become ordinary immutable
+    /// value pointers (or the separate Effect/Mutator location form).
+    pub(crate) fn close_recursive_group(
+        &mut self,
+        roots: &[(String, ValueRef)],
+        env: &Env,
+    ) -> Vec<ValueRef> {
+        let group = RecursiveGroup::new(roots.len());
+        let indices = roots
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _))| (name.clone(), index))
+            .collect();
+        let addresses = roots
+            .iter()
+            .enumerate()
+            .map(|(index, (_, value))| (value.addr(), index))
+            .collect();
+        let context = GroupContext {
+            env: env.clone(),
+            indices,
+            addresses,
+            group: group.clone(),
+        };
+        let mut finalized = HashMap::new();
+        let mut closed: Vec<ValueRef> = roots
+            .iter()
+            .map(|(_, value)| {
+                self.finalize_value_graph(value.clone(), Some(&context), &mut finalized)
+            })
+            .collect();
+        for (index, value) in closed.iter().enumerate() {
+            group.set_target(index, value);
+        }
+
+        // Redirects can be discovered in any member order. Re-probe until every
+        // exposed root is stable, updating the weak group targets after each pass.
+        for _ in 0..=closed.len() {
+            let next: Vec<ValueRef> = closed
+                .iter()
+                .cloned()
+                .map(|value| self.close_finalized_graph(value))
+                .collect();
+            let stable = next.iter().zip(&closed).all(|(a, b)| a.ptr_eq(b));
+            closed = next;
+            for (index, value) in closed.iter().enumerate() {
+                group.set_target(index, value);
+            }
+            if stable {
+                break;
+            }
+        }
+        group.lock();
+        closed
+    }
+
+    fn close_finalized_graph(&mut self, value: ValueRef) -> ValueRef {
         let value = self.canonical_ref(value);
         let closed = match value.data() {
             ValueData::Function(_) => self.close_function(value.clone()),
@@ -229,7 +358,7 @@ impl Interner {
                 let items = items.clone();
                 let closed = items
                     .into_iter()
-                    .map(|item| self.close_value_graph(item))
+                    .map(|item| self.close_finalized_graph(item))
                     .collect();
                 self.tuple(closed)
             }
@@ -237,29 +366,159 @@ impl Interner {
                 let fields = fields.clone();
                 let closed = fields
                     .into_iter()
-                    .map(|field| (field.key, self.close_value_graph(field.value)))
+                    .map(|field| (field.key, self.close_finalized_graph(field.value)))
                     .collect();
                 self.record(closed)
             }
             _ => value.clone(),
         };
         if !value.ptr_eq(&closed) {
-            self.redirects.insert(value.addr(), closed.clone());
+            self.record_redirect(&value, closed.clone());
         }
         closed
     }
 
+    fn finalize_value_graph(
+        &mut self,
+        value: ValueRef,
+        group: Option<&GroupContext>,
+        finalized: &mut HashMap<usize, ValueRef>,
+    ) -> ValueRef {
+        let value = self.canonical_ref(value);
+        if let Some(done) = finalized.get(&value.addr()) {
+            return done.clone();
+        }
+        let rebuilt = match value.data() {
+            ValueData::Function(function) => {
+                let mut changed = false;
+                let mut captures = Vec::with_capacity(function.captures().len());
+                for capture in function.captures() {
+                    let next = match capture {
+                        ClosureCapture::Value(captured) => {
+                            if let Some(context) = group
+                                && let Some(index) = context.addresses.get(&captured.addr())
+                            {
+                                changed = true;
+                                RecursiveGroup::edge(&context.group, *index)
+                            } else {
+                                let canonical =
+                                    self.finalize_value_graph(captured.clone(), group, finalized);
+                                changed |= !canonical.ptr_eq(captured);
+                                ClosureCapture::Value(canonical)
+                            }
+                        }
+                        ClosureCapture::Location(slot) => ClosureCapture::Location(*slot),
+                        ClosureCapture::Recursive(edge) => ClosureCapture::Recursive(edge.clone()),
+                        ClosureCapture::Deferred { env, name } => {
+                            changed = true;
+                            if let Some(context) = group
+                                && std::rc::Rc::ptr_eq(env, &context.env)
+                                && let Some(index) = context.indices.get(name)
+                            {
+                                RecursiveGroup::edge(&context.group, *index)
+                            } else {
+                                match env.lookup(name) {
+                                    Some(Binding::Value(captured)) => ClosureCapture::Value(
+                                        self.finalize_value_graph(captured, group, finalized),
+                                    ),
+                                    Some(Binding::Slot(slot))
+                                        if function.shape().act_kind
+                                            != crate::ast::ActKind::Pure =>
+                                    {
+                                        ClosureCapture::Location(slot)
+                                    }
+                                    // An open external dependency, or a Pure slot without
+                                    // the runtime's formation-time snapshot, is not closable.
+                                    _ => return value,
+                                }
+                            }
+                        }
+                    };
+                    captures.push(next);
+                }
+                if changed {
+                    ValueRef::from_data(ValueData::Function(FnValue::new(
+                        function.shape_rc(),
+                        function.free_vars().to_vec(),
+                        captures,
+                        Closure::new(function.closure().lambda.clone()),
+                    )))
+                } else {
+                    value.clone()
+                }
+            }
+            ValueData::Tuple(items) => {
+                let rebuilt_items: Vec<ValueRef> = items
+                    .iter()
+                    .cloned()
+                    .map(|item| self.finalize_value_graph(item, group, finalized))
+                    .collect();
+                if rebuilt_items.iter().zip(items).all(|(a, b)| a.ptr_eq(b)) {
+                    value.clone()
+                } else {
+                    self.tuple(rebuilt_items)
+                }
+            }
+            ValueData::Record(fields) => {
+                let rebuilt_fields: Vec<(Vec<u16>, ValueRef)> = fields
+                    .iter()
+                    .map(|field| {
+                        (
+                            field.key.clone(),
+                            self.finalize_value_graph(field.value.clone(), group, finalized),
+                        )
+                    })
+                    .collect();
+                if rebuilt_fields
+                    .iter()
+                    .zip(fields)
+                    .all(|((_, a), b)| a.ptr_eq(&b.value))
+                {
+                    value.clone()
+                } else {
+                    self.record(rebuilt_fields)
+                }
+            }
+            _ => value.clone(),
+        };
+        finalized.insert(value.addr(), rebuilt.clone());
+        rebuilt
+    }
+
     fn close_function(&mut self, value: ValueRef) -> ValueRef {
+        // A dynamically resolvable `Deferred` edge is enough for construction to
+        // proceed, but it is not a publishable immutable function graph. In
+        // particular, an acyclic wrapper may point at a recursive root whose self
+        // edge is still deferred. Publishing that wrapper now would retain the
+        // pre-close root after the group is canonicalized. Require the entire raw
+        // capture graph to have been materialized before it can enter an interner
+        // bucket.
+        if !self.value_is_closed(&value) || !Self::value_graph_is_finalized(&value) {
+            return value;
+        }
         let Some(function) = value.as_fn() else {
             return value;
         };
+        if function
+            .captures()
+            .iter()
+            .any(|capture| matches!(capture, ClosureCapture::Deferred { .. }))
+            || (0..function.free_vars().len())
+                .any(|index| function.capture_binding_at(index).is_none())
+        {
+            return value;
+        }
+        let recursive = function
+            .captures()
+            .iter()
+            .any(|capture| matches!(capture, ClosureCapture::Recursive(_)));
         let Some(key) = self.function_key(function) else {
             return value;
         };
-        if let Some(existing) = self.function_keys.get(&key) {
+        if !recursive && let Some(existing) = self.function_keys.get(&key) {
             let existing = existing.clone();
             if !value.ptr_eq(&existing) {
-                self.redirects.insert(value.addr(), existing.clone());
+                self.record_redirect(&value, existing.clone());
             }
             return existing;
         }
@@ -274,14 +533,18 @@ impl Interner {
             .into_iter()
             .find(|existing| crate::oracle::equal::canonical_graphs_equal(&value, existing))
         {
-            self.function_keys.insert(key, existing.clone());
+            if !recursive {
+                self.function_keys.insert(key, existing.clone());
+            }
             if !value.ptr_eq(&existing) {
-                self.redirects.insert(value.addr(), existing.clone());
+                self.record_redirect(&value, existing.clone());
             }
             return existing;
         }
 
-        self.function_keys.insert(key, value.clone());
+        if !recursive {
+            self.function_keys.insert(key, value.clone());
+        }
         self.function_buckets
             .entry(fingerprint)
             .or_default()
@@ -289,10 +552,32 @@ impl Interner {
         value
     }
 
+    fn value_graph_is_finalized(value: &ValueRef) -> bool {
+        fn visit(value: &ValueRef, seen: &mut HashSet<usize>) -> bool {
+            if !seen.insert(value.addr()) {
+                return true;
+            }
+            match value.data() {
+                ValueData::Function(function) => {
+                    function.captures().iter().all(|capture| match capture {
+                        ClosureCapture::Value(captured) => visit(captured, seen),
+                        ClosureCapture::Location(_) | ClosureCapture::Recursive(_) => true,
+                        ClosureCapture::Deferred { .. } => false,
+                    })
+                }
+                ValueData::Tuple(items) => items.iter().all(|item| visit(item, seen)),
+                ValueData::Record(fields) => fields.iter().all(|field| visit(&field.value, seen)),
+                _ => true,
+            }
+        }
+
+        visit(value, &mut HashSet::new())
+    }
+
     fn function_key(&self, function: &FnValue) -> Option<FunctionKey> {
         let mut captures = Vec::with_capacity(function.free_vars().len());
-        for name in function.free_vars() {
-            let capture = match function.closure().env.lookup(name)? {
+        for index in 0..function.free_vars().len() {
+            let capture = match function.capture_binding_at(index)? {
                 Binding::Value(value) => FunctionCapture::Value(self.canonical_ref(value)),
                 Binding::Slot(slot) => FunctionCapture::Location(slot),
                 Binding::Open(_) | Binding::UnderInit => return None,
@@ -307,13 +592,21 @@ impl Interner {
 
     fn canonical_ref(&self, mut value: ValueRef) -> ValueRef {
         let mut seen = HashSet::new();
-        while let Some(next) = self.redirects.get(&value.addr()) {
+        while let Some((source, next)) = self.redirects.get(&value.addr()) {
+            if !value.matches_weak(source) {
+                break; // the address was reclaimed and reused by another value
+            }
             if !seen.insert(value.addr()) {
                 break;
             }
             value = next.clone();
         }
         value
+    }
+
+    fn record_redirect(&mut self, source: &ValueRef, target: ValueRef) {
+        self.redirects
+            .insert(source.addr(), (source.weak(), target));
     }
 }
 

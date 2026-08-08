@@ -152,6 +152,9 @@ pub struct Analysis {
     /// The same produced values in the structural annotated domain. `contract` is
     /// `erase(annotated)` and remains the ordinary language-facing denotation.
     pub annotated: AnalysisContract,
+    /// Local analyzer-only branch provenance. It never crosses a call, return,
+    /// structure, or fact boundary; operations carry it lazily and routing forces it.
+    pub(crate) image: Option<domain::ImageOperand>,
     pub findings: Vec<Finding>,
     /// Semantic safety judgments before their accepting/rejecting diagnostics are
     /// interpreted. Findings are the policy surface; they are not the evidence store.
@@ -165,6 +168,7 @@ impl Analysis {
         Analysis {
             annotated: AnalysisContract::of_contract(contract.clone()),
             contract,
+            image: None,
             findings,
             safety_demands: Vec::new(),
             completion: Completion::Produces,
@@ -179,6 +183,7 @@ impl Analysis {
         Analysis {
             contract: annotated.erase(interner),
             annotated,
+            image: None,
             findings,
             safety_demands: Vec::new(),
             completion: Completion::Produces,
@@ -193,6 +198,7 @@ impl Analysis {
         Analysis {
             annotated: AnalysisContract::of_contract(contract.clone()),
             contract,
+            image: None,
             findings,
             safety_demands,
             completion: Completion::Produces,
@@ -208,6 +214,7 @@ impl Analysis {
         Analysis {
             contract: annotated.erase(interner),
             annotated,
+            image: None,
             findings,
             safety_demands,
             completion: Completion::Produces,
@@ -259,8 +266,24 @@ fn demand(a: &Analysis, findings: &mut Vec<Finding>) {
 /// The annotated expression environment. Ordinary contracts inserted by older
 /// operation/fact code are lifted with `Unknown` metadata; source expressions insert
 /// their complete [`AnalysisContract`] so structure and correlation survive references.
+#[derive(Clone, Debug)]
+struct TypeBinding {
+    annotated: AnalysisContract,
+    image: Option<domain::ImageOperand>,
+    /// A local pure function whose runtime closure is deliberately not formed by
+    /// analysis. The closed callee is an analyzer-only lambda-lifted identity; the
+    /// prefix is the arrived outer environment, represented as ordinary arguments.
+    deferred_call: Option<DeferredCall>,
+}
+
+#[derive(Clone, Debug)]
+struct DeferredCall {
+    callee: ValueRef,
+    prefix: Vec<AnalysisContract>,
+}
+
 #[derive(Clone, Debug, Default)]
-pub struct TypeEnv(HashMap<String, AnalysisContract>);
+pub struct TypeEnv(HashMap<String, TypeBinding>);
 
 impl TypeEnv {
     pub fn new() -> TypeEnv {
@@ -272,11 +295,77 @@ impl TypeEnv {
         name: String,
         value: impl Into<AnalysisContract>,
     ) -> Option<AnalysisContract> {
-        self.0.insert(name, value.into())
+        let annotated = value.into();
+        let image = domain::ImageOperand::source_annotated(&annotated);
+        self.insert_with_image(name, annotated, image)
     }
 
     pub fn get(&self, name: &str) -> Option<&AnalysisContract> {
-        self.0.get(name)
+        self.0.get(name).map(|binding| &binding.annotated)
+    }
+
+    fn image(&self, name: &str) -> Option<&domain::ImageOperand> {
+        self.0.get(name).and_then(|binding| binding.image.as_ref())
+    }
+
+    fn deferred_call(&self, name: &str) -> Option<&DeferredCall> {
+        self.0
+            .get(name)
+            .and_then(|binding| binding.deferred_call.as_ref())
+    }
+
+    fn insert_deferred_call(&mut self, name: String, call: DeferredCall) {
+        self.0.insert(
+            name,
+            TypeBinding {
+                annotated: AnalysisContract::of_contract(Contract::Kind(Kind::Function)),
+                image: None,
+                deferred_call: Some(call),
+            },
+        );
+    }
+
+    fn insert_with_image(
+        &mut self,
+        name: String,
+        annotated: AnalysisContract,
+        image: Option<domain::ImageOperand>,
+    ) -> Option<AnalysisContract> {
+        self.0
+            .insert(
+                name,
+                TypeBinding {
+                    annotated,
+                    image,
+                    deferred_call: None,
+                },
+            )
+            .map(|prior| prior.annotated)
+    }
+
+    /// BR-09: every local source and derived node sharing a source with the routed
+    /// arrivals narrows simultaneously. Unrelated bindings remain independent.
+    fn narrow_to(&mut self, arrivals: &domain::BranchSet, interner: &mut Interner) {
+        for binding in self.0.values_mut() {
+            let Some(image) = &binding.image else {
+                continue;
+            };
+            let Some(relation) = image.force(interner) else {
+                continue;
+            };
+            let narrowed = relation.narrowed_by(arrivals);
+            let Some(contract) = narrowed.contract(interner) else {
+                binding.annotated = AnalysisContract::bottom();
+                binding.image = None;
+                continue;
+            };
+            binding.annotated = domain::intersect_a(
+                &binding.annotated,
+                &AnalysisContract::of_contract(contract),
+                interner,
+            );
+            binding.image = Some(domain::ImageOperand::Branches(std::rc::Rc::new(narrowed)));
+        }
     }
 }
 
@@ -302,14 +391,20 @@ pub(crate) fn analyze_in_world(
 ) -> Analysis {
     match expr {
         // A literal denotes exactly itself.
-        Expr::Const(v) => {
-            Analysis::produced_annotated(AnalysisContract::of_value(v.clone()), vec![], interner)
-        }
+        Expr::Const(v) => Analysis::produced_annotated(
+            AnalysisContract::of_value(v.clone(), interner),
+            vec![],
+            interner,
+        ),
 
         // An immutable reference takes its bound contract; an unbound name is the
         // unbound-evaluation trap's compile-time mirror.
         Expr::Ref(Ref::Immutable(BindingRef::Name(name))) => match env.get(name) {
-            Some(c) => Analysis::produced_annotated(c.clone(), vec![], interner),
+            Some(c) => {
+                let mut analysis = Analysis::produced_annotated(c.clone(), vec![], interner);
+                analysis.image = env.image(name).cloned();
+                analysis
+            }
             None => Analysis::produced(
                 Contract::Top,
                 vec![Finding {
@@ -340,10 +435,10 @@ pub(crate) fn analyze_in_world(
         // when every free variable resolves to a singleton value in the current
         // environment, the closure is **constructible** — building it evaluates
         // nothing (the body is untouched; universal interning makes the value
-        // canonical) — and the produced contract is the exact function value, so a
-        // factory's product arrives at its call sites as a known instance. Any
-        // non-singleton capture keeps the coarse `Kind(Function)` (the annotated
-        // instance-metadata union is the owed general form).
+        // canonical) — and the produced contract is the exact function value. A
+        // non-singleton function that actually flows through a value seat instead
+        // carries an analysis descriptor beside `Kind(Function)`; this is not a formed
+        // closure value. Direct recursive locals use the separate late-call path below.
         Expr::Lambda(l) => analyze_lambda(l, env, interner),
     }
 }
@@ -378,8 +473,8 @@ fn analyze_lambda(l: &crate::ast::Lambda, env: &TypeEnv, interner: &mut Interner
             });
         match singleton {
             Some(v) => captures.push((name.clone(), v)),
-            // **C§13.2's contract-level instance.** A capture that is not a single
-            // value cannot make a closure *value* — but the analysis instance is
+            // **C§13.2's flowing-value descriptor.** A capture that is not a single
+            // value cannot make a closure *value* — but the analysis descriptor is
             // "shape + environment **contracts**", and the spec's own example is this
             // case (`makeAdder(someInput)`). Carry it as metadata beside the coarse
             // `Kind(Function)` so the callable "arrives at call sites with instances
@@ -394,10 +489,7 @@ fn analyze_lambda(l: &crate::ast::Lambda, env: &TypeEnv, interner: &mut Interner
                             .unwrap_or_else(|| AnalysisContract::of_contract(Contract::Top))
                     })
                     .collect();
-                let instance = domain::Instance {
-                    shape: l.clone(),
-                    env: captured,
-                };
+                let instance = domain::Instance::from_lambda(l, captured, interner);
                 return Analysis::produced_annotated(
                     AnalysisContract::leaf(
                         Contract::Kind(Kind::Function),
@@ -414,20 +506,27 @@ fn analyze_lambda(l: &crate::ast::Lambda, env: &TypeEnv, interner: &mut Interner
         scope.define(&name, crate::env::Binding::Value(v));
     }
     let value = crate::oracle::make_closure_in(l, &scope, interner);
-    Analysis::produced_annotated(AnalysisContract::of_value(value), vec![], interner)
+    Analysis::produced_annotated(
+        AnalysisContract::of_value(value, interner),
+        vec![],
+        interner,
+    )
 }
 
-/// Build the block's named lambda bindings as closure **values** before any initializer
-/// is analyzed, so a self- or mutually-recursive local function can see itself and its
-/// siblings — exactly as `program::define` does for module functions.
+/// Prebind the block's named lambda identities before any initializer is analyzed, so a
+/// self- or mutually-recursive local function can see itself and its siblings — exactly
+/// as `program::define` does for module functions. Resolved captures produce concrete
+/// closure values; open outer arguments produce only a delayed direct-call adapter.
 ///
-/// The closures share one scope, and a closure holds that scope by reference, so a
-/// member created before its sibling is defined still resolves it afterwards. That is
-/// what makes `a = () => b(); b = () => a()` inside a block work as well as at module
-/// level.
+/// The provisional closures share one construction scope, so a member created before
+/// its sibling is defined resolves it at joint close. The closed functions retain
+/// positional graph edges, not that scope. This makes `a = () => b(); b = () => a()`
+/// inside a block work as well as at module level.
 ///
-/// A lambda whose other captures are not single values is skipped: no closure value can
-/// be made for it, and the contract-level instance path (C§13.2) remains its route.
+/// A lambda whose other captures are not single values cannot become a runtime closure
+/// value during analysis. A direct self-recursive Pure member is instead installed as a
+/// [`DeferredCall`]: closure conversion makes the outer environment explicit arguments
+/// to an analyzer-only closed function. Runtime closure formation remains late.
 fn prebind_sibling_lambdas(m: &crate::ast::Match, body_env: &mut TypeEnv, interner: &mut Interner) {
     let siblings: Vec<(&String, &crate::ast::Lambda)> = m
         .items
@@ -470,9 +569,9 @@ fn prebind_sibling_lambdas(m: &crate::ast::Match, body_env: &mut TypeEnv, intern
     // same pointer) and means facts keyed on a callee say nothing about the next pass's
     // copy of it. Verified by probe: one construction, then hits at one address.
     //
-    // The key is the whole input to the construction — which lambdas, under which names,
-    // over which captured values — so it determines what it returns.
-    let key = GroupKey {
+    // The interned query is the whole immutable input to the construction — which lambdas,
+    // under which names, over which captured values — so it determines what it returns.
+    let key = interner.memo_query(GroupKey {
         siblings: siblings
             .iter()
             .map(|(n, l)| ((*n).clone(), (*l).clone()))
@@ -486,47 +585,419 @@ fn prebind_sibling_lambdas(m: &crate::ast::Match, body_env: &mut TypeEnv, intern
                 })
             })
             .collect(),
-    };
-    if let Some(hit) = LOCAL_GROUPS.with(|m| m.borrow().get(&key).cloned()) {
-        for (name, v) in hit {
-            body_env.insert(name, AnalysisContract::of_value(v));
+    });
+    let built = if let Some(hit) = interner.memo_get::<GroupKey, LocalGroup>(&key) {
+        hit.0.clone()
+    } else {
+        // A sibling whose captures are still unresolved cannot become a runtime value.
+        // Build only the genuinely closed subset here; the delayed-call pass below owns
+        // the non-singleton direct-recursion case.
+        let mut built: Vec<(String, ValueRef)> = Vec::new();
+        for (name, l) in &siblings {
+            let resolvable = crate::oracle::lambda_free_vars(l, interner)
+                .iter()
+                .all(|f| names.contains(&f.as_str()) || seeded.contains(f));
+            if !resolvable {
+                continue;
+            }
+            let v = crate::oracle::make_closure_in(l, &scope, interner);
+            scope.define(name, crate::env::Binding::Value(v.clone()));
+            built.push(((*name).clone(), v));
         }
-        return;
+        if !built.is_empty()
+            && built
+                .iter()
+                .all(|(_, value)| interner.value_is_closed(value))
+        {
+            let canonical = interner.close_recursive_group(&built, &scope);
+            for ((name, value), canonical) in built.iter_mut().zip(canonical) {
+                *value = canonical.clone();
+                scope.define(name, crate::env::Binding::Value(canonical));
+            }
+        }
+        interner.memo_publish(key, LocalGroup(built.clone()));
+        built
+    };
+
+    for (name, value) in &built {
+        body_env.insert(
+            name.clone(),
+            AnalysisContract::of_value(value.clone(), interner),
+        );
     }
 
-    // A sibling whose captures are still unresolved cannot become a value; leave it to
-    // the ordinary path rather than binding something coarser than what is already there.
-    let mut built: Vec<(String, ValueRef)> = Vec::new();
-    for (name, l) in &siblings {
-        let resolvable = crate::oracle::lambda_free_vars(l, interner)
-            .iter()
-            .all(|f| names.contains(&f.as_str()) || seeded.contains(f));
-        if !resolvable {
+    // Do not invent a symbolic closure value for unresolved captures. For a direct
+    // self-recursive Pure function, expose the enclosing values as leading arguments
+    // of an analyzer-only closed function. Thus
+    //
+    //     outer(limit) { f(n) = ... f(n - 1) ... }
+    //
+    // is judged as `f(limit, n)`, and its back-edge as `f(limit, n - 1)`. The ordinary
+    // recursion and drift machinery can then stop at that back-edge. The source runtime
+    // still constructs `f` only when `outer` executes and captures the concrete limit.
+    for (name, lambda) in siblings {
+        if built.iter().any(|(built_name, _)| built_name == name) {
             continue;
         }
-        let v = crate::oracle::make_closure_in(l, &scope, interner);
-        scope.define(name, crate::env::Binding::Value(v.clone()));
-        built.push(((*name).clone(), v));
-    }
-    LOCAL_GROUPS.with(|m| m.borrow_mut().insert(key, built.clone()));
-    for (name, v) in built {
-        body_env.insert(name, AnalysisContract::of_value(v));
+        if let Some(call) = lift_deferred_self_call(name, lambda, &names, body_env, interner) {
+            body_env.insert_deferred_call(name.clone(), call);
+        }
     }
 }
 
 /// The complete input to a local group's construction.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct GroupKey {
     siblings: Vec<(String, crate::ast::Lambda)>,
     seeds: Vec<(String, ValueRef)>,
 }
 
-thread_local! {
-    /// One construction per distinct group. Not an optimization: rebuilding changes
-    /// identity, and identity is what every fact is keyed on.
-    static LOCAL_GROUPS: std::cell::RefCell<
-        std::collections::HashMap<GroupKey, Vec<(String, ValueRef)>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+/// The immutable answer to one local-group construction query. It lives under the
+/// interner that owns every closure in it; no process/thread-local map may return values
+/// from a different identity universe.
+struct LocalGroup(Vec<(String, ValueRef)>);
+
+/// The immutable input/output memo for one analyzer-only lambda-lifted recursive
+/// target. Its source environment is *not* part of the function value: those arrived
+/// contracts are supplied as call arguments by [`DeferredCall::prefix`].
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct DeferredCallKey(crate::ast::Lambda);
+
+struct DeferredCallTarget(ValueRef);
+
+/// Convert one direct self-recursive Pure local lambda into a closed analyzer target.
+/// This is closure conversion for a judgment, not construction of the source value.
+fn lift_deferred_self_call(
+    name: &str,
+    lambda: &crate::ast::Lambda,
+    sibling_names: &[&str],
+    env: &TypeEnv,
+    interner: &mut Interner,
+) -> Option<DeferredCall> {
+    use crate::ast::{Pat, PatElem};
+
+    if lambda.act_kind != ActKind::Pure {
+        return None;
+    }
+    let (canonical, free_names) = crate::oracle::canonical_function(lambda, interner);
+    let self_slot = free_names.iter().position(|free| free == name)?;
+
+    // Mutual recursion is already handled when concrete captures can be formed. The
+    // abstract multi-member case needs simultaneous lifting; do not pretend a sibling
+    // is an outer value in this narrow, sound first landing.
+    if free_names
+        .iter()
+        .enumerate()
+        .any(|(slot, free)| slot != self_slot && sibling_names.contains(&free.as_str()))
+    {
+        return None;
+    }
+
+    let external: Vec<(usize, String, AnalysisContract)> = free_names
+        .iter()
+        .enumerate()
+        .filter(|(slot, _)| *slot != self_slot)
+        .map(|(slot, source)| {
+            env.get(source)
+                .cloned()
+                .map(|contract| (slot, format!("__next_env_{slot}"), contract))
+        })
+        .collect::<Option<_>>()?;
+    if external.is_empty() {
+        return None;
+    }
+
+    let self_name = "__next_recursive_self";
+    let body = lift_deferred_expr(&canonical.body, self_slot, &external, self_name)?;
+    let Pat::Tuple(original_params) = &canonical.params else {
+        return None;
+    };
+    let mut params = Vec::with_capacity(external.len() + original_params.len());
+    params.extend(
+        external
+            .iter()
+            .map(|(_, parameter, _)| PatElem::Pat(Pat::Bind(parameter.clone()))),
+    );
+    params.extend(original_params.iter().cloned());
+    let lifted = crate::ast::Lambda {
+        params: Pat::Tuple(params),
+        body: Box::new(body),
+        act_kind: ActKind::Pure,
+    };
+
+    let key = interner.memo_query(DeferredCallKey(lifted.clone()));
+    let callee = if let Some(hit) = interner.memo_get::<DeferredCallKey, DeferredCallTarget>(&key) {
+        hit.0.clone()
+    } else {
+        let scope = crate::env::Scope::root();
+        let provisional = crate::oracle::make_closure_in(&lifted, &scope, interner);
+        scope.define(self_name, crate::env::Binding::Value(provisional.clone()));
+        let roots = vec![(self_name.to_string(), provisional)];
+        let callee = interner
+            .close_recursive_group(&roots, &scope)
+            .into_iter()
+            .next()?;
+        interner.memo_publish(key, DeferredCallTarget(callee.clone()));
+        callee
+    };
+
+    Some(DeferredCall {
+        callee,
+        prefix: external
+            .into_iter()
+            .map(|(_, _, contract)| contract)
+            .collect(),
+    })
+}
+
+fn capture_name(slot: usize) -> String {
+    format!("@cap{slot}")
+}
+
+fn immutable_name(name: impl Into<String>) -> Expr {
+    Expr::Ref(Ref::Immutable(BindingRef::Name(name.into())))
+}
+
+fn lift_deferred_expr(
+    expr: &Expr,
+    self_slot: usize,
+    external: &[(usize, String, AnalysisContract)],
+    self_name: &str,
+) -> Option<Expr> {
+    use crate::ast::{Arm, Bind, Match, MatchItem};
+
+    let self_capture = capture_name(self_slot);
+    let replace_name = |name: &str| {
+        external
+            .iter()
+            .find(|(slot, _, _)| capture_name(*slot) == name)
+            .map(|(_, parameter, _)| parameter.clone())
+    };
+    Some(match expr {
+        Expr::Const(value) => Expr::Const(value.clone()),
+        Expr::Ref(Ref::Immutable(BindingRef::Name(name))) if name == &self_capture => {
+            // A first-class escape of the recursive binding would require a closure
+            // result, not merely delayed direct-call resolution. Leave it unproven.
+            return None;
+        }
+        Expr::Ref(Ref::Immutable(BindingRef::Name(name))) => {
+            immutable_name(replace_name(name).unwrap_or_else(|| name.clone()))
+        }
+        Expr::Ref(reference) => Expr::Ref(reference.clone()),
+        Expr::Lambda(lambda) => Expr::Lambda(crate::ast::Lambda {
+            params: lambda.params.clone(),
+            body: Box::new(lift_deferred_expr(
+                &lambda.body,
+                self_slot,
+                external,
+                self_name,
+            )?),
+            act_kind: lambda.act_kind,
+        }),
+        Expr::Apply { callee, args }
+            if matches!(
+                &**callee,
+                Expr::Ref(Ref::Immutable(BindingRef::Name(name))) if name == &self_capture
+            ) =>
+        {
+            let mut lifted_args = Vec::with_capacity(external.len() + args.len());
+            lifted_args.extend(
+                external
+                    .iter()
+                    .map(|(_, parameter, _)| Arg::Expr(immutable_name(parameter.clone()))),
+            );
+            lifted_args.extend(
+                args.iter()
+                    .map(|arg| lift_deferred_arg(arg, self_slot, external, self_name))
+                    .collect::<Option<Vec<_>>>()?,
+            );
+            Expr::Apply {
+                callee: Box::new(immutable_name(self_name)),
+                args: lifted_args,
+            }
+        }
+        Expr::Apply { callee, args } => Expr::Apply {
+            callee: Box::new(lift_deferred_expr(callee, self_slot, external, self_name)?),
+            args: args
+                .iter()
+                .map(|arg| lift_deferred_arg(arg, self_slot, external, self_name))
+                .collect::<Option<_>>()?,
+        },
+        Expr::PrimOp { op, args } => Expr::PrimOp {
+            op: *op,
+            args: args
+                .iter()
+                .map(|arg| lift_deferred_expr(arg, self_slot, external, self_name))
+                .collect::<Option<_>>()?,
+        },
+        Expr::Match(match_expr) => Expr::Match(Match {
+            scrutinee: match &match_expr.scrutinee {
+                Some(scrutinee) => Some(Box::new(lift_deferred_expr(
+                    scrutinee, self_slot, external, self_name,
+                )?)),
+                None => None,
+            },
+            items: match_expr
+                .items
+                .iter()
+                .map(|item| {
+                    Some(match item {
+                        MatchItem::Bind(bind) => MatchItem::Bind(Bind {
+                            target: bind.target.clone(),
+                            value: lift_deferred_expr(&bind.value, self_slot, external, self_name)?,
+                            exported: bind.exported,
+                        }),
+                        MatchItem::Stmt(statement) => MatchItem::Stmt(lift_deferred_expr(
+                            statement, self_slot, external, self_name,
+                        )?),
+                        MatchItem::Arm(arm) => MatchItem::Arm(Arm {
+                            pattern: arm.pattern.clone(),
+                            guard: match &arm.guard {
+                                Some(guard) => {
+                                    Some(lift_deferred_expr(guard, self_slot, external, self_name)?)
+                                }
+                                None => None,
+                            },
+                            result: lift_deferred_expr(
+                                &arm.result,
+                                self_slot,
+                                external,
+                                self_name,
+                            )?,
+                        }),
+                    })
+                })
+                .collect::<Option<_>>()?,
+        }),
+        Expr::TupleCons(elements) => Expr::TupleCons(
+            elements
+                .iter()
+                .map(|element| lift_deferred_element(element, self_slot, external, self_name))
+                .collect::<Option<_>>()?,
+        ),
+        Expr::RecordCons(fields) => Expr::RecordCons(
+            fields
+                .iter()
+                .map(|field| lift_deferred_field(field, self_slot, external, self_name))
+                .collect::<Option<_>>()?,
+        ),
+        Expr::Access {
+            target,
+            form,
+            total,
+        } => Expr::Access {
+            target: Box::new(lift_deferred_expr(target, self_slot, external, self_name)?),
+            form: lift_deferred_access(form, self_slot, external, self_name)?,
+            total: *total,
+        },
+        Expr::Template(parts) => Expr::Template(
+            parts
+                .iter()
+                .map(|part| match part {
+                    TemplatePart::Segment(segment) => Some(TemplatePart::Segment(segment.clone())),
+                    TemplatePart::Interp(interpolation) => Some(TemplatePart::Interp(
+                        lift_deferred_expr(interpolation, self_slot, external, self_name)?,
+                    )),
+                })
+                .collect::<Option<_>>()?,
+        ),
+        Expr::Write { slot, value } => {
+            let slot = match slot {
+                SlotRef::Name(name) if name == &self_capture => {
+                    SlotRef::Name(self_name.to_string())
+                }
+                SlotRef::Name(name) => {
+                    SlotRef::Name(replace_name(name).unwrap_or_else(|| name.clone()))
+                }
+                SlotRef::Location(location) => SlotRef::Location(*location),
+            };
+            Expr::Write {
+                slot,
+                value: Box::new(lift_deferred_expr(value, self_slot, external, self_name)?),
+            }
+        }
+    })
+}
+
+fn lift_deferred_arg(
+    arg: &Arg,
+    self_slot: usize,
+    external: &[(usize, String, AnalysisContract)],
+    self_name: &str,
+) -> Option<Arg> {
+    match arg {
+        Arg::Expr(expr) => Some(Arg::Expr(lift_deferred_expr(
+            expr, self_slot, external, self_name,
+        )?)),
+        Arg::Spread(expr) => Some(Arg::Spread(lift_deferred_expr(
+            expr, self_slot, external, self_name,
+        )?)),
+    }
+}
+
+fn lift_deferred_element(
+    element: &Element,
+    self_slot: usize,
+    external: &[(usize, String, AnalysisContract)],
+    self_name: &str,
+) -> Option<Element> {
+    match element {
+        Element::Expr(expr) => Some(Element::Expr(lift_deferred_expr(
+            expr, self_slot, external, self_name,
+        )?)),
+        Element::Spread(expr) => Some(Element::Spread(lift_deferred_expr(
+            expr, self_slot, external, self_name,
+        )?)),
+    }
+}
+
+fn lift_deferred_field(
+    field: &Field,
+    self_slot: usize,
+    external: &[(usize, String, AnalysisContract)],
+    self_name: &str,
+) -> Option<Field> {
+    Some(match field {
+        Field::Field { key, value } => Field::Field {
+            key: key.clone(),
+            value: lift_deferred_expr(value, self_slot, external, self_name)?,
+        },
+        Field::Computed { key, value } => Field::Computed {
+            key: lift_deferred_expr(key, self_slot, external, self_name)?,
+            value: lift_deferred_expr(value, self_slot, external, self_name)?,
+        },
+        Field::Spread(expr) => {
+            Field::Spread(lift_deferred_expr(expr, self_slot, external, self_name)?)
+        }
+    })
+}
+
+fn lift_deferred_access(
+    form: &AccessForm,
+    self_slot: usize,
+    external: &[(usize, String, AnalysisContract)],
+    self_name: &str,
+) -> Option<AccessForm> {
+    Some(match form {
+        AccessForm::Field(name) => AccessForm::Field(name.clone()),
+        AccessForm::Index(index) => AccessForm::Index(Box::new(lift_deferred_expr(
+            index, self_slot, external, self_name,
+        )?)),
+        AccessForm::Slice { lo, hi } => AccessForm::Slice {
+            lo: match lo {
+                Some(bound) => Some(Box::new(lift_deferred_expr(
+                    bound, self_slot, external, self_name,
+                )?)),
+                None => None,
+            },
+            hi: match hi {
+                Some(bound) => Some(Box::new(lift_deferred_expr(
+                    bound, self_slot, external, self_name,
+                )?)),
+                None => None,
+            },
+        },
+    })
 }
 
 /// The world a function body owns, independent of the world where its closure was
@@ -551,6 +1022,7 @@ fn analyze_primop(
     let mut safety_demands = Vec::new();
     let mut inputs = Vec::with_capacity(args.len());
     let mut image_operands: Vec<domain::ImageOperand> = Vec::with_capacity(args.len());
+    let mut singleton_operands: Vec<Option<ValueRef>> = Vec::with_capacity(args.len());
     for a in args {
         let mut r = analyze_in_world(a, env, cenv, world, interner);
         demand(&r, &mut findings); // operands are expecting seats
@@ -558,10 +1030,17 @@ fn analyze_primop(
         safety_demands.append(&mut r.safety_demands);
         // An operand that holds its own image is carried **as that image**, so a chain
         // stays exact instead of collapsing at the first coarse step.
-        image_operands.push(match r.annotated.held_image() {
-            Some(nested) => domain::ImageOperand::Nested(nested),
-            None => domain::ImageOperand::Points(r.contract.clone()),
-        });
+        image_operands.push(
+            r.image
+                .clone()
+                .unwrap_or_else(|| domain::ImageOperand::Points(r.contract.clone())),
+        );
+        // Exact aggregates are represented structurally in `annotated` (for
+        // correlation and projection), not necessarily as `Contract::Equals`.
+        // Recover their one canonical value for the existing oracle fold; otherwise
+        // `[...][0] == 7` and `[] == []` lose exactness precisely where GR-09 needs
+        // nested exact path selection.
+        singleton_operands.push(r.annotated.singleton_value(interner));
         inputs.push(r.contract);
     }
 
@@ -594,13 +1073,7 @@ fn analyze_primop(
 
     // Constant-fold when every operand is a singleton: run the oracle's own primop
     // semantics, so the trap class is predicted exactly (§6 concordance).
-    let singletons: Option<Vec<ValueRef>> = inputs
-        .iter()
-        .map(|c| match c {
-            Contract::Equals(v) => Some(v.clone()),
-            _ => None,
-        })
-        .collect();
+    let singletons: Option<Vec<ValueRef>> = singleton_operands.into_iter().collect();
 
     let contract = match singletons {
         Some(vals) => match eval_prim(op, &vals, interner) {
@@ -647,11 +1120,7 @@ fn analyze_primop(
     let held = domain::HeldImage::hold(op, image_operands);
     let mut analysis = Analysis::produced_with_safety(contract, findings, safety_demands);
     if let Some(image) = held {
-        analysis.annotated = AnalysisContract::leaf_with_image(
-            analysis.contract.clone(),
-            domain::InstanceMetadata::Unknown,
-            image,
-        );
+        analysis.image = Some(domain::ImageOperand::Nested(std::rc::Rc::new(image)));
     }
     analysis
 }
@@ -892,7 +1361,7 @@ fn analyze_access(
     if let Some(node) = folded {
         return match eval_expr(&node, interner) {
             Ok(Outcome::Produced(v)) => Analysis::produced_annotated_with_safety(
-                AnalysisContract::of_value(v),
+                AnalysisContract::of_value(v, interner),
                 findings,
                 safety_demands,
                 interner,
@@ -915,11 +1384,11 @@ fn analyze_access(
     // alternatives. This is the access half of AP-29: project each represented source
     // alternative, retaining branch correlation for a later joint application.
     let projected = match form {
-        AccessForm::Field(name) => target_annotated.project_field(name),
+        AccessForm::Field(name) => target_annotated.project_field(name, interner),
         AccessForm::Index(_) => idx_c
             .as_ref()
             .and_then(singleton_index)
-            .and_then(|index| target_annotated.project_index(index)),
+            .and_then(|index| target_annotated.project_index(index, interner)),
         AccessForm::Slice { .. } => None,
     };
     if let Some(projected) = projected {
@@ -1180,6 +1649,7 @@ fn analyze_write(
     Analysis {
         contract: Contract::Bottom,
         annotated: AnalysisContract::bottom(),
+        image: None,
         findings,
         safety_demands: rhs.safety_demands,
         completion: Completion::FallsThrough(CompletionWitness::Write { slot: slot.clone() }),
@@ -1210,6 +1680,18 @@ fn analyze_apply(
     world: World,
     interner: &mut Interner,
 ) -> Analysis {
+    // A local recursive closure over an open outer argument does not exist yet. Its
+    // direct call is nevertheless a judgment we can make now by supplying that outer
+    // environment as ordinary leading arguments to the analyzer-only lifted target.
+    // Spreads stay on the general application path because their positional expansion
+    // is not available here.
+    if args.iter().all(|arg| matches!(arg, Arg::Expr(_)))
+        && let Expr::Ref(Ref::Immutable(BindingRef::Name(name))) = callee
+        && let Some(call) = env.deferred_call(name).cloned()
+    {
+        return analyze_deferred_call(&call, args, env, cenv, world, interner);
+    }
+
     let mut findings = Vec::new();
     let mut safety_demands = Vec::new();
 
@@ -1250,7 +1732,7 @@ fn analyze_apply(
     // Preserve a joint source relation when every position is an immutable projection
     // of the same correlated binding (AP-29). Otherwise form the legal projected
     // operand from the independently analyzed positions.
-    let operand = correlated_access_operand(callee, args, env).unwrap_or_else(|| {
+    let operand = correlated_access_operand(callee, args, env, interner).unwrap_or_else(|| {
         application::operand_from_annotated(&callee_annotated, &argument_annotated)
     });
     let transfer = application::drive_application(&operand, |alternative, correlated| {
@@ -1263,70 +1745,199 @@ fn analyze_apply(
     Analysis {
         contract: transfer.outcome.produced.erase(interner),
         annotated: transfer.outcome.produced,
+        image: None,
         findings,
         safety_demands,
         completion: completion_from_application(transfer.outcome.completion),
     }
 }
 
-thread_local! {
-    /// Shapes currently being analyzed through a contract-level instance. A symbolic
-    /// instance carries no fact key yet (owed), so this is what keeps a self-applying
-    /// shape from recursing without bound — the same discipline `outcome`'s
-    /// `ACTIVE_SHAPES` applies to value instances. A repeat answers coarsely, which is
-    /// sound.
-    static ACTIVE_INSTANCE_SHAPES: std::cell::RefCell<Vec<crate::ast::Lambda>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+fn analyze_deferred_call(
+    call: &DeferredCall,
+    args: &[Arg],
+    env: &TypeEnv,
+    cenv: &ContractEnv,
+    world: World,
+    interner: &mut Interner,
+) -> Analysis {
+    let mut findings = Vec::new();
+    let mut safety_demands = Vec::new();
+    let mut arguments = call.prefix.clone();
+    for arg in args {
+        let Arg::Expr(expr) = arg else {
+            unreachable!("the deferred-call adapter accepts only positional arguments")
+        };
+        let mut analyzed = analyze_in_world(expr, env, cenv, world, interner);
+        demand(&analyzed, &mut findings);
+        arguments.push(analyzed.annotated.clone());
+        findings.append(&mut analyzed.findings);
+        safety_demands.append(&mut analyzed.safety_demands);
+    }
+    let argument_contracts: Vec<Contract> = arguments
+        .iter()
+        .map(|argument| argument.erase(interner))
+        .collect();
+    let mut contribution = analyze_known_application_alternative(
+        &call.callee,
+        &argument_contracts,
+        true,
+        false,
+        world,
+        cenv,
+        interner,
+    );
+    findings.append(&mut contribution.detail.findings);
+    safety_demands.append(&mut contribution.detail.safety_demands);
+    Analysis {
+        contract: contribution.outcome.produced.erase(interner),
+        annotated: contribution.outcome.produced,
+        image: None,
+        findings,
+        safety_demands,
+        completion: completion_from_application(contribution.outcome.completion),
+    }
 }
 
 /// Analyze an application whose callee is a **contract-level instance** (C§13.2):
-/// bind the shape's free names to the instance's capture contracts, bind the
-/// parameters to the argument tuple, and run the ordinary body walk. The body's own
-/// findings and safety demands become this seat's — no fact is settled, because a
-/// symbolic instance has no cache key yet.
+/// bind canonical capture positions and parameters, then run the ordinary body
+/// walk under an interner-owned domain-indexed symbolic fact. A recursive edge
+/// closes only when its full instance and arrived input are covered by the active
+/// hypothesis; a mere code-shape repeat is honestly unproven.
 fn analyze_contract_level_instance(
     instance: &domain::Instance,
     arg_contracts: &[Contract],
+    seat_world: World,
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> AlternativeContribution<ApplicationDetail> {
-    let repeated = ACTIVE_INSTANCE_SHAPES
-        .with(|active| active.borrow().iter().any(|held| held == &instance.shape));
-    if repeated {
-        return application_contribution(
-            Vec::new(),
-            Vec::new(),
-            Contract::Top,
-            Completion::MayFallThrough,
-        );
+    let mut seat_findings = Vec::new();
+    if !seat_world.admits(instance.act_kind()) {
+        seat_findings.push(Finding {
+            class: TrapClass::WorldAdmission,
+            severity: Severity::Error,
+            message: format!(
+                "a {:?} call is not admitted in {seat_world:?} world",
+                instance.act_kind()
+            ),
+        });
     }
 
-    let free = crate::oracle::lambda_free_vars(&instance.shape, interner);
-    let mut env = TypeEnv::new();
-    for (name, captured) in free.iter().zip(&instance.env) {
-        env.insert(name.clone(), captured.clone());
-    }
     let arg_tuple = Contract::tuple(arg_contracts.to_vec(), interner);
-    bind_pattern(&instance.shape.params, &arg_tuple, &mut env);
+    let params = pattern_contract(&instance.code().params, cenv, interner);
+    if !matches!(subcontract(&arg_tuple, &params, interner), Verdict::Proven) {
+        let message = if disjoint(&arg_tuple, &params) {
+            "arguments cannot match the parameter pattern"
+        } else {
+            "cannot prove the arguments match the parameter pattern"
+        };
+        seat_findings.push(Finding {
+            class: TrapClass::ArgumentObligation,
+            severity: Severity::Error,
+            message: message.into(),
+        });
+    }
 
-    ACTIVE_INSTANCE_SHAPES.with(|active| active.borrow_mut().push(instance.shape.clone()));
-    let analysis = analyze_in_world(
-        &instance.shape.body,
-        &env,
-        cenv,
-        world_for_act(instance.shape.act_kind),
-        interner,
-    );
-    ACTIVE_INSTANCE_SHAPES.with(|active| {
-        active.borrow_mut().pop();
-    });
+    let key = factcache::symbolic_key(instance, arg_contracts, cenv, interner);
+    let analysis = match factcache::symbolic_lookup(&key, interner) {
+        factcache::SymbolicCached::Hypothesis => Analysis {
+            contract: Contract::Top,
+            annotated: AnalysisContract::of_contract(Contract::Top),
+            image: None,
+            findings: Vec::new(),
+            safety_demands: Vec::new(),
+            completion: Completion::MayFallThrough,
+        },
+        factcache::SymbolicCached::Settled(answer) => (*answer).clone(),
+        factcache::SymbolicCached::UncoveredRepeat => Analysis {
+            contract: Contract::Top,
+            annotated: AnalysisContract::of_contract(Contract::Top),
+            image: None,
+            findings: vec![Finding {
+                class: TrapClass::OperationSafety,
+                severity: Severity::Error,
+                message: "symbolic recursive call is not covered by the active domain-indexed fact"
+                    .into(),
+            }],
+            safety_demands: Vec::new(),
+            completion: Completion::MayFallThrough,
+        },
+        factcache::SymbolicCached::Missing => {
+            let mut env = TypeEnv::new();
+            for (index, captured) in instance.captures().iter().enumerate() {
+                env.insert(format!("@cap{index}"), captured.clone());
+            }
+            bind_pattern(&instance.code().params, &arg_tuple, &mut env, interner);
+            let tainted = induction::any_hypotheses_active();
+            factcache::symbolic_begin(&key);
+            let answer = analyze_in_world(
+                &instance.code().body,
+                &env,
+                cenv,
+                world_for_act(instance.act_kind()),
+                interner,
+            );
+            factcache::symbolic_finish(&key, &answer, tainted, interner);
+            answer
+        }
+    };
 
+    seat_findings.extend(analysis.findings);
     application_contribution(
-        analysis.findings,
+        seat_findings,
         analysis.safety_demands,
         analysis.annotated,
         analysis.completion,
     )
+}
+
+fn analyze_contract_level_instances(
+    instances: &[domain::Instance],
+    arg_contracts: &[Contract],
+    seat_world: World,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> AlternativeContribution<ApplicationDetail> {
+    let mut contributions: Vec<AlternativeContribution<ApplicationDetail>> = instances
+        .iter()
+        .filter(|instance| !instance.is_empty())
+        .map(|instance| {
+            analyze_contract_level_instance(instance, arg_contracts, seat_world, cenv, interner)
+        })
+        .collect();
+    if contributions.is_empty() {
+        return application_contribution(
+            Vec::new(),
+            Vec::new(),
+            Contract::Bottom,
+            Completion::Produces,
+        );
+    }
+
+    let verdict = if contributions
+        .iter()
+        .all(|contribution| matches!(contribution.verdict, SeatVerdict::Proven))
+    {
+        SeatVerdict::Proven
+    } else {
+        SeatVerdict::Unproven
+    };
+    let outcome = application::join_all(
+        contributions
+            .iter()
+            .map(|contribution| contribution.outcome.clone()),
+    );
+    let mut detail = ApplicationDetail::default();
+    for contribution in &mut contributions {
+        detail.findings.append(&mut contribution.detail.findings);
+        detail
+            .safety_demands
+            .append(&mut contribution.detail.safety_demands);
+    }
+    AlternativeContribution {
+        verdict,
+        outcome,
+        detail,
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1355,20 +1966,17 @@ fn analyze_application_alternative(
     // **C§13.2's contract-level instance at the seat.** A callable with no value but a
     // recoverable instance — shape + capture contracts — resolves *through* that
     // instance instead of being declared unknown ("callables … arrive at call sites
-    // with instances recoverable"). Restricted to a single Pure instance for now; a
-    // union of instances, and the fact-cache keys such instances would need, remain
-    // owed (`OwedItems` §1a).
+    // with instances recoverable"). Every represented instance contributes through
+    // the same alternative; admission, safety, produced values, and completion join
+    // conjunctively/componentwise as required by the canonical driver.
     if !has_spread
         && let AnalysisContract::Leaf {
             contract: Contract::Kind(Kind::Function),
             metadata: domain::InstanceMetadata::Known(instances),
             ..
         } = &alternative.callee
-        && let [instance] = instances.as_slice()
-        && matches!(instance.shape.act_kind, ActKind::Pure)
-        && !instance.is_empty()
     {
-        return analyze_contract_level_instance(instance, &arg_contracts, cenv, interner);
+        return analyze_contract_level_instances(instances, &arg_contracts, world, cenv, interner);
     }
 
     let erased_callee = alternative.callee.erase(interner);
@@ -1434,6 +2042,7 @@ fn correlated_access_operand(
     callee: &Expr,
     args: &[Arg],
     env: &TypeEnv,
+    interner: &mut Interner,
 ) -> Option<AnalysisContract> {
     let (source, callee_projection) = source_projection(callee)?;
     let mut projections = vec![callee_projection];
@@ -1458,8 +2067,8 @@ fn correlated_access_operand(
         let positions = projections
             .iter()
             .map(|projection| match projection {
-                AccessProjection::Index(index) => alternative.project_index(*index),
-                AccessProjection::Field(name) => alternative.project_field(name),
+                AccessProjection::Index(index) => alternative.project_index(*index, interner),
+                AccessProjection::Field(name) => alternative.project_field(name, interner),
             })
             .collect::<Option<Vec<_>>>()?;
         operand_alternatives.push(AnalysisContract::tuple(positions));
@@ -1685,6 +2294,7 @@ fn analyze_known_application_alternative(
         .unwrap_or_else(|| Analysis {
             contract: Contract::Top,
             annotated: AnalysisContract::of_contract(Contract::Top),
+            image: None,
             findings: Vec::new(),
             safety_demands: Vec::new(),
             completion: Completion::MayFallThrough,
@@ -1891,6 +2501,16 @@ fn call_return(
     {
         return c;
     }
+    // A closure-converted local keeps its outer environment positions unchanged and
+    // derives an orbit only for the recursive argument. The resulting vector is the
+    // ordinary containing fact domain; no symbolic captured value is involved.
+    if arg_contracts.len() >= 2
+        && let Some(envelope) =
+            grounding::carried_numeric_orbit_domain(cv, arg_contracts, cenv, interner)
+        && let Some(c) = induction::infer_return_fact(cv, Some(&envelope), cenv, interner)
+    {
+        return c;
+    }
     // The multi-parameter form, through the lex envelope (Ackermann's shape).
     if arg_contracts.len() >= 2
         && let Some(envelope) = grounding::lex_envelope(cv, interner)
@@ -2042,16 +2662,20 @@ fn analyze_match(
     let mut safety_demands = Vec::new();
 
     // The scrutinee is evaluated once, in an expecting seat.
-    let (mut scrut, scrut_annotated) = match &m.scrutinee {
+    let (mut scrut, scrut_annotated, scrut_image) = match &m.scrutinee {
         Some(e) => {
             let mut a = analyze_in_world(e, env, cenv, world, interner);
             demand(&a, &mut findings);
-            let pair = (a.contract.clone(), a.annotated.clone());
+            let triple = (a.contract.clone(), a.annotated.clone(), a.image.clone());
             findings.append(&mut a.findings);
             safety_demands.append(&mut a.safety_demands);
-            pair
+            triple
         }
-        None => (Contract::Top, AnalysisContract::of_contract(Contract::Top)),
+        None => (
+            Contract::Top,
+            AnalysisContract::of_contract(Contract::Top),
+            None,
+        ),
     };
 
     // **Force the held image, here and nowhere else** (DR-17). Routing is the judgment
@@ -2063,8 +2687,16 @@ fn analyze_match(
     // Forced unconditionally rather than only on failure: the exact contract is what
     // the arms are walked against, so deciding "did the coarse walk fail?" first would
     // mean walking twice. One node, one walk.
-    if let Some(image) = scrut_annotated.held_image()
-        && let Some(exact) = image.force(interner)
+    let routing_operand = scrut_image
+        // A finite multi-point scrutinee with no earlier provenance becomes a fresh
+        // source at this routing match (BR-02).
+        .or_else(|| domain::ImageOperand::source(&scrut));
+    let mut branch_remainder = routing_operand
+        .as_ref()
+        .and_then(|operand| operand.force(interner));
+    if let Some(exact) = branch_remainder
+        .as_ref()
+        .and_then(|branches| branches.contract(interner))
     {
         scrut = exact;
     }
@@ -2081,6 +2713,9 @@ fn analyze_match(
     let mut remainder = scrut.clone();
     let mut results: Vec<Contract> = Vec::new();
     let mut annotated_results: Vec<AnalysisContract> = Vec::new();
+    let mut routed_results = branch_remainder
+        .as_ref()
+        .map(|_| domain::BranchSet::empty());
     let mut completions: Vec<Completion> = Vec::new();
     // Any guarded arm makes the remainder an *over*-approximation (a guard, not the
     // pattern, decides, and guards consume nothing) — so an inhabited remainder no
@@ -2090,6 +2725,17 @@ fn analyze_match(
     for item in &m.items {
         match item {
             MatchItem::Bind(b) => {
+                // `prebind_sibling_lambdas` already installed the analyzer-only call
+                // adapter. Evaluating the source lambda would eagerly manufacture a
+                // contract-level closure from captures that are not values — exactly
+                // the phase error this path avoids. Runtime formation remains a no-body
+                // operation when this Bind is actually executed.
+                if let crate::ast::BindTarget::Name(name) = &b.target
+                    && matches!(&b.value, Expr::Lambda(_))
+                    && body_env.deferred_call(name).is_some()
+                {
+                    continue;
+                }
                 let mut a = analyze_in_world(&b.value, &body_env, cenv, world, interner);
                 demand(&a, &mut findings); // a bind RHS is an expecting seat
                 findings.append(&mut a.findings);
@@ -2097,6 +2743,7 @@ fn analyze_match(
                 analyze_bind(
                     &b.target,
                     &a.annotated,
+                    a.image.clone(),
                     &mut body_env,
                     &mut findings,
                     cenv,
@@ -2133,10 +2780,29 @@ fn analyze_match(
                     continue;
                 }
 
+                let arrivals = branch_remainder
+                    .as_ref()
+                    .map(|branches| branches.restricted(&pc));
+
                 // Arm-local environment: the outer bindings plus the pattern's.
                 let mut arm_env = body_env.clone();
+                if let Some(arrivals) = &arrivals {
+                    arm_env.narrow_to(arrivals, interner);
+                }
                 if let Some(p) = &arm.pattern {
-                    bind_pattern_annotated(p, &narrowed_annotated, &mut arm_env);
+                    bind_pattern_annotated(p, &narrowed_annotated, &mut arm_env, interner);
+                    if let crate::ast::Pat::Bind(name) = p
+                        && let Some(arrivals) = &arrivals
+                        && let Some(annotated) = arm_env.get(name).cloned()
+                    {
+                        arm_env.insert_with_image(
+                            name.clone(),
+                            annotated,
+                            Some(domain::ImageOperand::Branches(std::rc::Rc::new(
+                                arrivals.clone(),
+                            ))),
+                        );
+                    }
                 }
 
                 // Guard: a strict Boolean tested seat. A guard **proven false** makes the
@@ -2195,6 +2861,26 @@ fn analyze_match(
                 let mut ra = analyze_in_world(&arm.result, &arm_env, cenv, world, interner);
                 findings.append(&mut ra.findings);
                 safety_demands.append(&mut ra.safety_demands);
+                if opaque_guard {
+                    // An opaque guard does not determine which source cells actually
+                    // leave through this arm. Keep the ordinary over-approximation and
+                    // decline to mint an exact branch relation.
+                    routed_results = None;
+                } else if let (Some(arrivals), Some(accumulated)) =
+                    (&arrivals, routed_results.as_mut())
+                {
+                    let produced = ra
+                        .image
+                        .as_ref()
+                        .and_then(|image| image.force(interner))
+                        .or_else(|| domain::BranchSet::singleton(&ra.contract));
+                    match produced {
+                        Some(produced) => {
+                            accumulated.append(arrivals.join_arrivals(&produced));
+                        }
+                        None => routed_results = None,
+                    }
+                }
                 results.push(ra.contract);
                 annotated_results.push(ra.annotated);
                 let arm_is_represented = !opaque_guard && narrowed.has_proven_inhabitant(interner);
@@ -2214,6 +2900,9 @@ fn analyze_match(
                     } else {
                         difference(&remainder, &pc, interner)
                     };
+                    if let Some(branches) = &branch_remainder {
+                        branch_remainder = Some(branches.without(&pc));
+                    }
                 }
                 // An exact guard region is consumed from its variable for later items
                 // (E9: an exact row consumes; the accumulated Difference is what the
@@ -2243,6 +2932,10 @@ fn analyze_match(
     Analysis {
         contract,
         annotated,
+        image: routed_results.and_then(|branches| {
+            (!branches.cells().is_empty())
+                .then(|| domain::ImageOperand::Branches(std::rc::Rc::new(branches)))
+        }),
         findings,
         safety_demands,
         completion: join_completions(&completions),
@@ -2439,8 +3132,49 @@ fn contract_ref(r: &Ref, cenv: &ContractEnv, i: &mut Interner) -> Option<Contrac
 
 /// Bind a pattern's names to their narrowed contracts in `env` (best-effort; a
 /// name whose position is not tracked binds to `Top`).
-pub(crate) fn bind_pattern(pat: &crate::ast::Pat, narrowed: &Contract, env: &mut TypeEnv) {
-    bind_pattern_annotated(pat, &AnalysisContract::of_contract(narrowed.clone()), env);
+pub(crate) fn bind_pattern(
+    pat: &crate::ast::Pat,
+    narrowed: &Contract,
+    env: &mut TypeEnv,
+    interner: &mut Interner,
+) {
+    use crate::ast::{Pat, PatElem, PatField};
+    match (pat, narrowed) {
+        (Pat::Bind(name), contract) => {
+            let annotated = AnalysisContract::of_contract(contract.clone());
+            let image = domain::ImageOperand::source(contract);
+            env.insert_with_image(name.clone(), annotated, image);
+        }
+        (Pat::Tuple(patterns), Contract::Tuple(contracts)) => {
+            for (position, element) in patterns.iter().enumerate() {
+                if let PatElem::Pat(pattern) = element {
+                    let contract = contracts
+                        .get(position)
+                        .map(|contract| &**contract)
+                        .unwrap_or(&Contract::Top);
+                    bind_pattern(pattern, contract, env, interner);
+                }
+            }
+        }
+        (Pat::Record { fields, .. }, Contract::Record(contracts)) => {
+            for field in fields {
+                if let PatField::Field { key, pat } = field {
+                    let contract = contracts
+                        .iter()
+                        .find(|(candidate, _)| candidate == key)
+                        .map(|(_, contract)| &**contract)
+                        .unwrap_or(&Contract::Top);
+                    bind_pattern(pat, contract, env, interner);
+                }
+            }
+        }
+        _ => bind_pattern_annotated(
+            pat,
+            &AnalysisContract::of_contract(narrowed.clone()),
+            env,
+            interner,
+        ),
+    }
 }
 
 /// Annotated pattern binding. Structural tuple/record positions and correlated
@@ -2449,6 +3183,7 @@ pub(crate) fn bind_pattern_annotated(
     pat: &crate::ast::Pat,
     narrowed: &AnalysisContract,
     env: &mut TypeEnv,
+    interner: &mut Interner,
 ) {
     use crate::ast::{Pat, PatElem, PatField};
     match pat {
@@ -2459,9 +3194,9 @@ pub(crate) fn bind_pattern_annotated(
             for (pos, e) in elems.iter().enumerate() {
                 if let PatElem::Pat(p) = e {
                     let sub = narrowed
-                        .project_index(pos)
+                        .project_index(pos, interner)
                         .unwrap_or_else(|| AnalysisContract::of_contract(Contract::Top));
-                    bind_pattern_annotated(p, &sub, env);
+                    bind_pattern_annotated(p, &sub, env, interner);
                 }
             }
         }
@@ -2469,9 +3204,9 @@ pub(crate) fn bind_pattern_annotated(
             for f in fields {
                 if let PatField::Field { key, pat } = f {
                     let sub = narrowed
-                        .project_field(key)
+                        .project_field(key, interner)
                         .unwrap_or_else(|| AnalysisContract::of_contract(Contract::Top));
-                    bind_pattern_annotated(pat, &sub, env);
+                    bind_pattern_annotated(pat, &sub, env, interner);
                 }
             }
         }
@@ -2485,6 +3220,7 @@ pub(crate) fn bind_pattern_annotated(
 fn analyze_bind(
     target: &crate::ast::BindTarget,
     value: &AnalysisContract,
+    image: Option<domain::ImageOperand>,
     env: &mut TypeEnv,
     findings: &mut Vec<Finding>,
     cenv: &ContractEnv,
@@ -2494,7 +3230,8 @@ fn analyze_bind(
     let erased = value.erase(interner);
     match target {
         BindTarget::Name(name) => {
-            env.insert(name.clone(), value.clone());
+            let image = image.or_else(|| domain::ImageOperand::source_annotated(value));
+            env.insert_with_image(name.clone(), value.clone(), image);
         }
         BindTarget::Pattern(p) => {
             let pc = pattern_contract(p, cenv, interner);
@@ -2514,7 +3251,7 @@ fn analyze_bind(
                 });
             }
             let narrowed = domain::intersect_a(value, &AnalysisContract::of_contract(pc), interner);
-            bind_pattern_annotated(p, &narrowed, env);
+            bind_pattern_annotated(p, &narrowed, env, interner);
         }
     }
 }

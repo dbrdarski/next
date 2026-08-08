@@ -1,5 +1,4 @@
-//! Function **shape** canonicalization (μ-Canonicalization Spec v0.1, algorithm A,
-//! the α + capture-slot layer).
+//! Per-function code canonicalization (Recursive Identity Spec v0.6).
 //!
 //! A closure's identity is its rational tree = `node(canonical-code, captures)`
 //! (law 6). This module computes the **canonical code** (shape): the lambda body
@@ -10,11 +9,10 @@
 //! value-level key.
 //!
 //! The shape is a finite term (recursion lives in the captures, never in the
-//! code), so shape identity is ordinary structural equality of the canonical
-//! `Lambda`. The full μ-binder minimization (SCC grouping, laws 1–5) refines the
-//! *code* identity used by layer-2 cache keys and ships with the analyzer. At
-//! value level, Algorithm B is only the recursive bucket's exact verifier; the
-//! resulting runtime identity is one canonical pointer.
+//! code), so interning the canonical `Lambda` is the complete code identity.
+//! Recursive SCCs schedule graph construction only; they never refine or replace
+//! this per-function code pointer. Exact rooted-graph comparison remains the
+//! recursive value bucket's verifier.
 
 use std::collections::HashMap;
 

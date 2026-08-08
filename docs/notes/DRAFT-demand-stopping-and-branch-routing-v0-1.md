@@ -692,7 +692,7 @@ number of combinations.
 
 ---
 
-## 15. Implementation status (2026-08-07)
+## 15. Implementation status (updated 2026-08-08)
 
 **Already true, measured.**
 
@@ -705,39 +705,33 @@ number of combinations.
 - **The union-remainder algebra is fixed** (2026-08-07): `difference` distributes over union
   arms, `Equals(v) ∖ Z` reduces to `Bottom` by membership, `union` drops `Bottom`. *n* exact
   point arms now consume an *n*-member union; previously three failed where two succeeded.
-- **DR-17/DR-18's first slice is built** (2026-08-07): completion is judged coarsely, and
-  **only if that fails** the same judgment re-runs with the rulebook distributing over finite
-  point operands. The mode is part of the memo key, so a cached coarse `Unproven` cannot
-  short-circuit the retry — that is §11's open item 3, answered for this slice. Capped at 256
-  combinations; beyond the cap the coarse verdict stands. §7's worked example checks `ok` and
-  runs to `16`; removing one arm is still refused.
+- **DR-17/DR-18's mechanism is built** (2026-08-07, completed 2026-08-08). The rulebook
+  always gives the cheap coarse hull. A finite operation stores an unforced `HeldImage` in
+  local analyzer metadata; `analyze_match` forces it when routing the scrutinee. There is no
+  fail-then-retry, re-analysis mode, mode-dependent memo key, or result-demand forcing.
+- **BR-03/BR-04 cells and structural correlation are built** (2026-08-08). A cell records
+  nominal source assignments—never source spellings or merely equal contracts. Composition
+  is a natural join: shared sources must carry the same assignment; unrelated sources cross.
+  Chained held images force depth-first while retaining those assignments.
+- **BR-09 narrowing by arrival is built** (2026-08-08). A match output retains the cells that
+  arrived at each arm. When a later match routes a derived node, every local source and
+  derived binding sharing those assignments narrows simultaneously. No inversion is used.
+- **BR-15's core collapse boundary is built** (2026-08-08). Branch metadata lives beside an
+  expression/environment binding, not in `AnalysisContract`; calls, returns, structures and
+  recursive/fact boundaries therefore carry only the ordinary joined contract. A callee can
+  establish fresh local cells from the finite contract that arrived.
+- **BR-16 has no fuel threshold.** The former unratified 256-combination cutoff is removed.
+  Routing enumerates the finite represented cells; a 17×17 independent product (289 cells)
+  is pinned. §7's worked example checks `ok` and runs to `16`; removing one arm is refused.
 
-**§11 item 4 — the consumer set — settled by measurement 2026-08-07.** The retry is wired
-at the `where`'s completion judgment **only**, and needs no wiring elsewhere: it re-runs the
-*whole* body analysis in exact mode, so every nested seat — including the application path's
-own completion judgments — inherits it; and outside a `where` no branch set exists (BR-02),
-so those seats have nothing to retry. Verified on a union argument crossing a call boundary
-where the hull is genuinely insufficient (`rate ∈ {1,2,5}`, mixed parity, hull `{2,4,6,8,10}`
-against a truth of `{2,4,10}`) — conformance `exact_image_reach`.
+**Lookup.** Routing currently uses BR-10's iterative alternative and therefore preserves
+BR-11 first-match order directly. Literal-key indexing remains an optional optimization, not
+a semantic gap.
 
-**§11 item 2 — the representation — built 2026-08-07.** `domain::HeldImage { op, operands }`
-rides on `AnalysisContract::Leaf` beside the coarse contract; `analyze_primop` holds it when
-every operand is a finite point set, and `analyze_match` forces it at the scrutinee. One node
-forced, not one judgment re-run. **§11 item 3 is dissolved with it**: the mode flag and its
-memo-key field are deleted, so a coarse settlement and an exact one are no longer different
-questions to keep apart.
-
-**Chaining built 2026-08-07.** An operand that itself holds an image is carried as
-`ImageOperand::Nested`, and forcing resolves depth-first, so a chain stays exact instead of
-collapsing at its first coarse step. Budgeting uses a bound computed at hold time (the
-product of the operands' bounds), so the budget is checked without forcing.
-
-**Not built, deliberately.** Shared-versus-independent provenance (two operands descending
-from the same source are forced independently, so `a + a` is over-approximate rather than
-wrong — BR-04's correlation is not yet what the forcing path uses), BR-10/BR-11's keyed
-lookup, BR-15's collapse inventory, and DR-12/DR-14's substitution as a *distinct* mechanism
-(today's narrowing comes from the region walk, not from substitution). The 256-combination
-budget for forcing is the drafter's and unratified.
+**Still deliberately coarse.** An opaque guard drops exact outgoing cell metadata because it
+does not determine which cells leave through that arm. Non-point/open domains remain ordinary
+contracts. DR-12/DR-14's syntactic substitution is not a separate mechanism; BR-09 supplies
+the branch-sensitive narrowing for represented cells.
 
 **Editorial nit on §7.** `Union` is binary in the grammar, so the example's three-argument
 `Union(a, b, c)` must be written nested — `Union(a, Union(b, c))` — to parse. The verified

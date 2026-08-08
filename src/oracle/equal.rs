@@ -53,8 +53,8 @@ fn equal(a: &ValueRef, b: &ValueRef, visited: &mut HashSet<(usize, usize)>) -> b
 }
 
 /// Compare two function values: equal shape (canonical code) and bisimilar
-/// captures (§4B, §3 law 6). Captures resolve their names against each closure's
-/// environment — value captures recurse; location captures are nominal atoms.
+/// positional captures (§4B, §3 law 6). Value captures recurse; locations are
+/// nominal atoms on the separate Effect/Mutator path.
 fn equal_fns(f: &FnValue, g: &FnValue, visited: &mut HashSet<(usize, usize)>) -> bool {
     let key = (
         f.closure() as *const _ as usize,
@@ -65,31 +65,26 @@ fn equal_fns(f: &FnValue, g: &FnValue, visited: &mut HashSet<(usize, usize)>) ->
     }
     let result = f.shape() == g.shape()
         && f.free_vars().len() == g.free_vars().len()
-        && f.free_vars()
-            .iter()
-            .zip(g.free_vars())
-            .all(|(fname, gname)| capture_equal(f, fname, g, gname, visited));
+        && (0..f.free_vars().len()).all(|index| capture_equal(f, index, g, index, visited));
     visited.remove(&key);
     result
 }
 
-/// Compare one capture slot of `f` against one of `g`, resolving each name in its
-/// closure's environment.
+/// Compare one positional capture slot of each function.
 fn capture_equal(
     f: &FnValue,
-    fname: &str,
+    findex: usize,
     g: &FnValue,
-    gname: &str,
+    gindex: usize,
     visited: &mut HashSet<(usize, usize)>,
 ) -> bool {
-    match (f.closure().env.lookup(fname), g.closure().env.lookup(gname)) {
+    match (f.capture_binding_at(findex), g.capture_binding_at(gindex)) {
         (Some(Binding::Value(fv)), Some(Binding::Value(gv))) => equal(&fv, &gv, visited),
         (Some(Binding::Open(_)), _) | (_, Some(Binding::Open(_))) => false,
         // Locations are nominal (fork 13 split rule): equal iff the same slot.
         (Some(Binding::Slot(fs)), Some(Binding::Slot(gs))) => fs == gs,
-        // Open-value edge (§4C): a still-unresolved capture compares as its
-        // binding atom — nominal by name while open.
-        (Some(Binding::UnderInit), Some(Binding::UnderInit)) | (None, None) => fname == gname,
+        // Open construction values are not candidates for closed equality.
+        (Some(Binding::UnderInit), Some(Binding::UnderInit)) | (None, None) => false,
         _ => false,
     }
 }
@@ -133,22 +128,19 @@ mod tests {
                 if f.shape() != g.shape() || f.free_vars().len() != g.free_vars().len() {
                     return false;
                 }
-                f.free_vars()
-                    .iter()
-                    .zip(g.free_vars())
-                    .all(|(fname, gname)| {
-                        match (f.closure().env.lookup(fname), g.closure().env.lookup(gname)) {
-                            (Some(Binding::Value(fv)), Some(Binding::Value(gv))) => {
-                                equal_unfold(&fv, &gv, depth - 1)
-                            }
-                            (Some(Binding::Open(_)), _) | (_, Some(Binding::Open(_))) => false,
-                            (Some(Binding::Slot(fs)), Some(Binding::Slot(gs))) => fs == gs,
-                            (Some(Binding::UnderInit), Some(Binding::UnderInit)) | (None, None) => {
-                                fname == gname
-                            }
-                            _ => false,
+                (0..f.free_vars().len()).all(|index| {
+                    match (f.capture_binding_at(index), g.capture_binding_at(index)) {
+                        (Some(Binding::Value(fv)), Some(Binding::Value(gv))) => {
+                            equal_unfold(&fv, &gv, depth - 1)
                         }
-                    })
+                        (Some(Binding::Open(_)), _) | (_, Some(Binding::Open(_))) => false,
+                        (Some(Binding::Slot(fs)), Some(Binding::Slot(gs))) => fs == gs,
+                        (Some(Binding::UnderInit), Some(Binding::UnderInit)) | (None, None) => {
+                            false
+                        }
+                        _ => false,
+                    }
+                })
             }
             (ValueData::Tuple(xs), ValueData::Tuple(ys)) => {
                 xs.len() == ys.len()

@@ -798,8 +798,9 @@ clean. Not wired (same discipline as `region.rs`/`bodycheck.rs`).
   non-unit drift to a point base (specimen 12 — refuted in a later increment, not falsely
   proved now), non-integer domain (dense measures deferred).
 - **Reuse:** `region_table` for the arm split (base vs recursive rows); a `bodywalk`-style
-  full-body walk to collect self-call args (resolving the callee through `closure.env` —
-  recursion lives in the captures); `subcontract` for the integer-lattice + `≥ base`
+  full-body walk to collect self-call args (then resolving the callee through
+  `closure.env`; superseded 2026-08-08 by positional capture edges — recursion still
+  lives in the captures); `subcontract` for the integer-lattice + `≥ base`
   checks. **Candidate-locality (GR-04):** outside applicability → `Unproven`, never a
   false proof.
 - **Deferred to later increments:** §7 refutation (drift-away / closed orbit), §6 variable
@@ -6878,7 +6879,15 @@ cycle. Both recorded as ignored rows naming the real gap.
 **Verification:** 473 lib passed / 1 ignored; 231 conformance passed / 13 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
 
-## 2026-08-07 — Termination is adjudicated by walking, not by asking first [user ruling]
+## 2026-08-07 — Recursion is discovered by walking; the cycle-closing call fires grounding [user ruling; wording corrected 2026-08-08]
+
+**Wording correction [user, 2026-08-08].** The original heading said *"Termination is
+adjudicated by walking, not by asking first."* That conflated recursion discovery with the
+termination judgment and could be read as recursively solving termination. The walk discovers
+recursion. When it reaches a call that closes the active call cycle, expansion stops; that
+cycle-closing edge exposes the arrived arguments and their transformation, from which grounding
+calculates drift and adjudicates the finite certificate. Direct self-recursion is the one-edge
+case; mutual recursion closes when the walk returns to an active member of the cycle.
 
 **The bug.** `ground_demand` opened with
 
@@ -6907,22 +6916,25 @@ I twice reported this smaller than it is — first as "the mutation world is unc
 "act bodies aren't walked." Neither was right. It is not about acts and not about blocks: it
 is any diverging call sitting inside a larger expression, `[spin(k)]` included.
 
-**The fix [user]: don't ask in advance. Walk.** When the seat's callee is not itself on a
-cycle, analyze its body under the domain that arrived and adjudicate the calls it actually
-makes, with the arguments those calls actually receive. Recursion is what the walk arrives at
-again — the same late-resolution law the rest of the analyzer follows, and the shape
-`analyzer::safety` already uses for body safety.
+**The fix [user]: don't ask in advance. Walk to discover recursion.** When the seat's callee
+is not itself on a cycle, analyze its body under the domain that arrived and follow the calls it
+actually makes, with the arguments those calls actually receive. When a call closes the active
+call cycle, stop expanding and fire the grounding obligation there; the cycle-closing edge's
+argument transformation supplies the drift. This is the same late-resolution law the rest of
+the analyzer follows, and the shape `analyzer::safety` already uses for body safety. The walk
+does not recursively solve termination.
 
 **Carrying the arguments down is what keeps good programs compiling.** The blunt alternative —
 grounding every reachable recursive function over `Top` — is sound but rejects
 `run = (n) => [countDown(n)]` at `run(5)`, because `countDown` over *every* Number cannot be
 proven (a negative or fractional start never reaches 0). Walking with the arriving domain
-grounds `countDown` at 5 and proves it.
+reaches the cycle-closing `countDown` edge at 5; the grounding judgment then proves it from
+the edge drift and landing condition.
 
 **No new machinery.** `outcome::analyze_instance_body` already carries a shape-repeat guard,
-so the descent needs no cycle detection of its own; anything on a cycle is adjudicated rather
-than descended through. The added depth bound is a backstop for a wrong call graph, not a
-limit.
+so the discovery walk needs no second cycle detector; a call closing the active cycle is handed
+to grounding rather than descended through. The added depth bound is a backstop for a wrong call
+graph, not a limit.
 
 **Verified:** every case above now rejects; `run(5)`, `{ countDown(n) }`, `countDown(n) + 1`
 and a two-level wrapper chain all still compile; the refutation names the argument that
@@ -7089,3 +7101,626 @@ self-call resolves to the same node as the seed or spawns one that never converg
 
 **Verification:** 473 lib passed / 1 ignored; 244 conformance passed / 11 ignored; 10 machinery
 gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK.
+
+## 2026-08-08 — A6's laziness arc completed: correlated cells, arrival narrowing, collapse, no fuel
+
+**Author direction.** After confirming that hull versus eager distribution was to be resolved
+by the laziness arc, the author asked to implement it now. The settled asymmetry remains: the
+operation rulebook's hull is an immediate positive-proof accelerator; routing/completion may
+not turn hull imprecision into a rejection while a held finite image exists.
+
+**Red first.** `p ∈ {0,5,20}`, `b = p*2`, `total = p+b` with arms `{0,15,60}` was rejected.
+The old forcing path independently flattened `p` and `b`, manufactured the cross sums
+`{5,10,20,30,40,45}`, and then blamed the program for not covering impossible values. This is
+BR-04's named gap, not a rulebook-soundness failure: the coarse hull remained an over-approximation,
+but the allegedly exact forcing step had discarded provenance.
+
+**Representation.** `BranchSet` is local analyzer metadata made of cells. A cell contains a
+point value and nominal source assignments. Source identity is freshly allocated per local
+binding/source and compared only for equality; it is never a source spelling and never inferred
+from equal contracts. Held-operation composition is a natural join: assignments of a shared
+source must agree, while unrelated sources cross. `ImageOperand::Nested` retains the relation
+through operation chains.
+
+**Routing and BR-09.** A match forces its scrutinee's held image once and walks the exact joined
+contract. Its outgoing relation retains the cells arriving at each unguarded/proven-true arm.
+Inside an arm, every local source and derived image sharing those assignments narrows together.
+The discriminating row routes `doubled` and then proves a one-arm nested match on the original
+`p`; no inversion or backward search exists. An opaque guard deliberately drops exact outgoing
+cell metadata because it does not determine which cells leave through that arm.
+
+**Independence and shadowing.** Two parameters with the same `{0,1}` contract receive different
+nominal sources, so their sum still includes `1`. A shadowed inner parameter does not correlate
+with an outer-derived capture of the same spelling. Both are negative conformance pins: the
+missing cross-value arms must reject.
+
+**Collapse and cache completeness.** Held images moved out of `AnalysisContract` and into the
+local `Analysis`/`TypeEnv` channel. Calls, returns, structures and recursive/fact boundaries
+therefore carry only the joined ordinary contract (BR-15). No branch source can enter an
+instance or memo key, so allocation order and cache warmth cannot affect a verdict. A callee may
+establish fresh local cells from the finite contract that arrived; `exact_image_reach` pins that
+case.
+
+**No budget.** The unratified 256-combination cutoff and `EXACT_IMAGE_LIMIT` are deleted.
+Routing enumerates the finite represented cells, as BR-16 requires; a 17×17 independent product
+(289 cells) is a live conformance row. There is no fuel, retry mode, global precision setting,
+inversion, or widening. BR-10's iterative route is used, preserving first-match directly;
+literal-key indexing remains an optional optimization.
+
+**Pinned:** six new `exact_images` rows cover shared derived provenance, match-product
+provenance, BR-09 source narrowing, equal independent sources, name shadowing, and the former
+256-cell boundary. The pre-existing product, chain, missing-arm, flagship and cross-call rows
+remain green.
+
+**`// [ask-author]`: none.** The behavior is the author's BR-03/04/09/15/16 arc; the nominal
+token and local side channel are representation choices that enforce its stated cache and
+collapse constraints.
+
+**Verification:** 473 lib passed / 1 ignored; 250 conformance passed / 11 ignored in both
+default and serial order; 10 machinery gates; clippy `-D warnings` clean; fmt clean; manifest
+19/19 OK (the checker retains its pre-existing one-line formatting warning).
+
+## 2026-08-08 — Immutable analyzer knowledge migrates under the interning authority
+
+**Author direction.** Immutable memo queries and answers can migrate now; this does not require
+waiting for the runtime to become process-global. Do not encode a project/generation identity in
+semantic queries. The architectural target is one shared interning authority capable of owning
+all immutable identity and knowledge; the present migration must be usable by that owner without
+another key redesign.
+
+**The stronger red.** The 2026-08-07 parameter-name correction did not close RT-09's dependency:
+
+```
+cd   = (n) => n == 0 ? 0 : cd(n - 1)    ; r = cd(5)
+loop = (n) => n == 0 ? 0 : loop(n - 1)  ; r = loop(5)
+```
+
+Either program accepted cold. When both checks ran on the same thread, the second was rejected
+with the first recursive binding (`cd` or `loop`) reported unbound. Either order reproduced it.
+AI-01…03 varied parameters and therefore proved only the first repair. The live RT-09 answer is a
+source-spelled `Row` table, while its query still named only canonical shape, parameters, captures,
+and contracts; recursive sibling spelling was another omitted answer dependency.
+
+**Substrate.** `intern::MemoInterner` is a type-indexed store from an already-interned immutable
+query to one immutable `Rc` answer. The first publication wins; a repeated publication and every
+lookup return the original answer allocation. Query identity is one pointer comparison. The store
+is owned by `Interner` beside value and enum/term interning, so the identities and the facts about
+them cannot accidentally come from unrelated owners. Sharing an `Interner` shares all three;
+dropping it reclaims all three. There is no project ID, cache epoch, or source-check ID in a query.
+
+**Migrated persistent families.** Every persistent analyzer memo present in the code now uses that
+store:
+
+- layer-2 recursive-group resolution;
+- the C§13.4 proven-fact family;
+- RT-09's single- and multi-parameter instantiated region rows;
+- local recursive-group construction.
+
+The old `CACHE`, `LAYER2`, `INSTANCE_TABLES`, `INSTANCE_TABLES_MULTI`, and `LOCAL_GROUPS`
+thread-locals are deleted. A machinery gate pins that boundary. `ACTIVE` and `DEPTH` remain
+thread-local deliberately: they describe the currently executing settlement and its recursive
+hypotheses, not completed immutable knowledge.
+
+**Shared interned query components.** Fact and RT-09 queries now use the same interned
+`AnnotatedCaptureTuple` (preserving branch/function metadata rather than erasing it) and the same
+interned sorted `NamedContractEnvironment`. Recursive member serialization is promoted to an
+interned `GroupTemplateKey` term. Thus repeated construction of the same instance component is one
+identity and all current memo families consume it directly.
+
+**RT-09 completeness now.** While its answer contains source-spelled AST, `InstanceKey` includes
+the source lambda retained by the canonical callee value in addition to the layer-2 shape,
+parameter list, annotated capture tuple, and named environment. Separate identity owners can no
+longer exchange those representatives. Within one shared owner, α-variants that universal value
+interning resolves to one closure deliberately share that closure's retained representative,
+environment, and rows. This trades some hits for correctness for distinct values while preserving
+the valid same-value hit. Once region rows become canonical templates, the representative field can
+be removed from both query and answer together. AI-04 pins cold behavior plus both orders under one
+deliberately shared `Interner`.
+
+**Boundary.** The ordinary `check_source` convenience path still creates a fresh `Interner`;
+`check_source_in` is the explicit shared-owner seam today. Making that owner process-global is a
+runtime ownership change, not a memo-key change: current `Rc` non-`Send`, strong-retention policy,
+and store-qualified `SlotId` location identity must be resolved first. The absent C§13.4
+template/evaluation/subcontract families are still owed. Runtime calls remain explicitly never
+memoized; construction deduplication and immutable analyzer facts are the only sharing here.
+
+**`// [ask-author]`: none.** This implements the author's ownership direction without introducing
+a semantic ruling. The retained source representative in RT-09 is an implementation necessity
+imposed by the existing source-spelled answer, and is removable only when that answer
+representation changes.
+
+**Verification:** 476 lib passed / 1 ignored; 251 conformance passed / 11 ignored in both default
+and serial order; 11 machinery gates; clippy `-D warnings` clean; fmt clean; manifest 19/19 OK
+(the checker retains its pre-existing one-line formatting warning).
+
+## 2026-08-08 — Author direction: closure conversion makes lexical scope capture arguments
+
+**Ruled [user].** The outer lexical scope of a function is represented as an additional positional
+capture-parameter space in canonical IR:
+
+```next
+@mutable x = 1
+f = () => x
+```
+
+is conceptually closure-converted to `(capture x) => (() => x)`. This is not source syntax and does
+not add an argument to calls of `f`: construction evaluates the outer capture application once,
+while invocation supplies only the source-declared parameters. For a read of mutable `x`, the
+captured operand is the current **value**, not its slot reference. Consequently `f` is Pure and a
+later write to `x` does not change what this already-formed closure reads. Two such pure closures
+over the same canonical code and equal current captured values are the same value even if those
+values came from different mutable locations; different current values yield different capture
+pointers and therefore different functions.
+
+Likewise:
+
+```next
+loop = x => loop(x)
+```
+
+is conceptually `(capture loop) => (x => loop(x))`. The capture cannot be supplied as an ordinary
+closed value at first formation, so the group construction window supplies an open self edge. At
+window close that edge becomes a positional recursive edge in the rational value graph; fingerprint
+plus exact comparison interns independently named but bisimilar recursive functions to one pointer.
+Mutual recursion is the vector/group form of the same operation.
+
+**Representation consequence.** The executable canonical closure should be canonical code plus a
+positional capture-value vector (and, for recursive groups, positional internal edges), rather than
+the current source `Lambda` plus name-indexed `Rc<Scope>`. The source form may remain as diagnostic
+metadata but cannot own identity or invocation. This makes the interner, rather than source names or
+memo keys, the sole answer to whether two functions are identical. Calls remain never memoized.
+
+**Measured implementation gap.** The current `FunctionKey` stores `Location(SlotId)` and every new
+`Oracle` starts a fresh store whose first location is `SlotId(0)`. With one shared `Interner`, these
+two separate runs:
+
+```next
+@mutable x = 1; f = () => x
+@mutable y = 2; g = () => y
+```
+
+returned `f.ptr_eq(g) == true`, even though they read different current values. The first canonical
+`ValueRef` also retains the first source closure/environment. This is not a memo-lifetime defect; it
+is the old closure representation disagreeing with the newly stated capture conversion. Snapshot
+value captures make the two keys differ (`1` versus `2`) without introducing a store/project salt.
+
+**Normative discrepancy recorded, not silently edited.** The manifest-protected semantics companion
+currently says a slot free name becomes a location marker, and μ v0.5 says location atoms remain
+nominal. This author ruling supersedes that text for **read captures**; the normative files remain
+unchanged until their controlled revision.
+
+**Historical implementation status at the ruling:** direction recorded, code unchanged. The
+migration listed canonical capture-vector invocation, recursive graph-edge construction, snapshot
+tests, and removal of raw environment/location identity from Pure read captures. That migration
+landed later on 2026-08-08; see the implementation entry after the ODDO/Mutator deferral record.
+Mutator lowering remained deliberately outside this ruling. `// [ask-author]`: none for Pure
+closure conversion.
+
+## 2026-08-08 — ODDO precursor audit: mutation is setter lowering, not Pure closure capture
+
+**Author correction.** I expanded a Pure-function identity direction into a general mutation
+design question. That was the wrong scope. Mutators are their own class; the author pointed to the
+ODDO compiler as the precursor for the intended separation. Inspected public ODDO commit
+`996626167d66e3709d7f90f8932a7f31c4a015e3`.
+
+**What ODDO actually demonstrates.** Its compiler:
+
+1. lowers `@state count = 0` to a generated getter/setter pair;
+2. rewrites reactive dependencies as explicit generated function parameters rather than leaving
+   them as accidental JavaScript lexical captures;
+3. scans an `@mutate` body for mutation targets, supplies their state containers to the generated
+   mutator, performs body updates on local proxies, and emits a finalizer that calls each target's
+   setter;
+4. keeps the runtime wrapper responsible for obtaining current target values and sequencing the
+   mutation operation.
+
+Its runtime `stateProxy` supplies the important implementation detail: each aggregate is wrapped by
+a copy-on-write cell that clones only on its first mutation; child proxies are cached, and a child
+mutation asks its parent to become writable and replace that child, propagating the changed path to
+the root. Array splice obtains the writable backing aggregate through the same private mutation
+channel. Applying/materializing the root proxy yields the current draft for the compiler-generated
+finalizer. This proxy layer, rather than JavaScript mutation itself, is the precursor relevant to
+NEXT.
+
+The current ODDO `@mutable` path itself compiles to a JavaScript `let` and direct assignment, so it
+is not a literal NEXT implementation. The reusable idea is the split: **binding access has generated
+read/update operations; ordinary generated functions receive values/dependencies; mutation writes
+through the binding's update operation.** The author's NEXT direction is that `@mutable` follows
+that setter principle too.
+
+**NEXT mapping.** For a Pure function, `@mutable x = 1; f = () => x` still closure-converts by
+supplying the current value of `x`; no location appears in `f`'s canonical code or capture vector.
+For a Mutator, `Write(x, e)` is compiled against `x`'s statically resolved internal setter. Calling
+that setter does not publish immediately. The future NEXT representation opens the committed,
+immutable, interned value as a transaction-local mutable draft; it copies on write along the
+touched path, and nested Mutators join the same draft transaction. On successful outermost commit,
+the result is locked/frozen and interned bottom-up, then the canonical root pointer is subjected to
+the existing equality guard and publication law. No mutable draft enters the interner or escapes as
+a language value. `@state` uses the same write channel plus its reactive behavior; `@mutable` uses
+the non-reactive variant. Mutator identity and execution remain in the Mutator subsystem, not a
+location-capture variant of Pure function interning.
+
+**Correction to the preceding entry.** The proposed choice between an implicit location capability
+and new explicit surface syntax is withdrawn. It was solving mutation inside the Pure closure
+representation after the author had explicitly scoped the discussion to Pure functions. No author
+ruling is pending on that invented fork.
+
+**Deferral ruling [user, 2026-08-08]:** this Mutator representation is not a blocker and may be
+implemented later. The current oracle eagerly constructs complete interned replacement `ValueRef`s,
+stages them in π, reads staged values before σ, shares π across nested Mutators, and publishes only
+pointer-different roots at outermost completion. It therefore already supplies the observable
+transaction law without an ODDO-style transient draft. COW drafts are a later representation and
+allocation improvement constrained to preserve that behavior. Pure canonical capture-vector
+migration proceeds independently. `// [ask-author]`: none introduced here.
+
+## 2026-08-08 — Pure closure conversion landed: canonical invocation, value snapshots, graph edges
+
+**Runtime payload and invocation.** `FnValue` is canonical code plus an ordered capture vector.
+Calls create a fresh canonical frame, bind captures positionally as `@cap0`, `@cap1`, …, match the
+canonical parameter pattern, and execute the canonical body. The retained source lambda is used by
+the analyzer and diagnostics only; a closed function no longer carries or executes `Lambda + Env`.
+Analyzer consumers (`bodywalk`, domain realization, fact keys, outcome, safety, and grounding) now
+read the same positional captures instead of reaching through a source environment.
+
+**Pure mutable reads.** Runtime closure formation resolves a Pure capture of a mutable slot through
+the current transaction view (π first, then σ) and stores the resulting interned value. A later
+write therefore cannot change the already-formed Pure function. Equal current values from distinct
+slots or distinct stores produce one function pointer; different current values produce different
+functions. Effect/Mutator location capture remains on its separate deferred lowering path and is
+not part of Pure identity.
+
+**Recursive close.** Unresolved operands exist only as construction-window `Deferred` captures.
+Joint close maps all references to roots of that exact scope—including a backward edge already
+present as a provisional value pointer—to positional `RecursiveGroup` edges. The interner repeatedly
+closes roots until redirects stabilize, updates all group targets to canonical roots, then locks the
+target vector. Closed-Pure-payload coverage proves that no `Deferred` or `Location` capture escapes.
+Source-recursive, mutual, symmetric-collapse, and mixed aggregate μ cases remain green.
+
+**Three bugs exposed and fixed by removing retained environments.** First, `close_function` formerly
+examined only immediate captures; the second member of a mutual pair could therefore enter a bucket
+while its value capture still reached an open first member. Function publication now requires the
+entire reachable capture graph to be closed. Second, dynamic lookup could make a reachable
+`Deferred` edge appear resolved before it had been rewritten: an acyclic wrapper was then published
+with a pre-close recursive intermediary and no longer pointed directly at the canonical root.
+Publication now also requires the entire raw graph to be materially finalized. Third, redirects
+were keyed only by a raw allocation address. Reclaiming provisional closures allowed address reuse
+and occasionally redirected an unrelated Boolean/function. A redirect now stores a weak identity
+for its source and applies only when that exact allocation is still alive.
+
+**Pins.** Oracle/unit coverage adds snapshot-versus-later-write, equal/different captures across
+fresh stores sharing one interner, and a recursive payload walk proving closed Pure functions retain
+only value/recursive captures. A wrapper-over-recursion regression additionally requires its
+captured target to be the exact canonical recursive root; the transitive countDown conformance row
+guards the analyzer consequence. Conformance repeats the snapshot and cross-store identity laws; a
+machinery gate forbids restoring source-environment invocation or Pure location capture.
+
+**Verification:** 480 lib passed / 1 ignored; 252 conformance passed / 11 ignored in default and
+serial order; 12 machinery gates passed; clippy `-D warnings` clean; formatting and all 19 normative
+checksums match. `shasum` still reports the manifest's pre-existing malformed-line warning after
+checking those entries.
+
+**Representation tail, not a semantic gap.** `RecursiveGroup` currently locks a Rust vector of
+canonical root handles. The final one-allocation/interior-offset backing and its reclamation policy
+remain a layout refinement; the observable identity graph, canonical invocation, and positional
+capture law are live. Mutator transient COW remains separately deferred. `// [ask-author]`: none.
+
+## 2026-08-08 — Author ruling: recursive groups are construction windows, not identity templates
+
+**Ruled [user].** Recursive function identity is canonical per-function positional code applied to
+an immutable positional capture graph. A source recursive group contributes no additional code
+identity, group template, entry slot, or serialization. Its SCC is needed only as a temporary
+construction window: allocate the open graph, connect sibling/self capture positions, close it,
+then let universal value interning and exact bisimulation establish the canonical pointers.
+
+The conceptual closure conversion is uniform:
+
+```next
+a = () => b()
+b = () => a()
+```
+
+Both bodies canonicalize to the same code shape, conceptually `K = (captured) => () => captured()`.
+Construction creates `a = K(b)` and `b = K(a)`. Those rooted rational trees are bisimilar, so the
+value interner collapses them to one pointer. In contrast, the even/odd pair has different
+per-function code because the base results are `true` and `false`; its two roots remain distinct
+even though the recursive edges occupy the same capture position. Renaming binders or group members
+does not participate because lambda binders and captures are positional (`$n` / `@capn` in the
+current canonical IR; de-Bruijn-style identity), and member order does not change the closed graph.
+
+**Implementation.** Deleted `oracle::mu::canonicalize_group`, the source-name serializer,
+serialized μ-refs, brute-force member-slot permutations, and `oracle::canonical_group_keys`.
+`oracle::mu` now contains only binder-aware SCC discovery and `GroupWindow` scheduling. Replaced
+the analyzer's `ShapeKey::Group`, `GroupTemplateKey`, layer-2 resolution memo, and concrete annotated
+capture tuple with the canonical applied function `ValueRef` in both `FactKey` and RT-09's
+`InstanceKey`. The retained source lambda remains analyzer/diagnostic metadata owned by that
+canonical value; it is not an independent query argument or identity.
+
+**Pins.** The six μ regressions now test the correct owner: nonrecursive/self/minimal SCC rows test
+construction windows; rename/member-permutation/distinct-body rows test interned function values.
+The fact-cache regression proves renamed even/odd groups share corresponding facts, different
+members do not collide, and the symmetric `a`/`b` cycle collapses before fact lookup. A machinery
+gate forbids restoring the group serializer or analyzer side channel while requiring construction
+windows to remain.
+
+**Normative discrepancy.** Manifest-protected μ v0.5, application v0.8, and compendium passages
+still specify `GroupTemplate` and group-level function shape. This later author ruling supersedes
+those passages. They are left byte-stable for the controlled normative revision rather than being
+silently patched in place. `// [ask-author]`: none.
+
+**Verification:** 480 lib passed / 1 ignored; 252 conformance passed / 11 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings` and formatting clean; all 19
+manifest-protected checksums match (with the manifest's pre-existing malformed-line warning).
+
+## 2026-08-08 — Recursive identity v0.6 + canonical symbolic instances
+
+**Normative close.** Published `next-mu-canonicalization-specification-v0-6.md` as the controlled
+author amendment. It makes canonical per-function positional code applied to the immutable capture
+graph the complete identity and expressly supersedes `GroupTemplate`, entry/member slots,
+source-group reconstruction, capture-routing templates, and serialized μ-refs. The compendium,
+semantics companion, application package, agent guidance, and canonical manifest now point at that
+law. v0.5 stays on disk only as review history.
+
+**Symbolic instance representation.** `analyzer::domain::Instance` is now an interned application
+of an interned canonical `Lambda` to an interned positional tuple of `AnalysisContract` captures.
+Its fields are private: tests and production code can no longer manufacture a shape with the wrong
+capture arity or bypass the identity owner. α/capture-spelling variants with equal operands share
+one instance pointer; equal code with different capture contracts remains distinct. Domain
+coverage, meet, realization, projection, inventory, and capture environments consume this
+representation.
+
+**Symbolic facts and application.** Removed the expression-layer active-shape boolean. A symbolic
+query is interned as `(full instance, arrived argument contracts, named contracts)`. Re-entry closes
+through the active hypothesis only when the full instance agrees and its assumed domain covers the
+arrival. Repeating canonical code through another capture tuple or uncovered domain emits the
+honest safety-unproven error. Hypothesis-independent outer answers publish to the interner-owned
+memo. `Known(S)` application now analyzes every nonempty represented member, joins outcomes, and
+requires every member to prove; it is no longer restricted to one Pure instance.
+
+**Pins.** Added regressions for canonical symbolic-instance interning and capture distinction,
+full-instance/domain symbolic-fact lookup, constructor-enforced capture arity, and traversal of a
+two-member instance union where the bad capture must reach its `Add` operation. Existing concrete recursive
+identity, symmetric-cycle collapse, factory, and cache rows remain the value-level half.
+
+**Measured tail — SUPERSEDED later the same day by the author correction below.** The probe exposed
+that local recursion over a non-singleton outer argument was unresolved, but its proposed remedy —
+forming cyclic symbolic closure metadata — was an eagerness error. The local closure does not exist
+until the outer call executes; the corrected route carries outer bindings as ordinary analysis
+arguments and discovers recursion at the reached back-edge.
+`// [ask-author]`: none.
+
+**Verification:** 483 lib passed / 1 ignored; 252 conformance passed / 12 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings` clean; formatting clean; all 19
+canonical-manifest entries verify (the manifest parser retains its pre-existing one-line formatting
+warning).
+
+## 2026-08-08 — Late local-call correction: outer bindings are arguments, not symbolic values
+
+**Author correction.** `limit` in `outer(limit)` is already an arrived function argument. The
+inner `f` is formed only when `outer` executes, so analysis must not solve ahead by manufacturing a
+symbolic closure or a cyclic capture-contract graph. Recursion is discovered when the reached call
+returns to `f`; that is the stopping edge on which drift is calculated.
+
+**Implemented model.** Direct self-recursive Pure locals with non-singleton outer bindings receive
+an analyzer-only closure-converted identity. The external bindings are prepended as ordinary fact
+arguments: source `f(n)` is judged as `F(limit, n)`, and source `f(n - 1)` becomes
+`F(limit, n - 1)`. Runtime code and closure formation are unchanged. The lifted identity is closed
+and interned, so the existing concrete fact cache, SCC settlement, return inference, completion,
+and grounding machinery applies without a second recursive-value representation. Grounding's
+carried-argument certificate requires every non-measure position to remain unchanged and the base
+to depend only on the decreasing position; an outer value therefore cannot be silently ignored if
+it controls termination.
+
+**Dependency parity.** Candidate discovery now recognizes the same delayed local call as live
+application analysis and records the enclosing-function → local-function edge. Completion
+settlement, like safety settlement, may consume an already-published covering fact when discovery
+has omitted that established dependency. Empty single-parameter region tables fall back to the
+whole body instead of falsely declaring a block unable to produce.
+
+**Documentation correction.** v0.6 §6, the application amendment, the compendium, agent guidance,
+status/snapshot/owed/open ledgers, and the executable row now distinguish flowing factory-product
+metadata from unformed local closures. The former remains analysis metadata; the latter uses late
+call resolution and never cyclic symbolic metadata. The live regression is
+`cli_recursive_local_call_carries_outer_arguments_lazily`.
+
+`// [ask-author]`: none.
+
+**Verification:** 483 lib passed / 1 ignored; 254 conformance passed / 11 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings` and formatting clean; all 19
+canonical-manifest entries verify (the manifest parser retains its pre-existing one-line formatting
+warning).
+
+## 2026-08-08 — GR-19/GR-26 release: descending coordinate plus verified numeric payload
+
+**Remeasure before mechanism.** Running the ignored rows directly showed GR-26 already passed after
+the late local-call correction; its ignore was stale and is removed. GR-19 still failed, but its
+grounding demand was already `Grounded`. Instrumented discovery showed the exact safety-only chain
+`(5, 0) → (4, 5) → (3, 9) …`; the shape cutoff correctly refused to unfold it. No cache,
+closure-identity, or termination defect remained.
+
+**Fact-domain rule.** The existing descending-coordinate reader was split from its exact-carried
+policy. For a flat self-recursive function with one negative-integer bare-coordinate drift and one
+base depending only on that coordinate:
+
+- exact-carried non-measure positions keep their arrived contracts, as before;
+- one or more changed non-measure positions may receive the fixed `Number` proposal only when the
+  arrived contract is proven within Number and every written recursive expression at that position
+  belongs to the closed constants/parameter-references/primitive-operation fragment, the operation
+  rulebook proves each operation safe, and every resulting image is a subcontract of Number;
+- the measure position receives the existing drift-and-landing orbit envelope;
+- the resulting `(instance, argument-domain, claim)` is an ordinary candidate. The joint vector
+  pass must still prove the whole body over it; the proposal itself establishes no verdict.
+
+For `sumUntil(n, acc)`, this proposes `[orbit(n), Number]`: the selected recursive row proves
+`n - 1` remains in the orbit and `acc + n` remains Number, producing a self-loop fact rather than a
+concrete chain. `acc` is not a termination measure and no accumulator values are enumerated.
+
+**Late-resolution checklist.** The demand remains the executable call's safety/completion/return
+judgment; the semantic fact key is unchanged and complete. The proposal is Layer-2 proof support,
+not a new semantic parameter. Its advance bound is one fixed decision per written argument position
+and recursive edge. It reuses the region table, operation transfer, subcontract, grounding envelope,
+and fact graph. It performs no execution, fuel, reaching-domain accumulation, kind menu, chain walk,
+or generic invariant synthesis. Failure to match returns the existing Unproven voice.
+
+**Pins and remaining scope.** GR-19 and GR-26 are live. Two unit rows pin the mechanism: the numeric
+payload closes, while `acc + "x"` makes the proposal decline before settlement and the body remains
+unproved. The adjacent carried-coordinate examples `(a, b-1)`, `(a-1, b)`, and `(a, b, c-1)` were
+remeasured and now compile. General call-edge-derived domains (C3), mutual changed payloads, and
+non-primitive payload expressions remain owed; this fixed rule does not claim them.
+
+`// [ask-author]`: none.
+
+**Verification:** 485 lib passed / 1 ignored; 256 conformance passed / 9 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings`, formatting, and `git diff --check`
+clean; all 19 canonical-manifest entries verify (the manifest parser retains its pre-existing
+one-line formatting warning).
+
+## 2026-08-08 — GR-30 release: one-statement act blocks expose completion partitions
+
+**Measured cause.** The late recursion walk had made effect-world `countDown` visible, but the
+numeric certificate still returned `Unproven`. Act bodies are blocks, represented as a
+scrutinee-less `Match`; the ordinary region table correctly retains any block as one whole-body
+row so it never erases binding/statement prefixes. For `{ n == 0 ? 0 : countDown(n - 1) }`, that
+left the base/recursive ternary hidden inside a single statement even though evaluating the block
+has exactly that statement's completion behaviour (its produced value alone is discarded).
+
+**Positive-certificate view.** Grounding's progress/landing readers now project through exactly
+one shape: a scrutinee-less block containing one statement. They regionalize that statement under
+the canonical closure instance and capture environment, so the existing drift, grid and landing
+rules see the same two rows as the expression-bodied countdown. General blocks remain whole: no
+binding or multi-statement sequence is erased. The projected table is immutable and memoized in
+the existing shared `Interner` under `(canonical applied function value, complete named-contract
+environment)`, in a distinct query family because the ordinary and completion views intentionally
+have different answers.
+
+**Refutation boundary found by the negative pins.** Applying the projection to `drift_away` also
+changed the pinned GR-13-shaped effect loop from `Unproven` to a zero-drift `Refuted` verdict. That
+is a separate GR-23 admission question: completion-equivalence of the wrapper does not by itself
+discharge the refutation candidate's forced-transition and witness obligations. This increment is
+therefore positive-only and does not silently broaden refutation. GR-13 and GR-16 remain green,
+while GR-30 now produces ordinary `Grounded` completion with no `WorldDecided` label.
+
+**Status.** GR-30 is live. Five measured Phase-GR implementation targets remain: GR-03A,
+GR-03B, GR-08, GR-20 and GR-22B. `// [ask-author]`: none.
+
+**Verification:** 485 lib passed / 1 ignored; 257 conformance passed / 8 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings` clean; formatting clean.
+
+## 2026-08-08 — GR-08 release: every constant-drift mutual cycle composes
+
+**First measurement.** The oscillator's termination judgment was the first failure:
+`a → b` drifts `+2`, so the old stronger rule — every edge decreases — declined before it could
+read `b → a`'s `-3`. Once termination composed to the required lap drift `-1`, executable safety
+still rejected: the old group envelope likewise required every edge to decrease and could not
+close the repeated member domains.
+
+**Completed call multigraph.** The constant single-parameter mutual candidate now starts from the
+canonical reachable closure graph, recovers every distinct textual group call as an edge (parallel
+call sites remain parallel), restricts judgment to the SCC containing the demanded callee, and
+enumerates every edge-labelled simple cycle. An edge carries its exact constant drift
+`next-current`; unread/spread/non-constant edges remain in the graph with no drift, making every
+cycle that uses one decline. A cycle passes only when the sum is negative — equivalently its
+oriented `Progress = current-next` is an exact positive constant — and the cycle crosses a
+descending half-line stop. All cycles must pass. The walk is finite from the graph's node/edge
+inventory, has no fuel or effort cutoff, and does not depend on traversal order.
+
+**Member-specific safety orbit.** A member need not spell the base itself. For every cycle rooted
+at that member, prefix drift transports a downstream stop back into the root coordinate:
+`b → a` has prefix `-3`, so `a <= 0` becomes `b <= 3`. The candidate takes the worst cycle boundary,
+the largest integer lap drop and the gcd lattice to propose that member's bounded orbit. The
+ordinary fact graph must still prove safety/completion over the proposal. This closes
+`a(10) → b(12) → a(9)` and the later `b` domain without unfolding the runtime recursion.
+Member orbit derivation currently declines SCCs with an internal cycle not passing through the
+requested member; those need a larger member-indexed product.
+
+**Negative pins.** The multi-cycle specimen with a zero-drift self-cycle remains `Unproven`. A new
+parallel-edge unit has two `a → b` sites: one round trip drops by 2, the other by 0; it stays
+`Unproven`, proving the implementation does not stop after the good edge. GR-28's straddling-range
+case remains `Unproven`.
+
+**Scope.** GR-08 is live. This increment implements exact constant ProgressRanges over one shared
+parameter; variable/multi-parameter range composition (including the positive narrowed twin of
+GR-28) remains owed. Four measured Phase-GR targets remain: GR-03A, GR-03B, GR-20 and GR-22B.
+`// [ask-author]`: none.
+
+**Verification:** 487 lib passed / 1 ignored; 258 conformance passed / 7 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings` clean; formatting clean.
+
+## 2026-08-08 — GR-03B release: the written tuple forms an exact acyclic fact chain
+
+**Ruling applied.** “Exact chain” does not mean recursively executing the function until it
+returns. The represented call argument supplies a finite state source. For each exact state, the
+ordinary Match/operation rules select the path and expose its required recursive dependencies.
+For the GR-03B program that graph is `[3, 2] → [2] → []`; the final state selects the base and has
+no recursive dependency.
+
+**Representation correction.** Exact slice transfer was already precise, but it spelled `[2]` as
+`Tuple([Equals(2)])`, while the call site and fact cache spelled it `Equals([2])`. The two contracts
+denote one value but did not resolve to one fact. Structural exact flat tuples are now reified
+through the shared `Interner`, producing the canonical tuple value and no parallel identity
+mechanism. Hypothesis coverage performs the same normalization, so safety, completion, and return
+facts all reuse the exact dependency nodes. Runtime calls remain unmemoized.
+
+**Exact selection correction.** Tuple equality is intentionally outside the numeric region
+table's finite regionalization language. Exact tuple states therefore use the ordinary Match
+analysis directly: structurally singleton aggregate operands recover their canonical value for
+the existing oracle-backed primitive fold, exact-false arms contribute no dependency, and an
+exact-true/default arm consumes the Match. This is symbolic contract transfer, never evaluation.
+Discovery and all three fact voices share that selected path.
+
+**Termination candidate and boundary.** The landed fragment admits one direct-self Pure closure
+with one flat represented-exact tuple argument when every selected recursive edge strictly reduces
+top-level length. The written root length is then the well-founded carrier, so the graph is acyclic
+without a fuel limit or computed runtime-depth bound. A different callee, same/non-decreasing
+length, nested prior state (`f([l])`), or non-Pure semantic state makes the candidate contribute
+nothing. The full GR-10 pooled-leaf/non-growing license (including zero drift and finite control
+factor Q) and GR-11's closed-orbit ending remain owed.
+
+**Pins and status.** The positive unit traces both transfers and the empty leaf; negative units
+pin same-state recursion, structural nesting, and Mutator exclusion. GR-10/17/29 remain green.
+GR-03B is unignored and live. Three measured Phase-GR targets remain: GR-03A and GR-22B (the same
+missing witness-bearing required-dependency-cycle refutation) plus GR-20 (derived segment facts).
+`// [ask-author]`: none.
+
+**Verification:** 489 lib passed / 1 ignored; 259 conformance passed / 6 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings`, formatting, and `git diff --check`
+clean; all 19 canonical-manifest entries verify (the manifest parser retains its pre-existing
+one-line formatting warning).
+
+## 2026-08-08 — GR-11 release: the exact dependency cycle carries its completing prefix
+
+**Route, not recursion solving.** GR-09 already gives an exact represented state an ordered list
+of strict recursive dependencies selected by ordinary Match/operation analysis. The GR-03B
+finite graph is now shared by two consumers: strict length decrease proves its acyclic ending;
+GR-11 searches its reachable back edges for the cyclic ending. Neither consumer invokes the
+runtime function or recursively asks whether termination is true.
+
+**GR-11 enablement.** A back edge alone is insufficient. For each edge on the chosen root-to-cycle
+path, every earlier dependency in evaluation order must (1) have an acyclic exact dependency
+closure and (2) independently prove the ordinary `Completes` claim. If either condition is
+missing, that edge is disabled and the candidate contributes nothing. This explicit conjunction
+prevents completion induction from assuming the recursive fact it is meant to establish and
+preserves GR-29: `stall([7])` cannot become a completing prefix merely because a later `f ↔ g`
+edge cycles.
+
+**Persistent certificate and identity.** A refutation witness is now a canonical interned
+`ValueRef`, permitting tuples as well as exact numbers. `RefutationEvidence` distinguishes
+numeric `DriftAway` from `ClosedOrbit`; the latter retains the cycle entry and ordered edge path,
+and every edge retains the canonical values of its proven completing prefixes. The witness is
+always the admitted written root, never the first cycle state and never a synthesized value.
+Numeric diagnostics continue to render the same exact number.
+
+**Rows.** GR-03A's selected graph reaches the unchanged 7-bearing state and refutes with root
+`[3, 7, 2]`. GR-22B's state `[7]` requires `f([])` before `f([7])`; the former proves completion,
+the latter closes the cycle, and the certificate records `[]` as the prefix. A unit checks that
+prefix directly. The former same-state negative unit is correctly reclassified as a period-1
+closed orbit. Nested-state minting and Mutators still decline.
+
+**Boundary.** This release covers one direct-self Pure control location, one flat exact tuple
+argument, a root-leaf pool, and non-growing successors. Mutual control factor Q, body-constant
+insertion, and the wider GR-10 exact-chain forms remain owed. GR-03A and GR-22B are unignored;
+GR-20 is the sole remaining measured Phase-GR coverage target. `// [ask-author]`: none.
+
+**Verification:** 490 lib passed / 1 ignored; 261 conformance passed / 4 ignored in default and
+serial order; 13 machinery gates passed; clippy `-D warnings`, formatting, and `git diff --check`
+clean; all 19 canonical-manifest entries verify (the manifest parser retains its pre-existing
+one-line formatting warning).

@@ -905,7 +905,7 @@ mod domain {
         AnalysisContract, Instance, InstanceMetadata, gamma_contains, intersect_a,
         prove_subcontract_a, realizes,
     };
-    use crate::ast::{Expr, Lambda};
+    use crate::ast::{Expr, Lambda, PrimOp};
     use crate::contract::{Contract, Kind, Verdict};
     use crate::interner::Interner;
     use crate::rational::Rational;
@@ -915,9 +915,13 @@ mod domain {
     fn shape_of(v: &ValueRef) -> Lambda {
         v.as_fn().expect("a function").shape().clone()
     }
-    /// A non-capturing identity closure `x => x`, and its canonical shape.
-    fn id_shape(i: &mut Interner) -> Lambda {
-        shape_of(&closure(i, one_param("x"), name("x"), ActKind::Pure))
+    /// Canonicalizable code with exactly one captured operand.
+    fn capture_shape() -> Lambda {
+        Lambda {
+            params: one_param("x"),
+            body: Box::new(name("captured")),
+            act_kind: ActKind::Pure,
+        }
     }
     fn eq(i: &mut Interner, k: i64) -> Contract {
         Contract::Equals(i.integer(k))
@@ -927,11 +931,8 @@ mod domain {
         Contract::Range(r(a), r(b))
     }
     /// A single-capture instance of `shape` whose capture is a plain contract.
-    fn inst(shape: &Lambda, cap: Contract) -> Instance {
-        Instance {
-            shape: shape.clone(),
-            env: vec![AnalysisContract::of_contract(cap)],
-        }
+    fn inst(i: &mut Interner, shape: &Lambda, cap: Contract) -> Instance {
+        Instance::from_lambda(shape, vec![AnalysisContract::of_contract(cap)], i)
     }
     fn known(insts: Vec<Instance>) -> AnalysisContract {
         AnalysisContract::leaf(
@@ -949,9 +950,10 @@ mod domain {
     #[test]
     fn metadata_join_and_normalization() {
         let mut i = Interner::new();
-        let s = id_shape(&mut i);
-        let a = inst(&s, eq(&mut i, 1));
-        let b = inst(&s, range(1, 5));
+        let s = capture_shape();
+        let one = eq(&mut i, 1);
+        let a = inst(&mut i, &s, one);
+        let b = inst(&mut i, &s, range(1, 5));
         // Known ∪ Known = union (dedup); anything ∪ Unknown = Unknown.
         let j = InstanceMetadata::join(
             &InstanceMetadata::Known(vec![a.clone()]),
@@ -980,11 +982,37 @@ mod domain {
     }
 
     #[test]
+    fn symbolic_instance_identity_is_canonical_code_applied_to_captures() {
+        let mut i = Interner::new();
+        let alpha = Lambda {
+            params: one_param("renamed"),
+            body: Box::new(name("outer")),
+            act_kind: ActKind::Pure,
+        };
+        let number = AnalysisContract::of_contract(Contract::Kind(Kind::Number));
+        let first = Instance::from_lambda(&capture_shape(), vec![number.clone()], &mut i);
+        let second = Instance::from_lambda(&alpha, vec![number], &mut i);
+        assert!(
+            first.ptr_eq(&second),
+            "alpha/capture spelling variants with equal operands are one instance"
+        );
+
+        let text = AnalysisContract::of_contract(Contract::Kind(Kind::String));
+        let different_capture = Instance::from_lambda(&alpha, vec![text], &mut i);
+        assert_eq!(first.code_handle(), different_capture.code_handle());
+        assert!(
+            !first.ptr_eq(&different_capture),
+            "the applied capture tuple remains part of identity"
+        );
+    }
+
+    #[test]
     fn ap27_instance_coverage() {
         let mut i = Interner::new();
-        let s = id_shape(&mut i);
-        let eq1 = inst(&s, eq(&mut i, 1));
-        let r15 = inst(&s, range(1, 5));
+        let s = capture_shape();
+        let one = eq(&mut i, 1);
+        let eq1 = inst(&mut i, &s, one);
+        let r15 = inst(&mut i, &s, range(1, 5));
         // instance(shape, Equals(1)) ⊑ instance(shape, Range(1,5)) despite distinct keys.
         assert!(proven(prove_subcontract_a(
             &known(vec![eq1.clone()]),
@@ -1019,9 +1047,10 @@ mod domain {
     #[test]
     fn ap28_semantic_meet_is_the_tighter_instance() {
         let mut i = Interner::new();
-        let s = id_shape(&mut i);
-        let eq1 = inst(&s, eq(&mut i, 1));
-        let r15 = inst(&s, range(1, 5));
+        let s = capture_shape();
+        let one = eq(&mut i, 1);
+        let eq1 = inst(&mut i, &s, one);
+        let r15 = inst(&mut i, &s, range(1, 5));
         // Known({Eq(1)}) ∩ Known({Range(1,5)}) = Known({Eq(1)}) — coverage normalization,
         // never Bottom (AP-28).
         let meet = intersect_a(&known(vec![eq1.clone()]), &known(vec![r15]), &mut i);
@@ -1033,10 +1062,18 @@ mod domain {
             other => panic!("expected a Leaf meet, got {other:?}"),
         }
         // Disjoint shapes have an empty meet — a sound Bottom by disjointness.
-        let z = konst_zero(&mut i);
-        let s2 = shape_of(&closure(&mut i, one_param("x"), z, ActKind::Pure));
-        let other = inst(&s2, eq(&mut i, 1));
-        let s_eq1 = inst(&s, eq(&mut i, 1));
+        let zero = konst_zero(&mut i);
+        let s2 = Lambda {
+            params: one_param("x"),
+            body: Box::new(Expr::PrimOp {
+                op: PrimOp::Add,
+                args: vec![name("captured"), zero],
+            }),
+            act_kind: ActKind::Pure,
+        };
+        let one = eq(&mut i, 1);
+        let other = inst(&mut i, &s2, one.clone());
+        let s_eq1 = inst(&mut i, &s, one);
         let disjoint = intersect_a(&known(vec![s_eq1]), &known(vec![other]), &mut i);
         assert!(
             disjoint.is_bottom(),
@@ -1053,10 +1090,7 @@ mod domain {
         let idv = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
         let z = konst_zero(&mut i);
         let zerov = closure(&mut i, one_param("x"), z, ActKind::Pure);
-        let id_inst = Instance {
-            shape: shape_of(&idv),
-            env: vec![],
-        };
+        let id_inst = Instance::from_lambda(&shape_of(&idv), vec![], &mut i);
         // realizes: the identity closure realizes its own (capture-free) instance.
         assert!(realizes(&idv, &id_inst, &mut i));
         assert!(
@@ -1093,14 +1127,8 @@ mod domain {
         let f = closure(&mut i, one_param("x"), name("x"), ActKind::Pure);
         let z = konst_zero(&mut i);
         let g = closure(&mut i, one_param("x"), z, ActKind::Pure);
-        let f_inst = Instance {
-            shape: shape_of(&f),
-            env: vec![],
-        };
-        let g_inst = Instance {
-            shape: shape_of(&g),
-            env: vec![],
-        };
+        let f_inst = Instance::from_lambda(&shape_of(&f), vec![], &mut i);
+        let g_inst = Instance::from_lambda(&shape_of(&g), vec![], &mut i);
         let five = i.integer(5);
         let hi = i.string("hi");
         let fn_leaf = |inst: Instance| {
@@ -1155,8 +1183,8 @@ mod application {
             .shape()
             .clone()
     }
-    fn inst(shape: Lambda) -> Instance {
-        Instance { shape, env: vec![] }
+    fn inst(i: &mut Interner, shape: Lambda) -> Instance {
+        Instance::from_lambda(&shape, vec![], i)
     }
     fn out(produced: Contract, completion: C, mnc: bool) -> ApplicationOutcome {
         ApplicationOutcome {
@@ -1251,8 +1279,10 @@ mod application {
     #[test]
     fn ap15_ap21_act_kind_admission_over_metadata() {
         let mut i = Interner::new();
-        let pure = inst(shape(&mut i, ActKind::Pure));
-        let eff = inst(shape(&mut i, ActKind::Effect));
+        let pure_shape = shape(&mut i, ActKind::Pure);
+        let pure = inst(&mut i, pure_shape);
+        let effect_shape = shape(&mut i, ActKind::Effect);
+        let eff = inst(&mut i, effect_shape);
         // All-pure Known(S) admitted in the pure world.
         let known_pure = InstanceMetadata::Known(vec![pure.clone()]);
         assert!(proven(&admit_callee(&known_pure, pure_world_admits)));
@@ -1272,10 +1302,7 @@ mod application {
             Verdict::Unproven
         ));
         // A proven-empty member is dropped, so it does not block admission.
-        let dead = Instance {
-            shape: pure.shape.clone(),
-            env: vec![AnalysisContract::bottom()],
-        };
+        let dead = Instance::new(pure.code_handle(), vec![AnalysisContract::bottom()], &mut i);
         let known_dead = InstanceMetadata::Known(vec![dead]);
         assert!(proven(&admit_callee(&known_dead, pure_world_admits)));
     }
@@ -1291,10 +1318,10 @@ mod application {
     // ── The joint operand driver: AP-24 / AP-29 (correlation discipline) ─────────
 
     /// A callee leaf carrying a single known instance of `shape`.
-    fn callee_leaf(shape: Lambda) -> AnalysisContract {
+    fn callee_leaf(i: &mut Interner, shape: Lambda) -> AnalysisContract {
         AnalysisContract::leaf(
             Contract::Kind(Kind::Function),
-            InstanceMetadata::Known(vec![inst(shape)]),
+            InstanceMetadata::Known(vec![inst(i, shape)]),
         )
     }
     /// A value leaf `Equals(v)`.
@@ -1306,7 +1333,7 @@ mod application {
             AnalysisContract::Leaf {
                 metadata: InstanceMetadata::Known(s),
                 ..
-            } if s.len() == 1 => Some(s[0].shape.clone()),
+            } if s.len() == 1 => Some(s[0].code().clone()),
             _ => None,
         }
     }
@@ -1365,9 +1392,11 @@ mod application {
 
         // AP-24: the correlated operand proves — each callee accepts its own arg, and
         // the cross-pairs are never formed.
+        let correlated_num = callee_leaf(&mut i, num_shape.clone());
+        let correlated_str = callee_leaf(&mut i, str_shape.clone());
         let correlated = AnalysisContract::alt(vec![
-            AnalysisContract::tuple(vec![callee_leaf(num_shape.clone()), val_leaf(five.clone())]),
-            AnalysisContract::tuple(vec![callee_leaf(str_shape.clone()), val_leaf(hi.clone())]),
+            AnalysisContract::tuple(vec![correlated_num, val_leaf(five.clone())]),
+            AnalysisContract::tuple(vec![correlated_str, val_leaf(hi.clone())]),
         ]);
         let (a, correlated_flag) = live_alternatives(&correlated);
         assert_eq!(a.len(), 2, "two live correlated alternatives");
@@ -1383,11 +1412,10 @@ mod application {
         // AP-29: the projected operand [numFn|strFn, 5|"hi"] expands to the four
         // cross-pairs; (numFn,"hi") and (strFn,5) fail, but a synthesized cross-pair
         // failure must be UNPROVEN, never refuted.
+        let projected_num = callee_leaf(&mut i, num_shape.clone());
+        let projected_str = callee_leaf(&mut i, str_shape.clone());
         let projected = AnalysisContract::tuple(vec![
-            AnalysisContract::alt(vec![
-                callee_leaf(num_shape.clone()),
-                callee_leaf(str_shape.clone()),
-            ]),
+            AnalysisContract::alt(vec![projected_num, projected_str]),
             AnalysisContract::alt(vec![val_leaf(five), val_leaf(hi)]),
         ]);
         let (pa, projected_flag) = live_alternatives(&projected);
@@ -1409,10 +1437,8 @@ mod application {
         let callee_shape = witness.callee.as_fn().unwrap().shape().clone();
         let zero = witness.arguments[0].clone();
 
-        let correlated = AnalysisContract::tuple(vec![
-            callee_leaf(callee_shape.clone()),
-            val_leaf(zero.clone()),
-        ]);
+        let direct_callee = callee_leaf(&mut i, callee_shape.clone());
+        let correlated = AnalysisContract::tuple(vec![direct_callee, val_leaf(zero.clone())]);
         let direct = drive_application(&correlated, |_, represented| {
             assert!(represented);
             AlternativeContribution {
@@ -1426,8 +1452,10 @@ mod application {
 
         let other_shape = shape(&mut i, ActKind::Pure);
         let text = i.string("x");
+        let projected_callee = callee_leaf(&mut i, callee_shape);
+        let projected_other = callee_leaf(&mut i, other_shape);
         let projected = AnalysisContract::tuple(vec![
-            AnalysisContract::alt(vec![callee_leaf(callee_shape), callee_leaf(other_shape)]),
+            AnalysisContract::alt(vec![projected_callee, projected_other]),
             AnalysisContract::alt(vec![val_leaf(zero), val_leaf(text)]),
         ]);
         let projected = drive_application(&projected, |_, represented| {
@@ -1492,7 +1520,8 @@ mod application {
             }
         };
         // [numFn, "hi"] — a single correlated alternative that genuinely rejects.
-        let operand = AnalysisContract::tuple(vec![callee_leaf(num_shape), val_leaf(hi.clone())]);
+        let num_callee = callee_leaf(&mut i, num_shape);
+        let operand = AnalysisContract::tuple(vec![num_callee, val_leaf(hi.clone())]);
         match analyze_application(&operand, pure_world_admits, &accepts) {
             SeatVerdict::Refuted(w) => {
                 assert_eq!(w.callee, numfn, "witness carries the represented callee");
@@ -1518,29 +1547,28 @@ mod inventory {
 
     /// A capture-free instance with the shape of `x => <body>`.
     fn mk(i: &mut Interner, body: Expr) -> Instance {
-        let shape = closure(i, one_param("x"), body, ActKind::Pure)
+        let code = closure(i, one_param("x"), body, ActKind::Pure)
             .as_fn()
             .unwrap()
-            .shape()
-            .clone();
-        Instance { shape, env: vec![] }
+            .shape_rc();
+        Instance::new(code, vec![], i)
     }
 
     #[test]
-    fn ap16_mutual_recursion_hits_the_shape_cutoff() {
-        // Two shapes A, B calling each other. Seeded at A: A admits B (fresh shape),
-        // then B's call back to A is a shape-repeat on the path [A, B] — cut. Finite
+    fn ap16_mutual_recursion_hits_the_code_cutoff() {
+        // Two canonical code nodes A, B calling each other. Seeded at A: A admits B,
+        // then B's call back to A repeats code on the path [A, B] — cut. Finite
         // inventory {A, B}; no runaway despite the cycle.
         let mut i = Interner::new();
         let a = mk(&mut i, name("x"));
         let z = konst(i.integer(0));
         let b = mk(&mut i, z);
-        let (sa, sb) = (a.shape.clone(), b.shape.clone());
+        let (sa, sb) = (a.code_handle(), b.code_handle());
         let (a2, b2) = (a.clone(), b.clone());
         let trans = move |inst: &Instance| {
-            if inst.shape == sa {
+            if inst.code_handle() == sa {
                 vec![b2.clone()]
-            } else if inst.shape == sb {
+            } else if inst.code_handle() == sb {
                 vec![a2.clone()]
             } else {
                 vec![]
@@ -1553,14 +1581,14 @@ mod inventory {
 
     #[test]
     fn self_recursion_admits_only_the_root() {
-        // A calls itself: the target shape is already active on [A] — cut on the
+        // A calls itself: the target code is already active on [A] — cut on the
         // first transition. Inventory {A}.
         let mut i = Interner::new();
         let a = mk(&mut i, name("x"));
-        let sa = a.shape.clone();
+        let sa = a.code_handle();
         let a2 = a.clone();
         let trans = move |inst: &Instance| {
-            if inst.shape == sa {
+            if inst.code_handle() == sa {
                 vec![a2.clone()]
             } else {
                 vec![]
@@ -1573,7 +1601,7 @@ mod inventory {
 
     #[test]
     fn nonrecursive_diamond_dedups_the_join() {
-        // A → {B, C}; B → D; C → D. No shape repeats, so all four admit; D is reached
+        // A → {B, C}; B → D; C → D. No code repeats, so all four admit; D is reached
         // twice but appears once (projection dedup).
         let mut i = Interner::new();
         let a = mk(&mut i, name("x"));
@@ -1583,12 +1611,12 @@ mod inventory {
         let c = mk(&mut i, c0);
         let d0 = konst(i.integer(2));
         let d = mk(&mut i, d0);
-        let (sa, sb, sc) = (a.shape.clone(), b.shape.clone(), c.shape.clone());
+        let (sa, sb, sc) = (a.code_handle(), b.code_handle(), c.code_handle());
         let (b2, c2, d2) = (b.clone(), c.clone(), d.clone());
         let trans = move |inst: &Instance| {
-            if inst.shape == sa {
+            if inst.code_handle() == sa {
                 vec![b2.clone(), c2.clone()]
-            } else if inst.shape == sb || inst.shape == sc {
+            } else if inst.code_handle() == sb || inst.code_handle() == sc {
                 vec![d2.clone()]
             } else {
                 vec![]
@@ -1612,13 +1640,13 @@ mod inventory {
         let b = mk(&mut i, b0);
         let c0 = konst(i.integer(1));
         let c = mk(&mut i, c0);
-        let sa = a.shape.clone();
+        let sa = a.code_handle();
         let (b2, c2) = (b.clone(), c.clone());
         // A → {B, C}; forward and reversed target enumeration.
         let fwd = {
             let (b2, c2, sa) = (b2.clone(), c2.clone(), sa.clone());
             move |inst: &Instance| {
-                if inst.shape == sa {
+                if inst.code_handle() == sa {
                     vec![b2.clone(), c2.clone()]
                 } else {
                     vec![]
@@ -1626,7 +1654,7 @@ mod inventory {
             }
         };
         let rev = move |inst: &Instance| {
-            if inst.shape == sa {
+            if inst.code_handle() == sa {
                 vec![c2.clone(), b2.clone()] // reversed
             } else {
                 vec![]
@@ -1636,7 +1664,7 @@ mod inventory {
         let mut two = build_inventory(vec![a.clone()], rev);
         // Compare as sets: same membership regardless of order.
         let key = |v: &mut Vec<Instance>| {
-            v.sort_by_key(|x| format!("{:?}", x.shape));
+            v.sort_by_key(|x| format!("{:?}", x.code()));
         };
         key(&mut one);
         key(&mut two);
@@ -1646,7 +1674,7 @@ mod inventory {
 
     #[test]
     fn membership_is_independent_of_root_order() {
-        // Two independent roots reaching a shared shape: reversing the *root* order
+        // Two independent roots reaching shared code: reversing the *root* order
         // yields the same inventory membership.
         let mut i = Interner::new();
         let a = mk(&mut i, name("x"));
@@ -1654,9 +1682,9 @@ mod inventory {
         let b = mk(&mut i, b0);
         let c0 = konst(i.integer(1));
         let c = mk(&mut i, c0);
-        let (sa, sb, cc) = (a.shape.clone(), b.shape.clone(), c.clone());
+        let (sa, sb, cc) = (a.code_handle(), b.code_handle(), c.clone());
         let trans = move |inst: &Instance| {
-            if inst.shape == sa || inst.shape == sb {
+            if inst.code_handle() == sa || inst.code_handle() == sb {
                 vec![cc.clone()]
             } else {
                 vec![]
@@ -1664,7 +1692,7 @@ mod inventory {
         };
         let mut fwd = build_inventory(vec![a.clone(), b.clone()], &trans);
         let mut rev = build_inventory(vec![b.clone(), a.clone()], &trans);
-        let key = |v: &mut Vec<Instance>| v.sort_by_key(|x| format!("{:?}", x.shape));
+        let key = |v: &mut Vec<Instance>| v.sort_by_key(|x| format!("{:?}", x.code()));
         key(&mut fwd);
         key(&mut rev);
         assert_eq!(
@@ -2907,6 +2935,7 @@ mod body_safety {
 
 mod alternatives {
     use super::{analyze, apply, empty, konst, name, nc, prim};
+    use crate::analyzer::domain::{AnalysisContract, Instance, InstanceMetadata};
     use crate::ast::PrimOp;
     use crate::contract::{Contract, Kind, Verdict, subcontract};
     use crate::interner::Interner;
@@ -2971,6 +3000,45 @@ mod alternatives {
         assert!(
             !b.findings.is_empty(),
             "the unknown callee leaves the downstream `+ 1` unproven"
+        );
+    }
+
+    #[test]
+    fn every_member_of_a_symbolic_instance_union_is_analyzed() {
+        let mut i = Interner::new();
+        let concrete = run_source_in("k = 0\nf = (n) => n + k\nf", &mut i)
+            .unwrap()
+            .0;
+        let code = concrete.as_fn().expect("function").shape_rc();
+        let numeric = Instance::new(
+            code.clone(),
+            vec![AnalysisContract::of_contract(Contract::Kind(Kind::Number))],
+            &mut i,
+        );
+        let textual = Instance::new(
+            code,
+            vec![AnalysisContract::of_contract(Contract::Kind(Kind::String))],
+            &mut i,
+        );
+        let functions = AnalysisContract::leaf(
+            Contract::Kind(Kind::Function),
+            InstanceMetadata::Known(vec![numeric, textual]),
+        );
+        let mut env = empty();
+        env.insert("f".into(), functions);
+        let one = i.integer(1);
+        let result = analyze(&apply(name("f"), vec![konst(one)]), &env, &nc(), &mut i);
+        assert!(
+            !result.accepted(),
+            "the String-capture member must not vanish"
+        );
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|finding| finding.message.contains("Add")),
+            "the represented bad member is checked at its operation: {:#?}",
+            result.findings
         );
     }
 }
@@ -3321,7 +3389,7 @@ mod region_instantiation {
         let f = run_source_in("limit = 5\nf = (n) => n <= limit ? n : 0\nf", &mut i)
             .unwrap()
             .0;
-        let caps = crate::analyzer::safety::capture_env(&f);
+        let caps = crate::analyzer::safety::capture_env(&f, &mut i);
         let closure = f.as_closure().unwrap();
         let rows = region::region_table_in(
             &closure.lambda.body,
@@ -3375,11 +3443,10 @@ mod region_instantiation {
         );
     }
 
-    /// RT-09's identity law: the instance cache keys on `(shape, annotated capture
-    /// tuple, named contracts)` — a repeated query is the **same allocation**, a
-    /// different capture is a different instance with its own table, and an
-    /// α-variant spelling of the same instance shares the cached table through
-    /// canonical shape identity.
+    /// RT-09's identity law: a repeated complete query is the **same allocation**, a
+    /// different capture is a different instance with its own table, and an α-variant
+    /// that universal value interning resolves to the same canonical closure shares
+    /// that closure's retained source representative and cached table.
     #[test]
     fn rt09_instance_cache_identity() {
         let mut i = Interner::new();
@@ -3410,7 +3477,7 @@ mod region_instantiation {
         let (_, shared) = region::instance_table(&alpha, &cenv, &mut i).expect("single param");
         assert!(
             std::rc::Rc::ptr_eq(&first, &shared),
-            "an alpha-variant of the same instance shares the cached table"
+            "one canonical closure representative shares one cached table"
         );
     }
 
@@ -3454,7 +3521,9 @@ mod region_instantiation {
             pat_c,
             &mut i,
         ));
-        let v = leaf.project_field("value").expect("projects through ∩");
+        let v = leaf
+            .project_field("value", &mut i)
+            .expect("projects through ∩");
         let four = i.integer(4);
         assert!(
             matches!(&v, AnalysisContract::Leaf { contract: Contract::Equals(p), .. } if *p == four),
@@ -3467,7 +3536,7 @@ mod region_instantiation {
             Contract::Kind(crate::contract::Kind::Tuple),
             &mut i,
         ));
-        let e = tleaf.project_index(1).expect("projects through ∩");
+        let e = tleaf.project_index(1, &mut i).expect("projects through ∩");
         let eight = i.integer(8);
         assert!(
             matches!(&e, AnalysisContract::Leaf { contract: Contract::Equals(p), .. } if *p == eight),

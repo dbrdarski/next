@@ -349,3 +349,132 @@ fn runtime_value_equality_is_pointer_only() {
         "the recursive interner no longer performs exact verification after its fingerprint probe"
     );
 }
+
+/// Persistent analyzer knowledge belongs to the semantic identity owner. Thread-local state
+/// may track an active recursive settlement, but it must not retain completed memo answers:
+/// that made cache sharing accidental, split identity from knowledge, and allowed one source's
+/// source-spelled RT-09 rows to answer another source's query.
+#[test]
+fn analyzer_memos_are_owned_by_the_interner() {
+    let factcache =
+        std::fs::read_to_string(root().join("src/analyzer/factcache.rs")).expect("readable");
+    let region = std::fs::read_to_string(root().join("src/analyzer/region.rs")).expect("readable");
+    let analyzer = std::fs::read_to_string(root().join("src/analyzer/mod.rs")).expect("readable");
+    let interner = std::fs::read_to_string(root().join("src/interner.rs")).expect("readable");
+
+    for (home, src, banned) in [
+        (
+            "factcache.rs",
+            factcache.as_str(),
+            &["static CACHE", "static LAYER2"][..],
+        ),
+        (
+            "region.rs",
+            region.as_str(),
+            &["INSTANCE_TABLES", "INSTANCE_TABLES_MULTI"][..],
+        ),
+        ("analyzer/mod.rs", analyzer.as_str(), &["LOCAL_GROUPS"][..]),
+    ] {
+        for name in banned {
+            assert!(
+                !src.contains(name),
+                "{home} restored persistent thread-local memo `{name}`; completed immutable \
+                 answers must be owned beside their interned queries"
+            );
+        }
+    }
+
+    assert!(
+        interner.contains("memos: MemoInterner"),
+        "the semantic identity owner no longer owns immutable analyzer knowledge"
+    );
+}
+
+/// Closed Pure functions are canonical code plus positional value captures. The source
+/// lambda may remain as analyzer/diagnostic metadata, but runtime invocation must not
+/// recover the old `Lambda + Env` execution path or location-key Pure reads.
+#[test]
+fn pure_closure_execution_uses_canonical_code_and_positional_values() {
+    let value = std::fs::read_to_string(root().join("src/value.rs")).expect("readable value");
+    let closure = value
+        .split_once("pub struct Closure")
+        .expect("Closure exists")
+        .1
+        .split_once("pub(crate) enum ClosureCapture")
+        .expect("capture representation follows Closure")
+        .0;
+    assert!(
+        !closure.contains("pub env:") && !closure.contains("env: Env"),
+        "closed Closure restored a retained lexical environment"
+    );
+
+    let eval = std::fs::read_to_string(root().join("src/oracle/eval.rs")).expect("readable eval");
+    let apply = eval
+        .split_once("fn eval_apply")
+        .expect("eval_apply exists")
+        .1
+        .split_once("fn apply_mutator")
+        .expect("mutator application follows")
+        .0;
+    assert!(
+        apply.contains("function.shape()") && apply.contains("@cap{index}"),
+        "function invocation no longer executes canonical code over positional captures"
+    );
+    assert!(
+        !apply.contains("Scope::child") && !apply.contains("closure.env"),
+        "function invocation restored source-environment execution"
+    );
+
+    let make = eval
+        .split_once("fn make_closure(&mut self")
+        .expect("runtime closure constructor exists")
+        .1
+        .split_once("pub(super) fn begin_group")
+        .expect("group construction follows")
+        .0;
+    assert!(
+        make.contains("lambda.act_kind == ActKind::Pure") && make.contains("self.read_slot(slot)"),
+        "Pure mutable reads no longer snapshot the current value at closure formation"
+    );
+}
+
+/// Recursive groups are construction windows only. Identity belongs to the canonical
+/// function value produced by applying positional captures; the analyzer must not rebuild
+/// a source-level group template or serialize μ references as a second identity system.
+#[test]
+fn recursive_identity_has_no_group_template_side_channel() {
+    let factcache =
+        std::fs::read_to_string(root().join("src/analyzer/factcache.rs")).expect("fact cache");
+    assert!(
+        factcache.contains("instance: ValueRef"),
+        "concrete fact identity must be the canonical applied function value"
+    );
+    for forbidden in [
+        "GroupTemplate",
+        "canonical_group_keys",
+        "ShapeKey::Group",
+        "compute_layer2",
+    ] {
+        assert!(
+            !factcache.contains(forbidden),
+            "fact identity restored imported group machinery: {forbidden}"
+        );
+    }
+
+    let mu = std::fs::read_to_string(root().join("src/oracle/mu.rs")).expect("μ windows");
+    assert!(
+        mu.contains("struct GroupWindow") && mu.contains("fn group_windows"),
+        "recursive construction still needs its temporary knot-tying windows"
+    );
+    for forbidden in [
+        "canonicalize_group",
+        "serialize_member",
+        "fn permutations",
+        "μ⟨",
+    ] {
+        assert!(
+            !mu.contains(forbidden),
+            "construction-window code restored group serialization: {forbidden}"
+        );
+    }
+}

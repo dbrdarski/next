@@ -11,8 +11,8 @@
 //!   execution that completes without a value supplies `ProvenPresent(witness)`;
 //!   otherwise a non-producing voice remains `UnprovenPossible`.
 //!
-//! **Recursion is coarse and terminating here.** The active shape sequence implements
-//! §4a's shape-repeat cutoff: re-entering a shape contributes the conservative `Top` /
+//! **Recursion is coarse and terminating here.** The active canonical-code sequence
+//! implements §4a's discovery cutoff: re-entering code contributes the conservative `Top` /
 //! possible-completion outcome instead of re-entering its body. The summary is therefore
 //! sound but coarse on recursion; the §6 return and completion facts sharpen that fallback
 //! when their hypotheses cover the recursive call.
@@ -33,9 +33,9 @@ use crate::interner::Interner;
 use crate::value::ValueRef;
 
 thread_local! {
-    /// §4a's active shape sequence for the coarse outcome projection. This is not a
+    /// §4a's active canonical-code sequence for the coarse outcome projection. This is not a
     /// proof cache: it only prevents a body summary from recursively summarizing a
-    /// repeated shape after safety has already been settled by the candidate graph.
+    /// repeated code node after safety has already been settled by the candidate graph.
     static ACTIVE_SHAPES: RefCell<Vec<crate::intern::Interned<crate::ast::Lambda>>> =
         const { RefCell::new(Vec::new()) };
 }
@@ -61,6 +61,7 @@ pub(crate) fn analyze_instance_body(
         return Some(Analysis {
             contract: Contract::Top,
             annotated: AnalysisContract::of_contract(Contract::Top),
+            image: None,
             findings: Vec::new(),
             safety_demands: Vec::new(),
             completion: Completion::MayFallThrough,
@@ -71,13 +72,13 @@ pub(crate) fn analyze_instance_body(
     let mut tenv = TypeEnv::new();
     // Captures first, so a same-named parameter shadows them.
     for name in &free {
-        if let Some(Binding::Value(v)) = closure.env.lookup(name) {
-            tenv.insert(name.clone(), AnalysisContract::of_value(v));
+        if let Some(Binding::Value(v)) = function.capture_binding(name) {
+            tenv.insert(name.clone(), AnalysisContract::of_value(v, interner));
         }
     }
     // Parameters narrowed by the argument tuple.
     let arg_tuple = Contract::tuple(arg_contracts.to_vec(), interner);
-    bind_pattern(&closure.lambda.params, &arg_tuple, &mut tenv);
+    bind_pattern(&closure.lambda.params, &arg_tuple, &mut tenv, interner);
 
     ACTIVE_SHAPES.with(|active| active.borrow_mut().push(shape));
     let analysis = crate::analyzer::induction::without_inference(|| {

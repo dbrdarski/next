@@ -58,10 +58,11 @@
 //!   `[left.lo, hi_a + hi_b]` grapheme bound (`concat_image`; T2.5's §5 lift);
 //!   the exact seam remains literal-fold territory (`Summary::compose`).
 //! - **`Difference` with a non-singleton exclusion** — the exclusion is dropped.
-//! - **`Union` operands** — read as the interval/congruence hull rather than
-//!   distributed per alternative. Sound; the congruence join recovers much of the
-//!   precision (`{2} ∪ {6}` keeps `≡ 2 (mod 4)`). Per-alternative distribution is the
-//!   open precision question (draft §5, Q1).
+//! - **`Union` operands at the coarse rulebook layer** — read as the
+//!   interval/congruence hull rather than distributed per alternative. Sound; the
+//!   congruence join recovers much of the precision (`{2} ∪ {6}` keeps `≡ 2 (mod 4)`).
+//!   The analyzer separately holds finite source cells and forces their correlated
+//!   exact image only when a match routes it (DR-16/DR-17, BR-03/BR-04).
 
 use num_bigint::BigInt;
 
@@ -229,11 +230,6 @@ fn find_trap(
 
 // ── Output (image over-approximation) ────────────────────────────────────────
 
-/// The product of the operand point-counts a held image will distribute when forced.
-/// Beyond it no image is held and the coarse reading is the whole answer — the same
-/// verdict as before, never an invented one.
-pub(crate) const EXACT_IMAGE_LIMIT: usize = 256;
-
 /// Flatten a contract into its finite point set, or `None` when it is not one.
 pub(crate) fn point_set(c: &Contract) -> Option<Vec<Contract>> {
     match c {
@@ -251,7 +247,8 @@ pub(crate) fn point_set(c: &Contract) -> Option<Vec<Contract>> {
 /// The **exact image** of `op` over finite point operands: apply the leaf rule to
 /// every combination and join. Exact by construction — each combination is a
 /// singleton application, and the join is their union. `None` when an operand is not
-/// a finite point set or the combination count exceeds [`EXACT_IMAGE_LIMIT`].
+/// a finite point set. There is no semantic fuel/budget cutoff: a finite represented
+/// product is the routing work (BR-16), not a search over unknowns.
 /// The combination driver over operand point sets that are already resolved — the form
 /// a **chained** image needs, since its operands are produced by forcing a nested image
 /// rather than by reading a contract.
@@ -260,8 +257,7 @@ pub(crate) fn exact_image_over(
     sets: &[Vec<Contract>],
     interner: &mut Interner,
 ) -> Option<Contract> {
-    let count: usize = sets.iter().map(Vec::len).product();
-    if count == 0 || count > EXACT_IMAGE_LIMIT {
+    if sets.iter().any(Vec::is_empty) {
         return None;
     }
     let mut combos: Vec<Vec<Contract>> = vec![Vec::new()];

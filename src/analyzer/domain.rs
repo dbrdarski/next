@@ -28,30 +28,99 @@
 use crate::ast::Lambda;
 use crate::contract::{Contract, Kind, Verdict, subcontract};
 use crate::env::Binding;
+use crate::intern::Interned;
 use crate::interner::Interner;
 use crate::value::ValueRef;
 
-/// An **analysis instance**: a function's μ-canonical shape (the node label,
-/// compared structurally) plus its **annotated** captured environment — one
-/// [`AnalysisContract`] per capture slot, in the shape's `free_vars` order.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Instance {
-    pub shape: Lambda,
-    pub env: Vec<AnalysisContract>,
+thread_local! {
+    /// Nominal identity for one local branch source. These identifiers never enter a
+    /// contract, value, instance, or fact-cache key: branch metadata collapses at
+    /// those boundaries (BR-15). Allocation order therefore cannot affect a verdict;
+    /// only equality between clones of the same local source is observed.
+    static NEXT_BRANCH_SOURCE: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
 }
 
+fn fresh_branch_source() -> u64 {
+    NEXT_BRANCH_SOURCE.with(|next| {
+        let id = next.get();
+        next.set(id.checked_add(1).expect("branch-source identity exhausted"));
+        id
+    })
+}
+
+/// The ordered annotated operands applied to canonical per-function code.
+/// Interning the complete tuple makes an instance comparison a pair of pointers,
+/// while nested function metadata remains part of each [`AnalysisContract`].
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct CaptureContractTuple(Vec<AnalysisContract>);
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct InstanceData {
+    code: Interned<Lambda>,
+    captures: Interned<CaptureContractTuple>,
+}
+
+/// A canonical **symbolic analysis instance**: interned per-function code applied
+/// to an interned positional tuple of annotated capture contracts. Source spelling
+/// and recursive declaration groups are absent from identity.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Instance(Interned<InstanceData>);
+
 impl Instance {
+    /// Construct one canonical symbolic application under the active semantic
+    /// identity owner. `code` is already α/capture-normalized.
+    pub fn new(
+        code: Interned<Lambda>,
+        captures: Vec<AnalysisContract>,
+        interner: &mut Interner,
+    ) -> Instance {
+        let captures = interner.intern_enum(CaptureContractTuple(captures));
+        Instance(interner.intern_enum(InstanceData { code, captures }))
+    }
+
+    /// Canonicalize source code and apply the supplied capture contracts in the
+    /// canonicalizer's positional free-reference order.
+    pub fn from_lambda(
+        lambda: &Lambda,
+        captures: Vec<AnalysisContract>,
+        interner: &mut Interner,
+    ) -> Instance {
+        let (code, free) = crate::oracle::canonical_function(lambda, interner);
+        debug_assert_eq!(free.len(), captures.len());
+        Instance::new(code, captures, interner)
+    }
+
+    pub fn code(&self) -> &Lambda {
+        &self.0.code
+    }
+
+    pub fn code_handle(&self) -> Interned<Lambda> {
+        self.0.code.clone()
+    }
+
+    pub fn captures(&self) -> &[AnalysisContract] {
+        &self.0.captures.0
+    }
+
+    pub fn act_kind(&self) -> crate::ast::ActKind {
+        self.code().act_kind
+    }
+
+    pub fn ptr_eq(&self, other: &Instance) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+
     /// Proven-empty when any captured position is bottom — no closure of this shape
     /// can realize it (metadata normalization, §2).
     pub fn is_empty(&self) -> bool {
-        self.env.iter().any(AnalysisContract::is_bottom)
+        self.captures().iter().any(AnalysisContract::is_bottom)
     }
 }
 
 /// The instance-metadata lattice element (§2). `Known(∅)` = no function possible
 /// (a dead branch — feeds emptiness); `Unknown` = a function is possible, origins
 /// coarsened away.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum InstanceMetadata {
     Known(Vec<Instance>),
     Unknown,
@@ -83,12 +152,210 @@ impl InstanceMetadata {
 ///
 /// Held, not computed: this is the storage that lets the completion walk force **one
 /// node** instead of re-running the whole judgment in a different mode.
-/// One operand of a held image. An operand is either a finite point set standing on
-/// its own, or **another held image** — which is what lets a chain
-/// (`(a * b) * c`) stay exact instead of collapsing at the first coarse step.
+/// One source assignment in a branch cell. A source is nominal (never a source
+/// spelling), so shadowing cannot correlate two unrelated bindings. `choice` is the
+/// position in that source's finite point set.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BranchAssignment {
+    source: u64,
+    choice: usize,
+}
+
+/// One exact branch cell: a compatible source assignment and the point value the
+/// represented node has under it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BranchCell {
+    assignments: Vec<BranchAssignment>,
+    value: Contract,
+}
+
+/// The exact, analyzer-only relation forced for routing (BR-01/BR-03). It is not a
+/// contract and is never interned. Cells retain source assignments so operation
+/// composition is a natural join, not an independent Cartesian product.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BranchSet {
+    cells: Vec<BranchCell>,
+}
+
+impl BranchSet {
+    /// A fresh local source over a finite, non-singleton point contract. Each point is
+    /// one cell of that source.
+    pub fn source(contract: &Contract) -> Option<BranchSet> {
+        let points = crate::contract::point_set(contract)?;
+        BranchSet::source_points(points)
+    }
+
+    fn source_points(points: Vec<Contract>) -> Option<BranchSet> {
+        if points.len() <= 1 {
+            return None;
+        }
+        let source = fresh_branch_source();
+        Some(BranchSet {
+            cells: points
+                .into_iter()
+                .enumerate()
+                .map(|(choice, value)| BranchCell {
+                    assignments: vec![BranchAssignment { source, choice }],
+                    value,
+                })
+                .collect(),
+        })
+    }
+
+    fn independent(contract: &Contract) -> Option<BranchSet> {
+        Some(BranchSet {
+            cells: crate::contract::point_set(contract)?
+                .into_iter()
+                .map(|value| BranchCell {
+                    assignments: Vec::new(),
+                    value,
+                })
+                .collect(),
+        })
+    }
+
+    /// A singleton relation with no source assignments. A non-singleton arm result
+    /// without its own relation has lost the mapping from arrivals to outputs, so it
+    /// must not be promoted to exact cell metadata by crossing every output with every
+    /// arrival.
+    pub fn singleton(contract: &Contract) -> Option<BranchSet> {
+        let points = crate::contract::point_set(contract)?;
+        (points.len() == 1).then(|| BranchSet {
+            cells: vec![BranchCell {
+                assignments: Vec::new(),
+                value: points.into_iter().next().expect("one point"),
+            }],
+        })
+    }
+
+    pub fn cells(&self) -> &[BranchCell] {
+        &self.cells
+    }
+
+    /// Join the point values of all cells into the ordinary routing contract.
+    pub fn contract(&self, interner: &mut Interner) -> Option<Contract> {
+        self.cells
+            .iter()
+            .map(|cell| cell.value.clone())
+            .reduce(|a, b| Contract::union(a, b, interner))
+    }
+
+    /// Restrict this relation to cells whose point value belongs to `region`.
+    pub fn restricted(&self, region: &Contract) -> BranchSet {
+        BranchSet {
+            cells: self
+                .cells
+                .iter()
+                .filter(|cell| match &cell.value {
+                    Contract::Equals(value) => region.contains(value),
+                    _ => false,
+                })
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// The exact remainder after an unguarded row consumes `region`.
+    pub fn without(&self, region: &Contract) -> BranchSet {
+        BranchSet {
+            cells: self
+                .cells
+                .iter()
+                .filter(|cell| match &cell.value {
+                    Contract::Equals(value) => !region.contains(value),
+                    _ => false,
+                })
+                .cloned()
+                .collect(),
+        }
+    }
+
+    pub fn append(&mut self, other: BranchSet) {
+        self.cells.extend(other.cells);
+    }
+
+    pub fn empty() -> BranchSet {
+        BranchSet { cells: Vec::new() }
+    }
+
+    /// Narrow a local node by the cells arriving at a routed arm. Only shared
+    /// sources constrain it; an independent node keeps its relation unchanged.
+    pub fn narrowed_by(&self, arrivals: &BranchSet) -> BranchSet {
+        let shares_source = self.cells.iter().any(|cell| {
+            cell.assignments.iter().any(|assignment| {
+                arrivals.cells.iter().any(|arrival| {
+                    arrival
+                        .assignments
+                        .iter()
+                        .any(|candidate| candidate.source == assignment.source)
+                })
+            })
+        });
+        if !shares_source {
+            return self.clone();
+        }
+        BranchSet {
+            cells: self
+                .cells
+                .iter()
+                .filter(|cell| {
+                    arrivals.cells.iter().any(|arrival| {
+                        merge_assignments(&cell.assignments, &arrival.assignments).is_some()
+                    })
+                })
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Attach a produced relation to the cells that arrived at an arm. Shared
+    /// sources must agree; independent sources cross. This is BR-04's structural
+    /// correlation and also filters an arm result that still mentions the wider
+    /// source relation down to the arrivals that actually selected that arm.
+    pub fn join_arrivals(&self, produced: &BranchSet) -> BranchSet {
+        let mut cells = Vec::new();
+        for arrival in &self.cells {
+            for value in &produced.cells {
+                if let Some(assignments) =
+                    merge_assignments(&arrival.assignments, &value.assignments)
+                {
+                    cells.push(BranchCell {
+                        assignments,
+                        value: value.value.clone(),
+                    });
+                }
+            }
+        }
+        BranchSet { cells }
+    }
+}
+
+fn merge_assignments(
+    left: &[BranchAssignment],
+    right: &[BranchAssignment],
+) -> Option<Vec<BranchAssignment>> {
+    let mut merged = left.to_vec();
+    for assignment in right {
+        match merged
+            .iter()
+            .find(|existing| existing.source == assignment.source)
+        {
+            Some(existing) if existing.choice != assignment.choice => return None,
+            Some(_) => {}
+            None => merged.push(assignment.clone()),
+        }
+    }
+    merged.sort_by_key(|assignment| assignment.source);
+    Some(merged)
+}
+
+/// One operand of a held image. Independent finite points cross; a `Branches`
+/// operand retains its source assignments; and a nested image lets a chain
+/// (`(a * b) * c`) stay lazy and exact through multiple operations.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ImageOperand {
     Points(Contract),
+    Branches(std::rc::Rc<BranchSet>),
     Nested(std::rc::Rc<HeldImage>),
 }
 
@@ -96,77 +363,118 @@ pub enum ImageOperand {
 pub struct HeldImage {
     pub op: crate::ast::PrimOp,
     pub operands: Vec<ImageOperand>,
-    /// An **upper bound** on the combinations forcing this image will apply the leaf
-    /// rule to, computed without forcing anything: the product of the operands' own
-    /// bounds. Dedup during the join only ever makes the real count smaller, so
-    /// budgeting on the bound is conservative in the safe direction.
-    pub bound: usize,
 }
 
 impl ImageOperand {
-    fn bound(&self) -> usize {
+    fn cardinality_hint(&self) -> usize {
         match self {
             ImageOperand::Points(c) => crate::contract::point_set(c).map_or(0, |s| s.len()),
-            ImageOperand::Nested(image) => image.bound,
+            ImageOperand::Branches(branches) => branches.cells.len(),
+            ImageOperand::Nested(image) => image
+                .operands
+                .iter()
+                .map(ImageOperand::cardinality_hint)
+                .fold(1usize, usize::saturating_mul),
         }
     }
 
-    /// Resolve to a finite point set, forcing a nested image if that is what it is.
-    fn points(&self, interner: &mut Interner) -> Option<Vec<Contract>> {
+    /// Resolve to exact cells, forcing a nested image only when routing asks.
+    pub fn force(&self, interner: &mut Interner) -> Option<BranchSet> {
         match self {
-            ImageOperand::Points(c) => crate::contract::point_set(c),
-            ImageOperand::Nested(image) => {
-                let forced = image.force(interner)?;
-                crate::contract::point_set(&forced)
-            }
+            ImageOperand::Points(c) => BranchSet::independent(c),
+            ImageOperand::Branches(branches) => Some((**branches).clone()),
+            ImageOperand::Nested(image) => image.force_branches(interner),
         }
+    }
+
+    /// Make one fresh nominal source when `contract` has multiple finite points.
+    pub fn source(contract: &Contract) -> Option<ImageOperand> {
+        BranchSet::source(contract)
+            .map(|branches| ImageOperand::Branches(std::rc::Rc::new(branches)))
+    }
+
+    /// Make a source from the structural annotated domain without erasing it through
+    /// an interner. This serves region/fact code that inserts an `AnalysisContract`
+    /// directly into a local environment.
+    pub fn source_annotated(contract: &AnalysisContract) -> Option<ImageOperand> {
+        BranchSet::source_points(contract.finite_points()?)
+            .map(|branches| ImageOperand::Branches(std::rc::Rc::new(branches)))
     }
 }
 
 impl HeldImage {
-    /// Hold an image when it is worth holding: every operand resolvable to points —
-    /// **directly, or by forcing a nested image** — more than one combination, and the
-    /// bound within the forcing budget. `None` means there is no exact image to offer
-    /// and the coarse contract is the whole answer.
+    /// Hold an image when every operand is resolvable to finite cells and at least one
+    /// operand has multiple cells. There is no fuel or semantic combination budget:
+    /// forcing is finite because the represented source cells are finite (BR-16).
     pub fn hold(op: crate::ast::PrimOp, operands: Vec<ImageOperand>) -> Option<HeldImage> {
-        let bounds: Vec<usize> = operands.iter().map(ImageOperand::bound).collect();
-        if bounds.contains(&0) {
+        let cardinalities: Vec<usize> = operands
+            .iter()
+            .map(ImageOperand::cardinality_hint)
+            .collect();
+        if cardinalities.contains(&0) {
             return None;
         }
-        let bound: usize = bounds.iter().product();
-        if bound <= 1 || bound > crate::contract::EXACT_IMAGE_LIMIT {
+        if cardinalities.iter().all(|count| *count == 1) {
             return None;
         }
-        Some(HeldImage {
-            op,
-            operands,
-            bound,
-        })
+        Some(HeldImage { op, operands })
     }
 
-    /// **Force** the image: resolve every operand to points — forcing nested images
-    /// depth-first — then apply the leaf rule to each combination and join. Exact by
-    /// construction, and a subset of the coarse contract, so a judgment that could not
-    /// be settled coarsely can only be improved, never reversed.
+    /// **Force** the image for routing and erase its cells to their exact joined
+    /// contract. Correlation remains available through [`force_branches`](Self::force_branches)
+    /// for a downstream held operation.
     pub fn force(&self, interner: &mut Interner) -> Option<Contract> {
-        let sets: Vec<Vec<Contract>> = self
+        self.force_branches(interner)?.contract(interner)
+    }
+
+    /// Force to exact branch cells. Operand relations are combined by natural join:
+    /// incompatible assignments of one shared source are discarded, while unrelated
+    /// sources form the ordinary Cartesian product. The operation leaf rule is then
+    /// applied once to each compatible tuple.
+    pub fn force_branches(&self, interner: &mut Interner) -> Option<BranchSet> {
+        let relations: Vec<BranchSet> = self
             .operands
             .iter()
-            .map(|o| o.points(interner))
+            .map(|operand| operand.force(interner))
             .collect::<Option<_>>()?;
-        crate::contract::exact_image_over(self.op, &sets, interner)
+        let mut tuples: Vec<(Vec<BranchAssignment>, Vec<Contract>)> =
+            vec![(Vec::new(), Vec::new())];
+        for relation in relations {
+            let mut next = Vec::new();
+            for (assignments, values) in &tuples {
+                for cell in &relation.cells {
+                    let Some(merged) = merge_assignments(assignments, &cell.assignments) else {
+                        continue;
+                    };
+                    let mut tuple = values.clone();
+                    tuple.push(cell.value.clone());
+                    next.push((merged, tuple));
+                }
+            }
+            tuples = next;
+        }
+        if tuples.is_empty() {
+            return None;
+        }
+        let mut cells = Vec::with_capacity(tuples.len());
+        for (assignments, tuple) in tuples {
+            let sets: Vec<Vec<Contract>> = tuple.into_iter().map(|point| vec![point]).collect();
+            let value = crate::contract::exact_image_over(self.op, &sets, interner)?;
+            cells.push(BranchCell { assignments, value });
+        }
+        Some(BranchSet { cells })
     }
 }
 
 /// The structural / correlated abstract-domain element (§2, bridge form).
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum AnalysisContract {
-    /// A scalar/opaque position: an ordinary contract with function-position metadata,
-    /// and optionally a **held operation image** (see [`HeldImage`]).
+    /// A scalar/opaque position: an ordinary contract with function-position metadata.
+    /// Local held images live in the expression environment, not here, so they cannot
+    /// escape through an instance, structure, return, or fact key (BR-15).
     Leaf {
         contract: Contract,
         metadata: InstanceMetadata,
-        held: Option<std::rc::Rc<HeldImage>>,
     },
     /// A tuple with positional annotated elements — structure preserved.
     Tuple(Vec<AnalysisContract>),
@@ -179,6 +487,24 @@ pub enum AnalysisContract {
 }
 
 impl AnalysisContract {
+    /// Flatten this annotated element when it is structurally a finite set of point
+    /// contracts. Analyzer metadata is retained elsewhere; this only establishes the
+    /// local source choices used by branch provenance.
+    fn finite_points(&self) -> Option<Vec<Contract>> {
+        match self {
+            AnalysisContract::Bottom => Some(Vec::new()),
+            AnalysisContract::Leaf { contract, .. } => crate::contract::point_set(contract),
+            AnalysisContract::Alt(alternatives) => {
+                let mut points = Vec::new();
+                for alternative in alternatives {
+                    points.extend(alternative.finite_points()?);
+                }
+                Some(points)
+            }
+            AnalysisContract::Tuple(_) | AnalysisContract::Record(_) => None,
+        }
+    }
+
     /// The canonical empty concretization.
     pub fn bottom() -> AnalysisContract {
         AnalysisContract::Bottom
@@ -219,19 +545,16 @@ impl AnalysisContract {
     /// live value layer. Aggregate structure is retained, and a NEXT closure carries
     /// its concrete shape plus exact capture contracts. A capture's own function
     /// metadata may remain coarsened because `Equals(capture)` already fixes that value.
-    pub fn of_value(value: ValueRef) -> AnalysisContract {
+    pub fn of_value(value: ValueRef, interner: &mut Interner) -> AnalysisContract {
         if let Some(function) = value.as_fn() {
             let mut environment = Vec::with_capacity(function.free_vars().len());
-            for name in function.free_vars() {
-                let Some(Binding::Value(capture)) = function.closure().env.lookup(name) else {
+            for index in 0..function.free_vars().len() {
+                let Some(Binding::Value(capture)) = function.capture_binding_at(index) else {
                     return AnalysisContract::of_contract(Contract::Equals(value));
                 };
                 environment.push(AnalysisContract::of_contract(Contract::Equals(capture)));
             }
-            let instance = Instance {
-                shape: function.shape().clone(),
-                env: environment,
-            };
+            let instance = Instance::new(function.shape_rc(), environment, interner);
             return AnalysisContract::leaf(
                 Contract::Equals(value),
                 InstanceMetadata::Known(vec![instance]),
@@ -242,7 +565,7 @@ impl AnalysisContract {
                 items
                     .iter()
                     .cloned()
-                    .map(AnalysisContract::of_value)
+                    .map(|value| AnalysisContract::of_value(value, interner))
                     .collect(),
             );
         }
@@ -252,7 +575,10 @@ impl AnalysisContract {
                 let Ok(key) = String::from_utf16(&entry.key) else {
                     return AnalysisContract::of_contract(Contract::Equals(value));
                 };
-                fields.push((key, AnalysisContract::of_value(entry.value.clone())));
+                fields.push((
+                    key,
+                    AnalysisContract::of_value(entry.value.clone(), interner),
+                ));
             }
             return AnalysisContract::record(fields);
         }
@@ -273,33 +599,7 @@ impl AnalysisContract {
         {
             return AnalysisContract::Bottom;
         }
-        AnalysisContract::Leaf {
-            contract,
-            metadata,
-            held: None,
-        }
-    }
-
-    /// A leaf carrying a **held operation image** beside its coarse contract.
-    pub fn leaf_with_image(
-        contract: Contract,
-        metadata: InstanceMetadata,
-        image: HeldImage,
-    ) -> AnalysisContract {
-        AnalysisContract::Leaf {
-            contract,
-            metadata,
-            held: Some(std::rc::Rc::new(image)),
-        }
-    }
-
-    /// The held image at this position, if any. `None` everywhere but a leaf that an
-    /// operation produced over finite point operands.
-    pub fn held_image(&self) -> Option<std::rc::Rc<HeldImage>> {
-        match self {
-            AnalysisContract::Leaf { held, .. } => held.clone(),
-            _ => None,
-        }
+        AnalysisContract::Leaf { contract, metadata }
     }
 
     /// A correlated tuple; a bottom element makes the whole tuple bottom.
@@ -364,13 +664,13 @@ impl AnalysisContract {
     /// Exact structural projection of tuple position `index`. `None` means this domain
     /// cannot prove that every represented producer has that position; callers must
     /// retain the ordinary access rule's conservative result instead.
-    pub fn project_index(&self, index: usize) -> Option<AnalysisContract> {
+    pub fn project_index(&self, index: usize, interner: &mut Interner) -> Option<AnalysisContract> {
         match self {
             AnalysisContract::Bottom => Some(AnalysisContract::Bottom),
             AnalysisContract::Tuple(elements) => elements.get(index).cloned(),
             AnalysisContract::Alt(alternatives) => alternatives
                 .iter()
-                .map(|alternative| alternative.project_index(index))
+                .map(|alternative| alternative.project_index(index, interner))
                 .collect::<Option<Vec<_>>>()
                 .map(AnalysisContract::alt),
             AnalysisContract::Leaf { contract, .. } => match contract {
@@ -380,19 +680,19 @@ impl AnalysisContract {
                 Contract::Equals(value) => value
                     .as_tuple()
                     .and_then(|items| items.get(index).cloned())
-                    .map(AnalysisContract::of_value),
+                    .map(|value| AnalysisContract::of_value(value, interner)),
                 Contract::Union(left, right) => AnalysisContract::alt(vec![
                     AnalysisContract::of_contract((**left).clone()),
                     AnalysisContract::of_contract((**right).clone()),
                 ])
-                .project_index(index),
+                .project_index(index, interner),
                 // A member of `A ∩ B` lies in both sides, so **either side's**
                 // projection alone is a sound over-approximation of the element —
                 // no construction needed (these projectors carry no interner).
                 // Prefer an informative side over a `Top` one.
                 Contract::Intersection(left, right) => pick_projection(
-                    AnalysisContract::of_contract((**left).clone()).project_index(index),
-                    AnalysisContract::of_contract((**right).clone()).project_index(index),
+                    AnalysisContract::of_contract((**left).clone()).project_index(index, interner),
+                    AnalysisContract::of_contract((**right).clone()).project_index(index, interner),
                 ),
                 _ => None,
             },
@@ -401,7 +701,7 @@ impl AnalysisContract {
     }
 
     /// Exact structural projection of a statically named record field.
-    pub fn project_field(&self, name: &str) -> Option<AnalysisContract> {
+    pub fn project_field(&self, name: &str, interner: &mut Interner) -> Option<AnalysisContract> {
         match self {
             AnalysisContract::Bottom => Some(AnalysisContract::Bottom),
             AnalysisContract::Record(fields) => fields
@@ -410,7 +710,7 @@ impl AnalysisContract {
                 .map(|(_, value)| value.clone()),
             AnalysisContract::Alt(alternatives) => alternatives
                 .iter()
-                .map(|alternative| alternative.project_field(name))
+                .map(|alternative| alternative.project_field(name, interner))
                 .collect::<Option<Vec<_>>>()
                 .map(AnalysisContract::alt),
             AnalysisContract::Leaf { contract, .. } => match contract {
@@ -424,17 +724,17 @@ impl AnalysisContract {
                     entries
                         .iter()
                         .find(|entry| entry.key == key)
-                        .map(|entry| AnalysisContract::of_value(entry.value.clone()))
+                        .map(|entry| AnalysisContract::of_value(entry.value.clone(), interner))
                 }
                 Contract::Union(left, right) => AnalysisContract::alt(vec![
                     AnalysisContract::of_contract((**left).clone()),
                     AnalysisContract::of_contract((**right).clone()),
                 ])
-                .project_field(name),
+                .project_field(name, interner),
                 // See `project_index`'s Intersection arm — either side is sound.
                 Contract::Intersection(left, right) => pick_projection(
-                    AnalysisContract::of_contract((**left).clone()).project_field(name),
-                    AnalysisContract::of_contract((**right).clone()).project_field(name),
+                    AnalysisContract::of_contract((**left).clone()).project_field(name, interner),
+                    AnalysisContract::of_contract((**right).clone()).project_field(name, interner),
                 ),
                 _ => None,
             },
@@ -525,18 +825,18 @@ fn is_function_only(c: &Contract) -> bool {
 /// unrealized (a sound under-approximation of γ for membership).
 pub fn realizes(v: &ValueRef, i: &Instance, interner: &mut Interner) -> bool {
     let Some(f) = v.as_fn() else { return false };
-    if f.shape() != &i.shape || f.free_vars().len() != i.env.len() {
+    if f.shape_rc() != i.code_handle() || f.free_vars().len() != i.captures().len() {
         return false;
     }
     // Resolve capture values first, releasing the borrow on `v` before recursing.
-    let mut captures: Vec<ValueRef> = Vec::with_capacity(i.env.len());
-    for name in f.free_vars() {
-        match f.closure().env.lookup(name) {
+    let mut captures: Vec<ValueRef> = Vec::with_capacity(i.captures().len());
+    for index in 0..f.free_vars().len() {
+        match f.capture_binding_at(index) {
             Some(Binding::Value(cv)) => captures.push(cv),
             _ => return false,
         }
     }
-    for (cap, cv) in i.env.iter().zip(&captures) {
+    for (cap, cv) in i.captures().iter().zip(&captures) {
         if !gamma_contains(cap, cv, interner) {
             return false;
         }
@@ -722,7 +1022,7 @@ fn meet_metadata(
             let mut out: Vec<Instance> = Vec::new();
             for si in s {
                 for ti in t {
-                    if si.shape != ti.shape {
+                    if si.code_handle() != ti.code_handle() {
                         continue;
                     }
                     let meet = if matches!(instance_covers(si, ti, interner), Verdict::Proven) {
@@ -746,21 +1046,18 @@ fn meet_metadata(
 /// The same-shape environment meet. `None` when shapes differ, or when the
 /// environment intersection is **proven** empty (a captured position becomes bottom).
 pub fn meet_instance(i: &Instance, j: &Instance, interner: &mut Interner) -> Option<Instance> {
-    if i.shape != j.shape || i.env.len() != j.env.len() {
+    if i.code_handle() != j.code_handle() || i.captures().len() != j.captures().len() {
         return None;
     }
-    let mut env = Vec::with_capacity(i.env.len());
-    for (a, b) in i.env.iter().zip(&j.env) {
+    let mut env = Vec::with_capacity(i.captures().len());
+    for (a, b) in i.captures().iter().zip(j.captures()) {
         let m = intersect_a(a, b, interner);
         if m.is_bottom() {
             return None;
         }
         env.push(m);
     }
-    Some(Instance {
-        shape: i.shape.clone(),
-        env,
-    })
+    Some(Instance::new(i.code_handle(), env, interner))
 }
 
 // ── proveSubcontractA — the annotated three-valued subcontract ────────────────
@@ -874,12 +1171,13 @@ fn covers(s: &InstanceMetadata, t: &InstanceMetadata, interner: &mut Interner) -
     }
 }
 
-/// `instance s ⊑ᴬ instance t`: same shape, and each capture `s.env[k] ⊑ᴬ t.env[k]`.
+/// `instance s ⊑ᴬ instance t`: same canonical code, and each positional
+/// capture `s[k] ⊑ᴬ t[k]`.
 fn instance_covers(s: &Instance, t: &Instance, interner: &mut Interner) -> Verdict {
-    if s.shape != t.shape || s.env.len() != t.env.len() {
+    if s.code_handle() != t.code_handle() || s.captures().len() != t.captures().len() {
         return Verdict::Unproven;
     }
-    for (a, b) in s.env.iter().zip(&t.env) {
+    for (a, b) in s.captures().iter().zip(t.captures()) {
         if !matches!(prove_subcontract_a(a, b, interner), Verdict::Proven) {
             return Verdict::Unproven;
         }

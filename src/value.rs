@@ -13,11 +13,12 @@
 //! `Hash`/`Eq` of `ValueRef` for children and content for leaves) is the correct
 //! interning key. Construct values through the [`Interner`](crate::interner).
 
+use std::cell::{OnceCell, RefCell};
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::ast::{ActKind, Lambda};
-use crate::env::Env;
+use crate::env::{Binding, Env, SlotId};
 use crate::interner::Interner;
 use crate::rational::Rational;
 
@@ -46,6 +47,15 @@ impl ValueRef {
 
     fn as_ptr(&self) -> *const ValueData {
         Rc::as_ptr(&self.0)
+    }
+
+    pub(crate) fn weak(&self) -> Weak<ValueData> {
+        Rc::downgrade(&self.0)
+    }
+
+    pub(crate) fn matches_weak(&self, weak: &Weak<ValueData>) -> bool {
+        weak.upgrade()
+            .is_some_and(|held| Rc::ptr_eq(&held, &self.0))
     }
 
     /// The interned allocation address, as a stable within-process id (used for
@@ -89,10 +99,11 @@ pub enum ValueData {
     /// resolved at construction). Order is not observable — `{a:1,b:2}` and
     /// `{b:2,a:1}` are the same value.
     Record(Vec<RecordEntry>),
-    /// A function value: `(body, captured environment, actKind)` (semantics §1).
+    /// A function value: canonical code plus positional captures and `actKind`.
     /// Construction canonicalizes it through the function interner: an acyclic
     /// shallow key when captures are resolved, or a verified rational-graph
-    /// bucket at recursive-window close.
+    /// bucket at recursive-window close. Source code retained by [`Closure`] is
+    /// diagnostic/analyzer metadata, not identity or invocation state.
     Function(FnValue),
     /// An unresolved arithmetic result (Part XII, 2026-08-01): a plain interned
     /// value, not a trap. The form tag and canonical Number operand together are
@@ -112,13 +123,108 @@ pub struct RecordEntry {
     pub value: ValueRef,
 }
 
-/// A closure: a lambda body plus the environment it was constructed in
-/// (semantics §1). The environment is captured by reference, so late binding and
-/// mutual recursion resolve at call time (B4). Used for **evaluation**.
+/// The source lambda retained as analyzer/diagnostic metadata beside a positional
+/// capture vector. Runtime invocation executes [`FnValue::shape`], not this source
+/// form. Closed closures retain no lexical environment.
 #[derive(Debug)]
 pub struct Closure {
     pub lambda: Lambda,
-    pub env: Env,
+    capture_names: Rc<Vec<String>>,
+    captures: Rc<Vec<ClosureCapture>>,
+}
+
+impl Closure {
+    pub(crate) fn new(lambda: Lambda) -> Closure {
+        Closure {
+            lambda,
+            capture_names: Rc::new(Vec::new()),
+            captures: Rc::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn capture_binding_at(&self, index: usize) -> Option<Binding> {
+        match self.captures.get(index)? {
+            ClosureCapture::Value(value) => Some(Binding::Value(value.clone())),
+            ClosureCapture::Location(slot) => Some(Binding::Slot(*slot)),
+            ClosureCapture::Recursive(edge) => edge.group.target(edge.index).map(Binding::Value),
+            ClosureCapture::Deferred { env, name } => env.lookup(name),
+        }
+    }
+
+    pub(crate) fn capture_binding(&self, name: &str) -> Option<Binding> {
+        let index = self.capture_names.iter().position(|free| free == name)?;
+        self.capture_binding_at(index)
+    }
+}
+
+/// One positional capture operand of canonical function code. `Value` is the
+/// complete Pure-closure representation. `Location` is retained only for the
+/// separate Effect/Mutator implementation path. `Deferred` is a construction-
+/// window placeholder and must be eliminated when the graph closes.
+#[derive(Clone, Debug)]
+pub(crate) enum ClosureCapture {
+    Value(ValueRef),
+    Location(SlotId),
+    Recursive(RecursiveCapture),
+    Deferred { env: Env, name: String },
+}
+
+/// A positional edge inside one closed recursive construction graph. The current
+/// Rust representation keeps the graph's canonical root handles together; the
+/// later one-allocation/group-offset representation can replace this ownership
+/// detail without changing the capture or invocation model.
+#[derive(Clone, Debug)]
+pub(crate) struct RecursiveCapture {
+    group: Rc<RecursiveGroup>,
+    index: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct RecursiveGroup {
+    draft: RefCell<Vec<Option<ValueRef>>>,
+    locked: OnceCell<Rc<Vec<ValueRef>>>,
+}
+
+impl RecursiveGroup {
+    pub(crate) fn new(len: usize) -> Rc<RecursiveGroup> {
+        Rc::new(RecursiveGroup {
+            draft: RefCell::new((0..len).map(|_| None).collect()),
+            locked: OnceCell::new(),
+        })
+    }
+
+    pub(crate) fn edge(group: &Rc<RecursiveGroup>, index: usize) -> ClosureCapture {
+        ClosureCapture::Recursive(RecursiveCapture {
+            group: group.clone(),
+            index,
+        })
+    }
+
+    pub(crate) fn set_target(&self, index: usize, value: &ValueRef) {
+        debug_assert!(self.locked.get().is_none());
+        self.draft.borrow_mut()[index] = Some(value.clone());
+    }
+
+    pub(crate) fn lock(&self) {
+        let targets: Vec<ValueRef> = self
+            .draft
+            .borrow()
+            .iter()
+            .cloned()
+            .map(|target| target.expect("recursive group target is initialized"))
+            .collect();
+        self.locked
+            .set(Rc::new(targets))
+            .expect("recursive group locks exactly once");
+        self.draft.borrow_mut().clear();
+    }
+
+    fn target(&self, index: usize) -> Option<ValueRef> {
+        if let Some(locked) = self.locked.get() {
+            return locked.get(index).cloned();
+        }
+        self.draft.borrow().get(index)?.clone()
+    }
 }
 
 /// A function payload (μ-Canonicalization Specification §6). The enclosing
@@ -126,9 +232,8 @@ pub struct Closure {
 ///
 /// - `shape` — the canonical code (α/capture-normalized; finite), the node label
 ///   for equality and the layer-2 cache key;
-/// - `free_vars` — the ordered names of the capture slots in `shape`, resolved
-///   against `closure.env` at comparison time to get the capture children;
-/// - `closure` — lambda + captured environment, for evaluation.
+/// - `free_vars` — source names corresponding positionally to `@cap0`, `@cap1`, …;
+/// - `closure` — source metadata plus the explicit capture vector.
 ///
 /// `Hash`/`Eq` here identify the provisional closure allocation only. They keep a
 /// half-built graph out of the ordinary bottom-up table; [`Interner`] applies the
@@ -137,22 +242,28 @@ pub struct Closure {
 #[derive(Clone)]
 pub struct FnValue {
     shape: crate::intern::Interned<Lambda>,
-    free_vars: Rc<Vec<String>>,
     closure: Rc<Closure>,
 }
 
 impl FnValue {
     /// `shape` must come from [`crate::interner::Interner::intern_code`] — the interned
     /// canonical code, so that identical shapes share one allocation and compare by pointer.
-    pub fn new(
+    pub(crate) fn new(
         shape: crate::intern::Interned<Lambda>,
         free_vars: Vec<String>,
+        captures: Vec<ClosureCapture>,
         closure: Closure,
     ) -> FnValue {
+        debug_assert_eq!(free_vars.len(), captures.len());
+        let capture_names = Rc::new(free_vars);
+        let captures = Rc::new(captures);
         FnValue {
             shape,
-            free_vars: Rc::new(free_vars),
-            closure: Rc::new(closure),
+            closure: Rc::new(Closure {
+                lambda: closure.lambda,
+                capture_names,
+                captures,
+            }),
         }
     }
 
@@ -170,7 +281,21 @@ impl FnValue {
     /// The ordered capture-slot names (`shape`'s `@cap`i corresponds to
     /// `free_vars[i]`).
     pub fn free_vars(&self) -> &[String] {
-        &self.free_vars
+        &self.closure.capture_names
+    }
+
+    pub(crate) fn captures(&self) -> &[ClosureCapture] {
+        &self.closure.captures
+    }
+
+    /// Resolve one positional capture. Deferred captures consult the temporary
+    /// construction environment; closed Pure closures never take that branch.
+    pub(crate) fn capture_binding_at(&self, index: usize) -> Option<Binding> {
+        self.closure.capture_binding_at(index)
+    }
+
+    pub(crate) fn capture_binding(&self, name: &str) -> Option<Binding> {
+        self.closure.capture_binding(name)
     }
 
     pub fn closure(&self) -> &Closure {

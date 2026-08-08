@@ -2,13 +2,13 @@
 //!
 //! Recursion lives in the **captures**, not the code: a recursive or mutual callee
 //! `f` in a body is a free variable, canonicalized to a capture slot `@capᵢ` whose
-//! original name is `free_vars[i]`; the closure's **shared** environment late-binds
-//! it to the target closure (a plain `Binding::Value`, not a slot — slots are only
-//! for `@:` mutables). So the call graph is read directly off a closure **value**:
+//! original name is `free_vars[i]`; joint construction closes that slot to a
+//! positional value-graph edge whose target is a plain `Binding::Value`. So the
+//! call graph is read directly off a closed closure **value**:
 //! walk its shape body for applications and resolve each capture-slot callee to the
-//! captured function value. The §4a shape-repeat cutoff ([`build_inventory_by`]) then
-//! bounds the reachable set — a recursive edge simply closes as a shape repeat, so no
-//! μ-binder minimization is required.
+//! captured function value. The §4a canonical-code-repeat cutoff
+//! ([`build_inventory_by`]) then bounds discovery — an edge to already active code
+//! records the recursive transition without unfolding it.
 //!
 //! **Soundness of the two under-approximations.** The walk does not descend into
 //! nested `Lambda` bodies (those are distinct instances) and resolves only
@@ -39,10 +39,7 @@ pub fn callee_targets(v: &ValueRef) -> Vec<ValueRef> {
         let Some(idx) = capture_index(callee) else {
             continue;
         };
-        let Some(orig) = f.free_vars().get(idx) else {
-            continue;
-        };
-        match f.closure().env.lookup(orig) {
+        match f.capture_binding_at(idx) {
             Some(Binding::Value(cv)) if cv.is_function() && !targets.contains(&cv) => {
                 targets.push(cv)
             }
@@ -54,7 +51,7 @@ pub fn callee_targets(v: &ValueRef) -> Vec<ValueRef> {
 
 /// The finite set of closures reachable from `root` under the §4a cutoff — the
 /// concrete instance graph the return induction (§6) will process. Every recursive or
-/// mutual cycle closes as a shape repeat, so this terminates on any program.
+/// mutual cycle closes as a canonical-code repeat, so this terminates on any program.
 pub fn reachable_closures(root: ValueRef) -> Vec<ValueRef> {
     build_inventory_by(vec![root], closure_shape, callee_targets)
 }

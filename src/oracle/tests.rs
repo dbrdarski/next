@@ -2,7 +2,7 @@
 //! source; these are the executable checks the specs call for.
 
 use super::*;
-use crate::value::{IndeterminateForm, ValueData};
+use crate::value::{ClosureCapture, IndeterminateForm, ValueData};
 
 /// Evaluate a program, expecting a produced value.
 fn eval(src: &str) -> ValueRef {
@@ -541,6 +541,110 @@ fn acyclic_closures_with_equal_resolved_captures_share_one_pointer() {
 }
 
 #[test]
+fn pure_closure_snapshots_a_mutable_read_at_formation() {
+    let mut i = Interner::new();
+    let result = eval_in(
+        &mut i,
+        "@mutable x = 1\nf = () => x\n@mutate set = () => { x := 2 }\nset()\n[f(), x]",
+    );
+    let values = result.as_tuple().expect("[captured, current]");
+    assert_eq!(values[0].as_number(), Some(&Rational::from(1)));
+    assert_eq!(values[1].as_number(), Some(&Rational::from(2)));
+}
+
+#[test]
+fn pure_closure_identity_uses_captured_values_across_stores() {
+    let mut i = Interner::new();
+    let one_from_x = eval_in(&mut i, "@mutable x = 1\n() => x");
+    let one_from_y = eval_in(&mut i, "@mutable y = 1\n() => y");
+    let two_from_z = eval_in(&mut i, "@mutable z = 2\n() => z");
+
+    assert!(
+        one_from_x.ptr_eq(&one_from_y),
+        "slot provenance is not part of Pure function identity"
+    );
+    assert!(
+        !one_from_x.ptr_eq(&two_from_z),
+        "different captured values must produce different Pure functions"
+    );
+}
+
+#[test]
+fn closed_pure_closures_have_only_value_or_recursive_captures() {
+    fn inspect(value: &ValueRef, seen: &mut std::collections::HashSet<usize>) {
+        if !seen.insert(value.addr()) {
+            return;
+        }
+        match value.data() {
+            ValueData::Function(function) => {
+                for (index, capture) in function.captures().iter().enumerate() {
+                    assert!(
+                        !matches!(capture, ClosureCapture::Deferred { .. }),
+                        "a closed closure retained its construction environment"
+                    );
+                    assert!(
+                        !matches!(capture, ClosureCapture::Location(_)),
+                        "a Pure closure retained a mutable location"
+                    );
+                    if let Some(Binding::Value(captured)) = function.capture_binding_at(index) {
+                        inspect(&captured, seen);
+                    }
+                }
+            }
+            ValueData::Tuple(items) => {
+                for item in items {
+                    inspect(item, seen);
+                }
+            }
+            ValueData::Record(fields) => {
+                for field in fields {
+                    inspect(&field.value, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut i = Interner::new();
+    let value = eval_in(
+        &mut i,
+        "@mutable x = 1\nsnapshot = () => x\nself = n => n == 0 ? 0 : self(n - 1)\nmixed = [() => mixed]\n[snapshot, self, mixed]",
+    );
+    inspect(&value, &mut std::collections::HashSet::new());
+}
+
+#[test]
+fn indirect_capture_of_a_recursive_root_is_the_canonical_root() {
+    let mut i = Interner::new();
+    let pair = eval_in(
+        &mut i,
+        "countDown = n => n == 0 ? 0 : countDown(n - 1)\n\
+         run = n => countDown(n) + 1\n\
+         [countDown, run]",
+    );
+    let values = pair.as_tuple().expect("[recursive root, wrapper]");
+    let count_down = &values[0];
+    let run = values[1].as_fn().expect("wrapper function");
+    let Binding::Value(captured) = run.capture_binding("countDown").expect("wrapper capture")
+    else {
+        panic!("Pure wrapper capture is a value");
+    };
+    assert!(
+        captured.ptr_eq(count_down),
+        "an acyclic wrapper must not retain a pre-close recursive intermediary"
+    );
+
+    let recursive = count_down.as_fn().expect("recursive function");
+    let Binding::Value(self_edge) = recursive
+        .capture_binding("countDown")
+        .expect("self capture")
+    else {
+        panic!("Pure recursive capture is a value edge");
+    };
+    assert!(self_edge.ptr_eq(count_down));
+}
+
+#[test]
 fn recursive_function_values_share_pointers_after_their_windows_close() {
     let mut i = Interner::new();
     let pair = eval_in(&mut i, "y = [() => y]\nz = [() => z]\n[y, z]");
@@ -606,19 +710,19 @@ fn ruled_function_identity_corpus_is_pointer_canonical() {
 }
 
 #[test]
-fn function_pointer_identity_retains_capture_and_location_distinctions() {
+fn function_pointer_identity_retains_capture_distinctions() {
     let mut i = Interner::new();
     let captures = eval_in(&mut i, "make = n => x => x + n\n[make(1), make(2)]");
     let values = captures.as_tuple().unwrap();
     assert!(!values[0].ptr_eq(&values[1]));
 
     let mut i = Interner::new();
-    let locations = eval_in(
+    let equal_snapshots = eval_in(
         &mut i,
         "@state x = 1\n@state y = 1\nf = () => x\ng = () => y\n[f, g]",
     );
-    let values = locations.as_tuple().unwrap();
-    assert!(!values[0].ptr_eq(&values[1]));
+    let values = equal_snapshots.as_tuple().unwrap();
+    assert!(values[0].ptr_eq(&values[1]));
 }
 
 #[test]
@@ -979,9 +1083,10 @@ fn mu08_iseven_isodd_distinct_bodies_are_unequal() {
 }
 
 #[test]
-fn mu04_location_captures_are_nominal() {
-    // MU-04: same body over distinct @state locations ⇒ distinct; over the same
-    // location ⇒ equal (the fork-13 split rule; locations never merge).
+fn pure_reads_capture_values_not_locations() {
+    // Author ruling 2026-08-08 supersedes MU-04's old location-marker reading
+    // for Pure closures: equal current values yield one closure value even when
+    // they came from distinct mutable bindings.
     let src = "
         @state p = 0
         @state q = 0
@@ -994,10 +1099,10 @@ fn mu04_location_captures_are_nominal() {
     let parts = t.as_tuple().unwrap();
     assert_eq!(
         parts[0].as_boolean(),
-        Some(false),
-        "distinct locations distinct"
+        Some(true),
+        "equal snapshots from distinct locations are equal"
     );
-    assert_eq!(parts[1].as_boolean(), Some(true), "same location equal");
+    assert_eq!(parts[1].as_boolean(), Some(true), "same snapshot equal");
 }
 
 #[test]

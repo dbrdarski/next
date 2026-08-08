@@ -454,7 +454,30 @@ impl<'a> Oracle<'a> {
     }
 
     fn make_closure(&mut self, lambda: &Lambda, env: &Env) -> ValueRef {
-        make_closure_in(lambda, env, self.interner)
+        let (code, free_vars) = canonical_function(lambda, self.interner);
+        let captures = free_vars
+            .iter()
+            .map(|name| match env.lookup(name) {
+                Some(Binding::Value(value)) => ClosureCapture::Value(value),
+                // Pure closure conversion applies the outer capture arguments at
+                // formation: a mutable read contributes its current immutable
+                // value, never the location. Effect/Mutator lowering remains its
+                // own deferred subsystem and keeps the setter-capable location.
+                Some(Binding::Slot(slot)) if lambda.act_kind == ActKind::Pure => {
+                    ClosureCapture::Value(self.read_slot(slot))
+                }
+                Some(Binding::Slot(slot)) => ClosureCapture::Location(slot),
+                Some(Binding::Open(_)) | Some(Binding::UnderInit) | None => {
+                    ClosureCapture::Deferred {
+                        env: env.clone(),
+                        name: name.clone(),
+                    }
+                }
+            })
+            .collect();
+        let closure = Closure::new(lambda.clone());
+        self.interner
+            .function(FnValue::new(code, free_vars, captures, closure))
     }
 
     pub(super) fn begin_group(&self, group: &mu::GroupWindow, env: &Env) {
@@ -496,9 +519,9 @@ impl<'a> Oracle<'a> {
                 "a recursive construction window closed with an unresolved capture",
             );
         }
-        for (name, value) in roots {
-            let canonical = self.interner.close_value_graph(value);
-            env.define(&name, Binding::Value(canonical));
+        let canonical = self.interner.close_recursive_group(&roots, env);
+        for ((name, _), value) in roots.into_iter().zip(canonical) {
+            env.define(&name, Binding::Value(value));
         }
         self.retry_pending_values();
         Ok(())
@@ -1005,12 +1028,13 @@ impl<'a> Oracle<'a> {
             };
         }
 
-        let closure = match callee_v.as_closure() {
-            Some(c) => c,
+        let function = match callee_v.as_fn() {
+            Some(function) => function.clone(),
             None => return Self::trap(TrapClass::OperationSafety, "callee is not a function"),
         };
 
-        let callee_kind = closure.lambda.act_kind;
+        let code = function.shape().clone();
+        let callee_kind = code.act_kind;
         if !world.admits(callee_kind) {
             return Self::trap(
                 TrapClass::WorldAdmission,
@@ -1021,14 +1045,36 @@ impl<'a> Oracle<'a> {
         // Bind the complete argument tuple against the parameter pattern (the
         // arity model); parameter binding is pure and happens before any staging.
         let arg_tuple = self.interner.tuple(arg_vals);
-        let call_env = Scope::child(&closure.env);
-        if !self.match_pattern(&closure.lambda.params, &arg_tuple, &call_env)? {
+        let call_env = Scope::root();
+        for index in 0..function.free_vars().len() {
+            let Some(capture) = function.capture_binding_at(index) else {
+                return Self::trap(
+                    TrapClass::UnboundEvaluation,
+                    "canonical closure has an unresolved capture",
+                );
+            };
+            match capture {
+                Binding::Value(value) => {
+                    call_env.define(&format!("@cap{index}"), Binding::Value(value));
+                }
+                Binding::Slot(slot) => {
+                    call_env.define(&format!("@cap{index}"), Binding::Slot(slot));
+                }
+                Binding::Open(_) | Binding::UnderInit => {
+                    return Self::trap(
+                        TrapClass::UnboundEvaluation,
+                        "canonical closure has an open capture",
+                    );
+                }
+            }
+        }
+        if !self.match_pattern(&code.params, &arg_tuple, &call_env)? {
             return Self::trap(
                 TrapClass::ArgumentObligation,
                 "arguments do not match the parameter pattern",
             );
         }
-        let body = closure.lambda.body.clone();
+        let body = code.body.clone();
 
         // Call-depth bound (fueled runs only): a diverging call would otherwise deepen
         // the interpreter's own stack without limit. Exhaustion is `out_of_fuel` — a
@@ -1289,7 +1335,8 @@ fn module_group_windows(module: &Module) -> Vec<mu::GroupWindow> {
 /// too — `analyze_program` must reach a top-level function's value to verify its `where`
 /// — and it must do so *without evaluating the module*, which would run the program at
 /// compile time. Building a closure evaluates nothing: the body is untouched and the
-/// environment is captured by reference under late binding.
+/// unresolved operands may consult the construction environment until close;
+/// closed functions retain only positional captures.
 /// The canonical free-variable list of a lambda (the capture-slot order) — what a
 /// constructor must resolve before [`make_closure_in`] can take the closed fast
 /// path. Canonicalization is idempotent and interned, so this is cheap to ask.
@@ -1297,12 +1344,31 @@ pub(crate) fn lambda_free_vars(lambda: &Lambda, interner: &mut Interner) -> Vec<
     canon::canonicalize(lambda, interner).free_vars
 }
 
-pub(crate) fn make_closure_in(lambda: &Lambda, env: &Env, interner: &mut Interner) -> ValueRef {
+/// Canonical per-function code and the source bindings routed positionally to
+/// its `@cap0…` references. Concrete and symbolic closure construction share
+/// this one conversion; recursive grouping is not part of code identity.
+pub(crate) fn canonical_function(
+    lambda: &Lambda,
+    interner: &mut Interner,
+) -> (crate::intern::Interned<Lambda>, Vec<String>) {
     let shape = canon::canonicalize(lambda, interner);
-    let closure = Closure {
-        lambda: lambda.clone(),
-        env: env.clone(),
-    };
     let code = interner.intern_code(shape.code);
-    interner.function(FnValue::new(code, shape.free_vars, closure))
+    (code, shape.free_vars)
+}
+
+pub(crate) fn make_closure_in(lambda: &Lambda, env: &Env, interner: &mut Interner) -> ValueRef {
+    let (code, free_vars) = canonical_function(lambda, interner);
+    let captures = free_vars
+        .iter()
+        .map(|name| match env.lookup(name) {
+            Some(Binding::Value(value)) => ClosureCapture::Value(value),
+            Some(Binding::Slot(slot)) => ClosureCapture::Location(slot),
+            Some(Binding::Open(_)) | Some(Binding::UnderInit) | None => ClosureCapture::Deferred {
+                env: env.clone(),
+                name: name.clone(),
+            },
+        })
+        .collect();
+    let closure = Closure::new(lambda.clone());
+    interner.function(FnValue::new(code, free_vars, captures, closure))
 }

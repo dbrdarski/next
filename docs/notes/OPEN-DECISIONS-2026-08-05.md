@@ -101,17 +101,16 @@ Implemented same day (`uncalled_unsafe_lints` + three conformance pins): an unre
 function with a body proven to trap gets a definition-site **Warning** — never rejects,
 never silent; referenced functions keep their seats' blocking judgment.
 
-### A6. **RULED and FIRST SLICE LANDED.** Hull retained as an accelerator only; exact
+### A6. **RULED and LANDED; correlated arc completed 2026-08-08.** Hull retained as an accelerator only; exact
 resolution forced — mandatorily, not discretionarily — when routing/completion cannot be
 proven coarsely. Landed 2026-08-07 (conformance `exact_images`), with the union-remainder
-algebra as its prerequisite (`union_remainders`). **Residue item 2 settled by measurement
-2026-08-07:** the retry needs no wiring at the application path's own `safety::completes`
-callers — it re-runs the whole body analysis in exact mode, so nested seats inherit it, and
-outside a `where` no branch set exists for them to retry (pinned: `exact_image_reach`).
-**Residue closed 2026-08-07:** the held image is built (`domain::HeldImage`, forced at the
-scrutinee by `analyze_match`), replacing the re-analysis; the mode flag and its memo-key
-field are deleted, dissolving the spec's §11 item 3. **Remaining:** chaining, provenance
-sharing, and the 256-combination budget, which is the drafter's and unratified.
+algebra as its prerequisite (`union_remainders`). The held image replaced the initial
+whole-judgment retry on 2026-08-07; the mode flag and mode-key field were deleted. The
+2026-08-08 completion adds nominal source cells, natural-join correlation, chained images,
+BR-09 narrowing by arrival, and BR-15 collapse by keeping images out of contracts/fact keys.
+The unratified 256-combination cutoff is removed; finite cell routing has no fuel threshold.
+The implementation uses BR-10's iterative route, so literal-key lookup is only a future
+optimization. Pinned by `exact_images` and `exact_image_reach`.
 Design now lives in `DRAFT-demand-stopping-and-branch-routing-v0-1.md`.
 
 #### (original three-candidate text, superseded)
@@ -231,6 +230,48 @@ choice.
 - **Shadowing policy** — rebinding a name in nested scopes: allowed silently today;
   lint/error unruled.
 
+### A13. Canonical closure conversion — **RULED AND LANDED [user, 2026-08-08]; no Mutator gate**
+
+The author ruled that lexical scope is an explicit positional capture-argument space in canonical
+IR. `(x) => () => x` is the conceptual closure conversion of `() => x`; the outer capture
+application happens once at closure formation and does not alter source arity. When `x` names a
+mutable slot in a **read**, its current value is captured, not the location. The resulting function
+stays Pure and does not observe later writes to the slot. Recursion uses the same conversion:
+`loop = x => loop(x)` is conceptually `(loop) => (x) => loop(x)`, with the self capture supplied as
+an open graph edge and closed before interning. Final invocation should execute canonical code over
+the positional capture vector, not a retained source environment.
+
+**Implementation landed 2026-08-08:** calls now execute the interned canonical lambda over
+`@cap0…`; closed functions retain explicit values/recursive edges and no lexical `Env`. Pure slot
+reads snapshot through π/σ at formation. The source lambda survives only as analyzer/diagnostic
+metadata. Publication requires a fully materialized graph, so an acyclic wrapper cannot retain a
+pre-close recursive intermediary. The final one-allocation/interior-offset backing for the
+already-locked recursive graph is layout/reclamation work, not an open semantic decision.
+
+**Recursive identity follow-on ruled and landed 2026-08-08:** the same conversion is sufficient
+for mutual recursion. Every function has its own canonical positional code; references to sibling
+functions and ordinary outer values are positions in its immutable capture graph. A recursive SCC
+only opens and jointly closes that graph. It is not a code-identity object. The analyzer therefore
+keys concrete facts and instantiated rows by the resulting canonical function `ValueRef`.
+`GroupTemplate`, group-level code identity, source-group reconstruction, serialized μ-refs, and
+canonical member-slot ordering are deleted. A symmetric pair such as `a = () => b(); b = () =>
+a()` collapses through value-graph bisimulation; even/odd remain distinct because their per-function
+canonical code differs at the `true`/`false` result.
+
+**Scope correction [user, after ODDO precursor audit]:** Mutators are a separate class and do not
+block this Pure-function ruling. A mutable/state binding owns an internal setter/update channel;
+`Write` lowers to a call through that channel. In NEXT the setter stages into π, and publication is
+already governed by outermost Mutator completion. The ordinary Pure closure captures only the
+current read value. There is no open choice between hidden location capture and new surface syntax;
+that was an overextended question and is withdrawn.
+
+**Mutator implementation direction [user, 2026-08-08; deferred, not open]:** the later Mutator
+runtime may follow ODDO's recursive proxy architecture while honoring NEXT's stronger value law:
+open transaction-local mutable drafts over immutable committed values, copy on the first write to
+each touched path, then lock/freeze and intern the result at successful outermost commit. Nested
+Mutators join the draft transaction. This representation work is explicitly non-blocking for A13
+and may be deferred; no draft is part of Pure closure identity or an internable language value.
+
 ---
 
 ## Group B — deferred by your own rulings (reopen only deliberately)
@@ -252,6 +293,8 @@ choice.
   1–4 + confirmatory)"*), and laws 1–5 are part of it. The only "deferred" note is a
   **code comment of mine** in `src/oracle/mu.rs` ("Deferred refinements (flagged)"), not an
   author ruling. Owed implementation; moved to Group C.
+  **Superseded again by the 2026-08-08 author ruling:** group-template laws 2/4 are no longer an
+  implementation obligation because the group-level identity mechanism itself is deleted.
 - ~~**B4. Symbolic-instance fact keys**~~ — **MIS-FILED; REMOVED FROM THIS GROUP
   [2026-08-06].** This was never an author deferral and never an open question. C§13.2
   specifies it twice: *"A call site resolves its callee to an analysis instance (**shape +
@@ -282,18 +325,13 @@ choice.
 
 ## Group C — owed implementation (mine; no ruling needed)
 
-- **C0. Analysis-instance metadata for factory products (C§13.2) — the former "B4".**
-  A function value produced with non-singleton captures must carry its instance (shape +
-  capture *contracts*) as metadata beside `Kind(Function)`, and a call site must resolve
-  through it. Specified, unimplemented. Symptom: a `where` over any non-enumerable domain
-  on a function that builds a helper from its own argument and calls it — rejected with
-  "callee not resolved to a known function" (scratch program `w2.next`). **Not proven to be
-  the sole remaining cause of that rejection**, only the specified piece that is missing.
-- **C6. μ laws 2 and 4 (design-closed, unimplemented)** — law 2's adjacent/nested-binder
-  merge and law 4's partition-refinement slot merging. Implemented today as *not merging*,
-  which is the conservative direction: the cost is that two genuinely identical recursive
-  groups key separately and are analyzed twice — a missed optimization, never a wrong
-  answer. Note in `src/oracle/mu.rs`.
+- **C0. Analysis-instance metadata for factory products — CLOSED 2026-08-08.**
+  Non-singleton factory products carry canonical symbolic instances; all live members are
+  traversed and facts key by full instance + arrived domain. The cyclic local-recursion tail
+  is split to C8 rather than keeping the entire former B4 open.
+- **C6. μ laws 2 and 4 — SUPERSEDED 2026-08-08.** v0.6 removes group-template and slot
+  identity. Construction-window tying plus exact rooted value-graph bisimulation implements
+  the applicable identity law; template binder/slot merging is no longer an owed mechanism.
 - **C7. Exact string-length seam arithmetic (design-closed, unimplemented)** — the
   boundary-state compression that lifts `count(a) ≤ count(a ++ b) ≤ count(a) + count(b)` to
   an exact contract. Needs the segmenter's category tables and a string-length contract
@@ -302,10 +340,18 @@ choice.
   per world (Tier 5's next slice).
 - **C2.** The world-decided gray runner — host effects in the bounded oracle, then the
   recorded stub goes live.
-- **C3.** Call-edge-derived domains (application spec v0.8.1 §5) replacing
-  `accepted_domain`'s interim same-arity propagation.
+- **C3.** General call-edge-derived domains (application spec v0.8.1 §5) replacing
+  `accepted_domain`'s interim same-arity propagation. The carried-coordinate and GR-19
+  operation-verified numeric-payload fact domains are implemented fixed extraction rules;
+  they do not complete this general replacement.
 - **C4.** The paper-proof halves of grounding §13.1–4, the μ obligations, and the semantics
   theorem — C§16 discharge proper (the executable batteries are supplements by §13.5's own
   words).
 - **C5.** More RT/GR conformance breadth as features land; the remaining owed-items ledger
   rows.
+- **C8. Recursive local calls over outer arguments — CLOSED 2026-08-08 [user correction].**
+  The proposed cyclic symbolic capture graph was an eagerness error: the local closure forms only
+  when the outer function executes. Direct calls now closure-convert arrived outer bindings to
+  ordinary fact arguments; enclosing dependency discovery, return, completion, and grounding all
+  use that closed analyzer identity and stop at the reached recursive back-edge. Pinned live by
+  `cli_recursive_local_call_carries_outer_arguments_lazily`.

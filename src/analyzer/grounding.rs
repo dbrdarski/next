@@ -31,9 +31,10 @@
 //! forced linear recursion whose forward orbit `{ start + drift·k }` provably misses every
 //! base region diverges → [`Verdict::Refuted`]. Covers `drift < 0` (GR-23a drift-away),
 //! `drift > 0` (ascending mirror), and `drift == 0` (a **period-1 closed orbit** — GR-11's
-//! degenerate case, `f(n)` on itself). A broad (non-represented-exact) domain admits no
-//! witness → stays `Unproven` (GR-21; specimen 3c). The general closed-orbit form (a
-//! required-dependency cycle, GR-11) is a later increment.
+//! degenerate case, `f(n)` on itself). The direct-self flat-tuple subset of GR-11 also
+//! follows the finite exact dependency graph and refutes a reached cycle only when every
+//! earlier strict dependency on its path independently proves completing. A broad
+//! (non-represented-exact) domain admits no witness → stays `Unproven` (GR-21; specimen 3c).
 //!
 //! **Program-expressed linear-measure descent (G-3/G-4, §6 GR-15a/16)** — a base arm's
 //! half-line stop `E ⋈ c` whose varying side `E` is a *linear* measure over the parameters
@@ -59,17 +60,19 @@
 //! `GE(0) ∧ Mod(1, 0)`) strictly decreases and is bounded below by 0 — terminates
 //! regardless of the base, no domain needed.
 //!
-//! **Mutual recursion (G-8, §5 GR-07)** — the reachable closure group forms the mutual SCC;
-//! if every cross-call decreases a shared single-parameter measure and every recursive member
-//! has a descending half-line base, every cycle composes to a decrease so the group terminates
-//! (`isEven`/`isOdd` on `n <= 0`). The enumeration-free sufficient case; mixed-sign
-//! oscillator cycles need the full composition — later.
+//! **Mutual recursion (G-8, §5 GR-07)** — over a shared single-parameter constant-drift
+//! measure, every edge-labelled simple cycle of the completed reachable call multigraph is
+//! enumerated and its oriented progress is composed. Every cycle must have strictly positive
+//! progress and cross a descending half-line stop (`isEven`/`isOdd`; the mixed-sign
+//! `+2/-3` oscillator). A zero/non-decreasing cycle makes the candidate contribute nothing.
 //!
 //! Candidate-locality (GR-04): outside applicability each candidate concludes **nothing**
-//! — [`Verdict::Unproven`], always sound. Point-base/Ackermann (grid + domain, GR-18),
-//! exact-singleton chains (§4) and the WorldDecided classifier (§8) are later increments.
-//! **Not yet wired** into application safety: build standalone, prove green, integrate
-//! only when the exact-chain and broader grounding consumers are authorized.
+//! — [`Verdict::Unproven`], always sound. The represented-exact direct-self flat-tuple graph
+//! implements strict-decreasing chains (§4, GR-03B) and the corresponding required-dependency
+//! closed-orbit refutation (GR-11, GR-03A/22B). Mutual control locations, body-constant
+//! insertion, and the wider pooled-leaf chain remain later increments.
+//! **Wired** at executable application and declared-domain seats; an `Unproven` grounding
+//! demand is an error under Principle 9, independently of analyzer-recursion cutoffs.
 
 use num_bigint::BigInt;
 
@@ -78,11 +81,11 @@ use crate::ast::{
     AccessForm, ActKind, Arg, Bind, BindingRef, Element, Expr, Field, Match, MatchItem, Pat,
     PatElem, PrimOp, Ref, TemplatePart,
 };
-use crate::contract::{Contract, ContractEnv, Verdict as Sub, subcontract};
+use crate::contract::{Contract, ContractEnv, Kind, Verdict as Sub, subcontract};
 use crate::env::Binding;
 use crate::interner::Interner;
 use crate::rational::Rational;
-use crate::value::{Closure, ValueRef};
+use crate::value::{Closure, ValueData, ValueRef};
 
 /// The **persistent evidence a refutation must carry** (§7 / GR-23): the admitted
 /// represented-exact **root witness** the forced orbit starts from, plus the certificate
@@ -92,11 +95,37 @@ use crate::value::{Closure, ValueRef};
 pub struct Refutation {
     /// The admitted represented-exact start, taken from the call's own written argument
     /// domain — never synthesized (the constructed-witness inventory is ruled empty).
-    pub witness: Rational,
-    /// The forced constant drift of the single admitted recursive transition.
-    pub drift: Rational,
-    /// The base regions the forward orbit `{witness + drift·k : k ≥ 0}` provably misses.
-    pub missed_bases: Vec<Contract>,
+    pub witness: ValueRef,
+    /// The certificate that makes the represented witness a forced infinite execution.
+    pub evidence: RefutationEvidence,
+}
+
+/// The two v1 refutation forms (GR-20): numeric drift-away and an exact closed orbit.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum RefutationEvidence {
+    DriftAway {
+        /// The forced constant drift of the single admitted recursive transition.
+        drift: Rational,
+        /// Base regions the forward orbit provably misses.
+        missed_bases: Vec<Contract>,
+    },
+    ClosedOrbit(ClosedOrbitEvidence),
+}
+
+/// Persistent evidence for GR-11's generalized closed orbit. `path` starts at the
+/// obligation's represented witness. Its last target equals `cycle_entry`; every step
+/// carries the strict dependencies that were proven completing before that edge.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ClosedOrbitEvidence {
+    pub cycle_entry: ValueRef,
+    pub path: Vec<ClosedOrbitStep>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ClosedOrbitStep {
+    pub source: ValueRef,
+    pub completing_prefixes: Vec<ValueRef>,
+    pub target: ValueRef,
 }
 
 /// A grounding verdict (GR-04 / GR-28).
@@ -108,11 +137,67 @@ pub enum Verdict {
     /// proven voice keeps its GR vocabulary.
     Grounded,
     /// A represented-exact witness forces nontermination (§7), carrying its [`Refutation`]
-    /// certificate — minted by the constant-drift certificate (GR-23a drift-away, its
-    /// ascending mirror, and the period-1 closed orbit).
+    /// certificate — minted by numeric constant drift or the exact required-dependency
+    /// closed-orbit candidate.
     Refuted(Refutation),
     /// No candidate proved and no witness refuted (GR-04) — the sound default.
     Unproven,
+}
+
+/// The instance-table view used by grounding's positive progress/landing certificates.
+///
+/// A one-statement block has exactly the statement's completion behaviour: the value is
+/// discarded, but every branch and recursive call is taken in the same circumstances. Act
+/// bodies necessarily use block syntax, so preserving that wrapper as one opaque `Top` row
+/// would hide an otherwise ordinary base/recursive partition from those certificates. General
+/// blocks remain opaque here: projecting through bindings or multiple statements would erase
+/// their sequencing and environments, which the ordinary region table deliberately preserves.
+/// Refutation also keeps the ordinary table: this completion-preserving projection alone does not
+/// discharge GR-23's forced-transition and witness obligations, so a positive-certificate repair
+/// must not change negative verdicts as a side effect.
+///
+/// The projected table is immutable and memoized under the same canonical instance and named
+/// contract environment as the ordinary instance table, but in its own query family because
+/// the two views intentionally have different answers.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct GroundingTableKey {
+    instance: ValueRef,
+    named: crate::intern::Interned<crate::analyzer::factcache::NamedContractEnvironment>,
+}
+
+fn grounding_instance_table(
+    callee: &ValueRef,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<(String, std::rc::Rc<Vec<crate::analyzer::region::Row>>)> {
+    let closure = callee.as_closure()?;
+    callee.as_fn()?;
+    let param = crate::analyzer::single_plain_param(&closure.lambda.params)?;
+    let Expr::Match(block) = &*closure.lambda.body else {
+        return crate::analyzer::region::instance_table(callee, cenv, interner);
+    };
+    let [MatchItem::Stmt(statement)] = block.items.as_slice() else {
+        return crate::analyzer::region::instance_table(callee, cenv, interner);
+    };
+    if block.scrutinee.is_some() {
+        return crate::analyzer::region::instance_table(callee, cenv, interner);
+    }
+
+    let named = crate::analyzer::factcache::named_environment(cenv, interner);
+    let key = interner.memo_query(GroundingTableKey {
+        instance: callee.clone(),
+        named,
+    });
+    if let Some(hit) =
+        interner.memo_get::<GroundingTableKey, Vec<crate::analyzer::region::Row>>(&key)
+    {
+        return Some((param, hit));
+    }
+    let captures = crate::analyzer::safety::capture_env(callee, interner);
+    let table =
+        crate::analyzer::region::region_table_in(statement, &param, &captures, cenv, interner);
+    let table = interner.memo_publish(key, table);
+    Some((param, table))
 }
 
 /// Judge whether `callee` recursing over input `domain` is grounded (terminates).
@@ -133,6 +218,7 @@ pub fn ground(
     ) || measure_descent(callee)
         || lex_descent(callee)
         || structural_descent(callee)
+        || exact_tuple_chain(callee, domain, cenv, interner)
         || mutual_descent(callee)
         || nested_zone_descent(callee, domain, cenv, interner)
     {
@@ -152,12 +238,466 @@ pub fn ground(
             return Verdict::Grounded;
         }
     }
+    if let Some(refutation) = exact_tuple_closed_orbit(callee, domain, cenv, interner) {
+        return Verdict::Refuted(refutation);
+    }
     if let Some(start) = point_value(domain)
         && let Some(refutation) = drift_away(callee, &start, cenv, interner)
     {
         return Verdict::Refuted(refutation);
     }
     Verdict::Unproven
+}
+
+/// The acyclic fragment of GR-09/10's represented-exact tuple chain.
+///
+/// This is a finite symbolic graph walk, not runtime evaluation and not a recursive
+/// termination oracle. The call site supplies one exact flat tuple. Ordinary region
+/// selection and operation transfer expose the strict recursive dependencies of that
+/// exact state; every admitted dependency must be another exact flat tuple with a
+/// strictly smaller total length. Consequently the written root length itself is the
+/// well-founded carrier, and reaching a state with no recursive dependency is a leaf.
+///
+/// GR-10 also licenses wider finite chains through multiple control locations and
+/// body-constant leaves. Those extensions are deliberately not claimed here. The same
+/// direct-self graph is separately consumed by GR-11's closed-orbit refutation below.
+fn exact_tuple_chain(
+    callee: &ValueRef,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    let Some(graph) = exact_tuple_graph(callee, domain, cenv, interner) else {
+        return false;
+    };
+    graph.saw_recursive
+        && graph.states.iter().all(|state| {
+            state
+                .dependencies
+                .iter()
+                .all(|dependency| graph.states[*dependency].items.len() < state.items.len())
+        })
+}
+
+#[derive(Clone)]
+struct ExactTupleState {
+    contract: Contract,
+    value: ValueRef,
+    items: Vec<ValueRef>,
+    /// Required strict recursive dependencies, in evaluation order (GR-09).
+    dependencies: Vec<usize>,
+}
+
+struct ExactTupleGraph {
+    states: Vec<ExactTupleState>,
+    saw_recursive: bool,
+}
+
+/// Build the direct-self subset of GR-09/10's complete exact dependency graph. The
+/// root's flat leaves are the finite pool for this subset; successors may only reorder,
+/// duplicate, or drop those leaves, and total length may not increase. Body-constant
+/// insertion and multiple control locations are valid wider GR-10 cases but deliberately
+/// decline here. The state inventory is therefore finite from `(P, L)` with no fuel.
+fn exact_tuple_graph(
+    callee: &ValueRef,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<ExactTupleGraph> {
+    let closure = callee.as_closure()?;
+    let param = single_param(&closure.lambda.params)?;
+    if !matches!(closure.lambda.act_kind, ActKind::Pure) {
+        return None;
+    }
+    let root = canonical_exact_flat_tuple(domain, interner)?;
+    let root_items = exact_flat_tuple_items(&root)?;
+    let root_value = match &root {
+        Contract::Equals(value) => value.clone(),
+        _ => unreachable!("canonical exact tuple is an Equals value"),
+    };
+    let pool = root_items.clone();
+    let mut states = vec![ExactTupleState {
+        contract: root,
+        value: root_value,
+        items: root_items,
+        dependencies: Vec::new(),
+    }];
+    let mut saw_recursive = false;
+    let mut cursor = 0;
+    while cursor < states.len() {
+        let state = states[cursor].clone();
+        if !exact_path_is_determined(
+            &closure.lambda.body,
+            callee,
+            &param,
+            &state.contract,
+            cenv,
+            interner,
+        ) {
+            return None;
+        }
+        let dependencies = crate::analyzer::safety::selected_dependencies(
+            callee,
+            std::slice::from_ref(&state.contract),
+            cenv,
+            interner,
+        );
+        let mut edges = Vec::with_capacity(dependencies.len());
+        for (target, args) in dependencies {
+            // The finite control-location factor Q is the mutual extension. A
+            // different target cannot be silently treated as a completing helper,
+            // because GR-11 requires its prefix fact explicitly.
+            if target != *callee {
+                return None;
+            }
+            saw_recursive = true;
+            let [next] = args.as_slice() else {
+                return None;
+            };
+            let next = canonical_exact_flat_tuple(next, interner)?;
+            let next_items = exact_flat_tuple_items(&next)?;
+            if next_items.len() > state.items.len()
+                || next_items.iter().any(|item| !pool.contains(item))
+            {
+                return None;
+            }
+            let next_value = match &next {
+                Contract::Equals(value) => value.clone(),
+                _ => unreachable!("canonical exact tuple is an Equals value"),
+            };
+            let index = if let Some(index) = states
+                .iter()
+                .position(|candidate| candidate.value == next_value)
+            {
+                index
+            } else {
+                states.push(ExactTupleState {
+                    contract: next,
+                    value: next_value,
+                    items: next_items,
+                    dependencies: Vec::new(),
+                });
+                states.len() - 1
+            };
+            edges.push(index);
+        }
+        states[cursor].dependencies = edges;
+        cursor += 1;
+    }
+    Some(ExactTupleGraph {
+        states,
+        saw_recursive,
+    })
+}
+
+/// GR-09 refuses an opaque predicate even for an exact input. Validate that every
+/// Match encountered on the selected path is decided exactly by ordinary contract
+/// analysis. This mirrors live Match's true/false rule; it performs no evaluation.
+fn exact_path_is_determined(
+    expression: &Expr,
+    callee: &ValueRef,
+    param: &str,
+    state: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> bool {
+    let closure = callee
+        .as_closure()
+        .expect("an exact tuple graph has a closure");
+    let mut env = crate::analyzer::safety::capture_env(callee, interner);
+    env.insert(
+        param.to_string(),
+        crate::analyzer::domain::AnalysisContract::of_contract(state.clone()),
+    );
+    exact_path_expression(expression, &env, cenv, closure.lambda.act_kind, interner)
+}
+
+fn exact_path_expression(
+    expression: &Expr,
+    env: &crate::analyzer::TypeEnv,
+    cenv: &ContractEnv,
+    act: ActKind,
+    interner: &mut Interner,
+) -> bool {
+    match expression {
+        Expr::Const(_) | Expr::Ref(_) | Expr::Lambda(_) => true,
+        Expr::Apply { callee, args } => {
+            exact_path_expression(callee, env, cenv, act, interner)
+                && args.iter().all(|argument| {
+                    let (Arg::Expr(argument) | Arg::Spread(argument)) = argument;
+                    exact_path_expression(argument, env, cenv, act, interner)
+                })
+        }
+        Expr::PrimOp { args, .. } => args
+            .iter()
+            .all(|arg| exact_path_expression(arg, env, cenv, act, interner)),
+        Expr::Match(m) => {
+            // The direct guard-only Match is the v1 fragment needed here. Pattern
+            // selection can be added through the same exact matcher, but guessing it
+            // from the numeric region table would violate GR-09.
+            if m.scrutinee.is_some() {
+                return false;
+            }
+            for item in &m.items {
+                let MatchItem::Arm(arm) = item else {
+                    return false;
+                };
+                if arm.pattern.is_some() {
+                    return false;
+                }
+                if let Some(guard) = &arm.guard {
+                    if !exact_path_expression(guard, env, cenv, act, interner) {
+                        return false;
+                    }
+                    let analyzed = crate::analyzer::analyze_in_world(
+                        guard,
+                        env,
+                        cenv,
+                        crate::analyzer::world_for_act(act),
+                        interner,
+                    );
+                    match &analyzed.contract {
+                        Contract::Equals(value) if value.as_boolean() == Some(false) => continue,
+                        Contract::Equals(value) if value.as_boolean() == Some(true) => {
+                            return exact_path_expression(&arm.result, env, cenv, act, interner);
+                        }
+                        _ => return false,
+                    }
+                }
+                return exact_path_expression(&arm.result, env, cenv, act, interner);
+            }
+            true
+        }
+        Expr::TupleCons(elements) => elements.iter().all(|element| {
+            let (Element::Expr(element) | Element::Spread(element)) = element;
+            exact_path_expression(element, env, cenv, act, interner)
+        }),
+        Expr::RecordCons(fields) => fields.iter().all(|field| match field {
+            Field::Field { value, .. } | Field::Spread(value) => {
+                exact_path_expression(value, env, cenv, act, interner)
+            }
+            Field::Computed { key, value } => {
+                exact_path_expression(key, env, cenv, act, interner)
+                    && exact_path_expression(value, env, cenv, act, interner)
+            }
+        }),
+        Expr::Access { target, form, .. } => {
+            exact_path_expression(target, env, cenv, act, interner)
+                && match form {
+                    AccessForm::Field(_) => true,
+                    AccessForm::Index(index) => {
+                        exact_path_expression(index, env, cenv, act, interner)
+                    }
+                    AccessForm::Slice { lo, hi } => [lo, hi]
+                        .into_iter()
+                        .flatten()
+                        .all(|bound| exact_path_expression(bound, env, cenv, act, interner)),
+                }
+        }
+        Expr::Template(parts) => parts.iter().all(|part| match part {
+            TemplatePart::Segment(_) => true,
+            TemplatePart::Interp(value) => exact_path_expression(value, env, cenv, act, interner),
+        }),
+        Expr::Write { .. } => false, // Pure admission already excludes this semantic state.
+    }
+}
+
+fn exact_tuple_closed_orbit(
+    callee: &ValueRef,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Refutation> {
+    let graph = exact_tuple_graph(callee, domain, cenv, interner)?;
+    if !graph.saw_recursive {
+        return None;
+    }
+    let evidence = enabled_closed_orbit(callee, &graph, cenv, interner)?;
+    Some(Refutation {
+        witness: graph.states[0].value.clone(),
+        evidence: RefutationEvidence::ClosedOrbit(evidence),
+    })
+}
+
+fn enabled_closed_orbit(
+    callee: &ValueRef,
+    graph: &ExactTupleGraph,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<ClosedOrbitEvidence> {
+    struct OrbitWalk {
+        colors: Vec<u8>,
+        active: Vec<usize>,
+        path: Vec<ClosedOrbitStep>,
+    }
+
+    fn acyclic_from(start: usize, graph: &ExactTupleGraph) -> bool {
+        fn walk(node: usize, graph: &ExactTupleGraph, colors: &mut [u8]) -> bool {
+            if colors[node] == 1 {
+                return false;
+            }
+            if colors[node] == 2 {
+                return true;
+            }
+            colors[node] = 1;
+            if !graph.states[node]
+                .dependencies
+                .iter()
+                .all(|dependency| walk(*dependency, graph, colors))
+            {
+                return false;
+            }
+            colors[node] = 2;
+            true
+        }
+        walk(start, graph, &mut vec![0; graph.states.len()])
+    }
+
+    fn visit(
+        node: usize,
+        callee: &ValueRef,
+        graph: &ExactTupleGraph,
+        walk: &mut OrbitWalk,
+        cenv: &ContractEnv,
+        interner: &mut Interner,
+    ) -> Option<ClosedOrbitEvidence> {
+        walk.colors[node] = 1;
+        walk.active.push(node);
+        for (position, target) in graph.states[node].dependencies.iter().copied().enumerate() {
+            let prefixes = &graph.states[node].dependencies[..position];
+            let mut completing_prefixes = Vec::with_capacity(prefixes.len());
+            let mut enabled = true;
+            for prefix in prefixes {
+                let prefix_state = &graph.states[*prefix];
+                // Completion induction alone may assume a recursive completion fact.
+                // GR-11 needs the stronger conjunction: this prefix's exact dependency
+                // closure is acyclic (grounded locally) and its completion fact proves.
+                if !acyclic_from(*prefix, graph)
+                    || !crate::analyzer::safety::prove_claim(
+                        callee,
+                        std::slice::from_ref(&prefix_state.contract),
+                        crate::analyzer::induction::Claim::Completes,
+                        cenv,
+                        interner,
+                    )
+                    .is_proven()
+                {
+                    enabled = false;
+                    break;
+                }
+                completing_prefixes.push(prefix_state.value.clone());
+            }
+            if !enabled {
+                continue;
+            }
+            walk.path.push(ClosedOrbitStep {
+                source: graph.states[node].value.clone(),
+                completing_prefixes,
+                target: graph.states[target].value.clone(),
+            });
+            if walk.active.contains(&target) {
+                return Some(ClosedOrbitEvidence {
+                    cycle_entry: graph.states[target].value.clone(),
+                    path: walk.path.clone(),
+                });
+            }
+            if walk.colors[target] == 0
+                && let Some(evidence) = visit(target, callee, graph, walk, cenv, interner)
+            {
+                return Some(evidence);
+            }
+            walk.path.pop();
+        }
+        walk.active.pop();
+        walk.colors[node] = 2;
+        None
+    }
+
+    let mut walk = OrbitWalk {
+        colors: vec![0; graph.states.len()],
+        active: Vec::new(),
+        path: Vec::new(),
+    };
+    visit(0, callee, graph, &mut walk, cenv, interner)
+}
+
+/// Whether one safety-graph shape repeat is licensed as the same acyclic exact tuple
+/// chain. Kept intentionally narrower than full GR-10: exact singleton, one direct-self
+/// pure call, flat tuple state, and strict top-level length decrease.
+pub(crate) fn strict_exact_tuple_step(
+    source: &ValueRef,
+    source_args: &[Contract],
+    target: &ValueRef,
+    target_args: &[Contract],
+) -> bool {
+    if source != target
+        || !source
+            .as_closure()
+            .is_some_and(|closure| matches!(closure.lambda.act_kind, ActKind::Pure))
+    {
+        return false;
+    }
+    let ([from], [to]) = (source_args, target_args) else {
+        return false;
+    };
+    matches!(
+        (exact_flat_tuple_len(from), exact_flat_tuple_len(to)),
+        (Some(a), Some(b)) if b < a
+    )
+}
+
+fn exact_flat_tuple_len(contract: &Contract) -> Option<usize> {
+    exact_flat_tuple_items(contract).map(|items| items.len())
+}
+
+fn exact_flat_tuple_items(contract: &Contract) -> Option<Vec<ValueRef>> {
+    let leaf_value = |value: &ValueRef| {
+        matches!(
+            value.data(),
+            ValueData::Boolean(_)
+                | ValueData::Null
+                | ValueData::Number(_)
+                | ValueData::Str(_)
+                | ValueData::Indeterminate(_)
+        )
+    };
+    match contract {
+        // A call-site literal arrives as one exact interned tuple value.
+        Contract::Equals(value) => value
+            .as_tuple()
+            .filter(|items| items.iter().all(leaf_value))
+            .map(|items| items.to_vec()),
+        // Exact slice transfer preserves the represented singleton structurally:
+        // `Tuple([Equals(2)])`, not by eagerly constructing `Equals([2])`.
+        Contract::Tuple(elements) => elements
+            .iter()
+            .map(|element| match &**element {
+                Contract::Equals(value) if leaf_value(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
+/// Reify the analyzer's structural spelling of an exact flat tuple to its canonical
+/// interned value spelling. This is not evaluation: `Tuple([Equals(v_i)])` already
+/// denotes exactly one tuple, and construction merely gives that represented singleton
+/// the same pointer-keyed form as a written tuple literal.
+pub(crate) fn canonical_exact_flat_tuple(
+    contract: &Contract,
+    interner: &mut Interner,
+) -> Option<Contract> {
+    match contract {
+        Contract::Equals(value) if exact_flat_tuple_len(contract).is_some() => {
+            Some(Contract::Equals(value.clone()))
+        }
+        Contract::Tuple(_) => {
+            let items = exact_flat_tuple_items(contract)?;
+            Some(Contract::Equals(interner.tuple(items)))
+        }
+        _ => None,
+    }
 }
 
 /// The numeric constant-drift descent certificate (GR-05). `None` ⇒ this candidate does
@@ -170,7 +710,7 @@ fn numeric_descent(
 ) -> Option<Verdict> {
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
-    let (_, rows) = crate::analyzer::region::instance_table(callee, cenv, interner)?;
+    let (_, rows) = grounding_instance_table(callee, cenv, interner)?;
 
     // Split arms: a row whose result contains a self-call is *recursive* (read each call's
     // drift on the parameter); the rest are *base* rows.
@@ -254,6 +794,242 @@ fn lands(base: &Contract, drifts: &[Rational], domain: &Contract, interner: &mut
     }
 }
 
+/// A flat multi-parameter recursion with one bare numeric descent coordinate. Other
+/// positions do not participate in the measure; callers decide whether they must be
+/// carried exactly or can be closed under a separately verified operation contract.
+struct DescendingNumericShape {
+    params: Vec<String>,
+    recursive_calls: Vec<Vec<Expr>>,
+    position: usize,
+    drifts: Vec<Rational>,
+    base: Contract,
+}
+
+fn descending_numeric_shape(
+    callee: &ValueRef,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<DescendingNumericShape> {
+    let closure = callee.as_closure()?;
+    let (params, rows) = crate::analyzer::region::instance_table_multi(callee, cenv, interner)?;
+    let mut recursive_calls = Vec::new();
+    let mut base_rows = Vec::new();
+    for row in rows.iter() {
+        let mut calls = Vec::new();
+        collect_self_calls(&row.result, &closure, callee, &mut calls);
+        if calls.is_empty() {
+            base_rows.push(row);
+        } else {
+            recursive_calls.extend(calls);
+        }
+    }
+    if recursive_calls.is_empty() {
+        return None;
+    }
+
+    for position in 0..params.len() {
+        let mut drifts = Vec::with_capacity(recursive_calls.len());
+        let mut admitted = true;
+        for call in &recursive_calls {
+            if call.len() != params.len() {
+                admitted = false;
+                break;
+            }
+            let Some(drift) = position_drift(&call[position], &params[position]) else {
+                admitted = false;
+                break;
+            };
+            if drift >= Rational::from(0) {
+                admitted = false;
+                break;
+            }
+            drifts.push(drift);
+        }
+        if !admitted {
+            continue;
+        }
+
+        // The finishing region must depend only on the changing argument. Otherwise
+        // an outer environment value could prevent the apparent base from firing.
+        let [base] = base_rows.as_slice() else {
+            continue;
+        };
+        if !base.exact
+            || base
+                .regions
+                .iter()
+                .enumerate()
+                .any(|(index, region)| index != position && !matches!(region, Contract::Top))
+            || matches!(base.regions[position], Contract::Top)
+        {
+            continue;
+        }
+        return Some(DescendingNumericShape {
+            params,
+            recursive_calls,
+            position,
+            drifts,
+            base: base.regions[position].clone(),
+        });
+    }
+    None
+}
+
+/// The single numeric argument that changes in a flat multi-parameter recursion while
+/// every other argument is carried unchanged. This is the closure-converted local
+/// function shape: outer captures are ordinary environment arguments, not extra
+/// termination measures.
+fn carried_numeric_shape(
+    callee: &ValueRef,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<DescendingNumericShape> {
+    let shape = descending_numeric_shape(callee, cenv, interner)?;
+    let carried = shape.recursive_calls.iter().all(|call| {
+        call.iter().enumerate().all(|(index, argument)| {
+            index == shape.position
+                || position_drift(argument, &shape.params[index]).is_some_and(|d| d.is_zero())
+        })
+    });
+    carried.then_some(shape)
+}
+
+fn descent_envelope(
+    start: &Contract,
+    base: &Contract,
+    drifts: &[Rational],
+    interner: &mut Interner,
+) -> Option<Contract> {
+    let zero = Rational::from(0);
+    if drifts.is_empty() || !drifts.iter().all(|d| *d < zero && d.is_integer()) {
+        return None;
+    }
+    if !lands(base, drifts, start, interner) {
+        return None;
+    }
+
+    let max_step = drifts.iter().map(|d| -d.clone()).max()?;
+    let floor = match point_value(base) {
+        Some(base) => base,
+        None => match base {
+            Contract::LessEq(bound) | Contract::Less(bound) => bound.clone() - max_step,
+            _ => return None,
+        },
+    };
+    let mut gcd = BigInt::from(0);
+    for drift in drifts {
+        gcd = gcd_bigint(gcd, (-drift.clone()).as_ratio().numer().clone());
+    }
+    envelope(start, floor, gcd, interner)
+}
+
+/// Orbit proposal for a closure-converted local recursion. Environment positions are
+/// retained exactly; only the one decreasing argument receives the derived envelope.
+pub(crate) fn carried_numeric_orbit_domain(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Vec<Contract>> {
+    let shape = carried_numeric_shape(callee, cenv, interner)?;
+    let start = args.get(shape.position)?;
+    let changing = descent_envelope(start, &shape.base, &shape.drifts, interner)?;
+    let mut domain = args.to_vec();
+    domain[shape.position] = changing;
+    Some(domain)
+}
+
+/// Evaluate the fixed expression fragment used for recursive numeric payloads through
+/// the ordinary operation rulebook. This is not execution and does not inspect calls:
+/// constants, parameter references, and already-specified primitive transfers only.
+fn payload_contract(
+    expression: &Expr,
+    params: &[String],
+    domains: &[Contract],
+    interner: &mut Interner,
+) -> Option<Contract> {
+    match expression {
+        Expr::Const(value) => Some(Contract::Equals(value.clone())),
+        Expr::Ref(Ref::Immutable(BindingRef::Name(name))) => params
+            .iter()
+            .position(|param| param == name)
+            .and_then(|index| domains.get(index).cloned()),
+        Expr::PrimOp { op, args } => {
+            let inputs: Vec<Contract> = args
+                .iter()
+                .map(|arg| payload_contract(arg, params, domains, interner))
+                .collect::<Option<_>>()?;
+            let result = crate::contract::analyze_operation(*op, &inputs, interner);
+            matches!(result.safety, crate::contract::OpSafety::Proven).then_some(result.output)
+        }
+        _ => None,
+    }
+}
+
+/// Orbit proposal for a recursive numeric accumulator. The descent coordinate receives
+/// its grounding-derived envelope. A non-measure position is either retained exactly
+/// when every edge carries it, or generalized once to `Number` when its written edge
+/// expressions are proven-safe numeric transfers closed over `Number`.
+///
+/// This is the fixed GR-19 extraction rule, not kind-menu widening: there is one
+/// advance-bounded proposal per position, every changed edge is checked through the
+/// operation rulebook, and the ordinary fact-vector pass must still prove the body over
+/// the resulting complete domain.
+pub(crate) fn numeric_payload_orbit_domain(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Vec<Contract>> {
+    let shape = descending_numeric_shape(callee, cenv, interner)?;
+    if args.len() != shape.params.len() {
+        return None;
+    }
+    let changing = descent_envelope(
+        args.get(shape.position)?,
+        &shape.base,
+        &shape.drifts,
+        interner,
+    )?;
+    let number = Contract::Kind(Kind::Number);
+    let mut domain = args.to_vec();
+    domain[shape.position] = changing;
+    let mut generalized = vec![false; args.len()];
+
+    for index in 0..args.len() {
+        if index == shape.position {
+            continue;
+        }
+        let carried = shape.recursive_calls.iter().all(|call| {
+            position_drift(&call[index], &shape.params[index]).is_some_and(|d| d.is_zero())
+        });
+        if carried {
+            continue;
+        }
+        if !matches!(subcontract(&args[index], &number, interner), Sub::Proven) {
+            return None;
+        }
+        domain[index] = number.clone();
+        generalized[index] = true;
+    }
+
+    if !generalized.iter().any(|changed| *changed) {
+        return None; // the exact-carried rule owns this shape
+    }
+    for call in &shape.recursive_calls {
+        for (index, changed) in generalized.iter().enumerate() {
+            if !changed {
+                continue;
+            }
+            let output = payload_contract(&call[index], &shape.params, &domain, interner)?;
+            if !matches!(subcontract(&output, &domain[index], interner), Sub::Proven) {
+                return None;
+            }
+        }
+    }
+    Some(domain)
+}
+
 /// The **derived orbit envelope** [author, 2026-08-03]: for a self-recursion whose
 /// constant negative integer drifts land (exactly GR-05's own license — nothing beyond
 /// it), the domain the recursion visits from an exact start is composed from the
@@ -276,7 +1052,8 @@ pub(crate) fn derived_orbit_domain(
         .iter()
         .any(|g| g != callee && callee_targets(g).contains(callee))
     {
-        return group_orbit_domain(callee, &group, start, interner);
+        return group_orbit_domain(callee, &group, start, interner)
+            .or_else(|| composed_group_orbit_domain(callee, &group, start, interner));
     }
 
     // The **ascending-stop zone envelope** — the derived domain of the grid-§6 closed
@@ -308,7 +1085,7 @@ pub(crate) fn derived_orbit_domain(
     // and non-point starts (a declared `GreaterEq` domain derives `GreaterEq(floor)`).
     let closure = callee.as_closure()?;
     let param = single_param(&closure.lambda.params)?;
-    let (_, rows) = crate::analyzer::region::instance_table(callee, cenv, interner)?;
+    let (_, rows) = grounding_instance_table(callee, cenv, interner)?;
 
     let mut drifts: Vec<Rational> = Vec::new();
     let mut bases: Vec<Contract> = Vec::new();
@@ -335,29 +1112,7 @@ pub(crate) fn derived_orbit_domain(
         return None;
     }
 
-    // Floor from the landing base; overshoot bounded by the largest step.
-    let max_step = drifts
-        .iter()
-        .map(|d| -d.clone())
-        .max()
-        .expect("at least one drift");
-    let floor = match point_value(base) {
-        // `lands` admits a point base only when the chain is grid-aligned with it, so
-        // the chain stops exactly on `b`.
-        Some(b) => b,
-        None => match base {
-            Contract::LessEq(c) | Contract::Less(c) => c.clone() - max_step,
-            _ => return None,
-        },
-    };
-
-    // Every reachable value is `start − Σ kᵢ·|dᵢ| ≡ start (mod g)`, g = gcd of the steps.
-    let mut g = BigInt::from(0);
-    for d in &drifts {
-        let step = (-d.clone()).as_ratio().numer().clone();
-        g = gcd_bigint(g, step);
-    }
-    envelope(start, floor, g, interner)
+    descent_envelope(start, base, &drifts, interner)
 }
 
 /// The envelope a landing orbit derives: bounded-above starts give
@@ -664,9 +1419,11 @@ fn drift_away(
         return None;
     }
     Some(Refutation {
-        witness: start.clone(),
-        drift: d,
-        missed_bases: bases,
+        witness: interner.number(start.clone()),
+        evidence: RefutationEvidence::DriftAway {
+            drift: d,
+            missed_bases: bases,
+        },
     })
 }
 
@@ -1964,7 +2721,7 @@ impl WorldWalk<'_> {
         if let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = e {
             if self.refreshed.contains(n) {
                 *refreshed = true;
-            } else if self.params.contains(n) || self.closure.env.lookup(n).is_some() {
+            } else if self.params.contains(n) || self.closure.capture_binding(n).is_some() {
                 *stale = true;
             }
             return;
@@ -1982,7 +2739,7 @@ fn is_effect_application(e: &Expr, closure: &Closure) -> bool {
     let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = &**callee else {
         return false;
     };
-    let Some(Binding::Value(v)) = closure.env.lookup(n) else {
+    let Some(Binding::Value(v)) = closure.capture_binding(n) else {
         return false;
     };
     v.as_native().is_some()
@@ -1996,7 +2753,7 @@ fn is_effect_application(e: &Expr, closure: &Closure) -> bool {
 fn contains_effect_application(e: &Expr, closure: &Closure) -> bool {
     if let Expr::Apply { callee, .. } = e
         && let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = &**callee
-        && let Some(Binding::Value(v)) = closure.env.lookup(n)
+        && let Some(Binding::Value(v)) = closure.capture_binding(n)
         && (v.as_native().is_some()
             || v.as_closure()
                 .is_some_and(|c| c.lambda.act_kind == ActKind::Effect))
@@ -2096,84 +2853,299 @@ fn for_each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
 
 // ── Mutual recursion (GR-07) ──────────────────────────────────────────────────
 
-/// Mutual-recursion descent (§5 GR-07, the enumeration-free sufficient sub-case). The
-/// reachable closure group is the mutual SCC; if **every** cross-call in the group decreases
-/// a shared single-parameter measure by a constant and every recursive member has a
-/// descending half-line base on it, then every simple cycle composes to a strict decrease
-/// (a sum of negatives) and the measure is bounded below — so the whole group terminates.
-/// This discharges GR-07's per-cycle obligation by the stronger per-edge condition (no cycle
-/// enumeration); landing is structural (domain-independent). A composed measure that only
-/// descends over a *mixed-sign* cycle (the oscillator specimen) needs the full composition —
-/// a later increment.
+#[derive(Clone)]
+struct MutualEdge {
+    target: usize,
+    /// `next - current`; GR-07's oriented Progress is its negation. `None` keeps an
+    /// unread textual edge in the multigraph so any cycle using it makes the candidate decline.
+    drift: Option<Rational>,
+}
+
+struct MutualGraph {
+    edges: Vec<Vec<MutualEdge>>,
+    /// A descending half-line stop reached before any recursive arm, per member.
+    stops: Vec<Option<Rational>>,
+}
+
+struct MutualCycle {
+    start: usize,
+    nodes: Vec<usize>,
+    /// Drift from the cycle start to each corresponding node (`0` at `start`).
+    prefixes: Vec<Option<Rational>>,
+    drift: Option<Rational>,
+}
+
+/// Mutual-recursion descent (§5 GR-07), for the shared single-parameter constant-drift
+/// candidate. The completed reachable call graph is retained as a directed **multigraph**:
+/// every textual call site is one edge, including parallel sites. For the SCC containing
+/// `callee`, enumerate every edge-labelled simple cycle and compose its exact ProgressRange
+/// (`Equals(sum(current-next))`). Every cycle must expose positive progress and cross a
+/// descending half-line stop. One zero/ascending/unread cycle makes this candidate contribute
+/// nothing; no traversal order or effort budget participates.
 fn mutual_descent(callee: &ValueRef) -> bool {
     let group = reachable_closures(callee.clone());
-    if group.len() < 2 {
-        return false; // single function — the self-recursion candidates handle it
+    let Some(root) = group.iter().position(|member| member == callee) else {
+        return false;
+    };
+    let Some(graph) = mutual_graph(&group) else {
+        return false;
+    };
+    let scc = root_scc(&graph, root);
+    if scc.iter().filter(|inside| **inside).count() < 2 {
+        return false; // the self-recursion candidates own one-member SCCs
     }
-    group.iter().all(|f| member_descends(f, &group))
+    let cycles: Vec<MutualCycle> = simple_cycles(&graph)
+        .into_iter()
+        .filter(|cycle| scc[cycle.start])
+        .collect();
+    !cycles.is_empty() && cycles.iter().all(|cycle| cycle_passes(cycle, &graph))
 }
 
-/// A group member is compatible with mutual descent: it makes no group call (a non-recursive
-/// leaf), or every group call decreases its parameter by a constant and it has a descending
-/// half-line base on that parameter.
-fn member_descends(f: &ValueRef, group: &[ValueRef]) -> bool {
-    let Some(closure) = f.as_closure() else {
-        return false;
-    };
-    let Some(param) = single_param(&closure.lambda.params) else {
-        return false;
-    };
-    let Expr::Match(m) = &*closure.lambda.body else {
-        return false;
-    };
+/// The positive-completion view already used for GR-30: discarding one statement's value does
+/// not change its control flow. General blocks stay whole.
+fn positive_completion_body(body: &Expr) -> &Expr {
+    if let Expr::Match(block) = body
+        && block.scrutinee.is_none()
+        && let [MatchItem::Stmt(statement)] = block.items.as_slice()
+    {
+        statement
+    } else {
+        body
+    }
+}
 
-    let mut stops = Vec::new();
-    let mut calls: Vec<Vec<Expr>> = Vec::new();
+fn collect_group_applications(
+    expression: &Expr,
+    closure: &Closure,
+    group: &[ValueRef],
+    out: &mut Vec<(ValueRef, Vec<Expr>)>,
+) {
+    if let Expr::Apply { callee, args } = expression
+        && let Some(target) = resolved_target(callee, closure, group)
+    {
+        let positional: Option<Vec<Expr>> = args
+            .iter()
+            .map(|arg| match arg {
+                Arg::Expr(value) => Some(value.clone()),
+                Arg::Spread(_) => None,
+            })
+            .collect();
+        out.push((target, positional.unwrap_or_default()));
+    }
+    for_each_child(expression, &mut |child| {
+        collect_group_applications(child, closure, group, out)
+    });
+}
+
+/// A member's structural landing boundary. Only an earlier base arm counts; a call in a guard
+/// or result makes that arm recursive for this purpose.
+fn member_stop(
+    body: &Expr,
+    closure: &Closure,
+    group: &[ValueRef],
+    param: &str,
+) -> Option<Rational> {
+    let Expr::Match(m) = positive_completion_body(body) else {
+        return None;
+    };
     let mut first_call = usize::MAX;
-    for (idx, item) in m.items.iter().enumerate() {
+    let mut bases = Vec::new();
+    for (index, item) in m.items.iter().enumerate() {
         let MatchItem::Arm(arm) = item else { continue };
-        let mut gc = Vec::new();
-        walk(&arm.result, &closure, group, &[], &[], &mut gc);
-        if gc.is_empty() {
-            if let Some(g) = &arm.guard
-                && idx < first_call
-            {
-                stops.push(g.clone());
+        let mut calls = Vec::new();
+        if let Some(guard) = &arm.guard {
+            collect_group_applications(guard, closure, group, &mut calls);
+        }
+        collect_group_applications(&arm.result, closure, group, &mut calls);
+        if calls.is_empty() {
+            if let Some(boundary) = arm.guard.as_ref().and_then(|g| stop_boundary(g, param)) {
+                bases.push((index, boundary));
             }
         } else {
-            calls.extend(gc.into_iter().map(|(args, _)| args));
-            first_call = first_call.min(idx);
+            first_call = first_call.min(index);
         }
     }
-    if calls.is_empty() {
-        return true; // a non-recursive member — contributes no cycle edge
-    }
-    let decreases = calls.iter().all(|call| {
-        call.first()
-            .and_then(|arg| constant_drift(arg, &param))
-            .is_some_and(|d| d < Rational::from(0))
-    });
-    decreases && stops.iter().any(|g| descending_stop(g, &param))
+    bases
+        .into_iter()
+        .filter(|(index, _)| *index < first_call)
+        .map(|(_, boundary)| boundary)
+        .min()
 }
 
-/// Whether guard `g` is a **descending** half-line stop on `param` — `param <= c` /
-/// `param < c` (or the flipped `c >= param` / `c > param`) — the floor a decreasing measure
-/// lands in.
-fn descending_stop(g: &Expr, param: &str) -> bool {
-    let Expr::PrimOp { op, args } = g else {
-        return false;
-    };
-    if args.len() != 2 {
-        return false;
+fn mutual_graph(group: &[ValueRef]) -> Option<MutualGraph> {
+    let mut edges = vec![Vec::new(); group.len()];
+    let mut stops = vec![None; group.len()];
+    for (source, member) in group.iter().enumerate() {
+        let closure = member.as_closure()?;
+        let param = single_param(&closure.lambda.params)?;
+        let body = positive_completion_body(&closure.lambda.body);
+        stops[source] = member_stop(body, &closure, group, &param);
+        let mut calls = Vec::new();
+        collect_group_applications(body, &closure, group, &mut calls);
+        for (target, arguments) in calls {
+            let target = group.iter().position(|member| *member == target)?;
+            let drift = match arguments.as_slice() {
+                [argument] => constant_drift(argument, &param),
+                _ => None,
+            };
+            edges[source].push(MutualEdge { target, drift });
+        }
     }
-    let op = if is_param(&args[0], param) && const_num(&args[1]).is_some() {
-        *op
-    } else if is_param(&args[1], param) && const_num(&args[0]).is_some() {
-        flip(*op)
-    } else {
-        return false;
-    };
-    matches!(op, PrimOp::Le | PrimOp::Lt)
+    Some(MutualGraph { edges, stops })
+}
+
+fn can_reach(graph: &MutualGraph, from: usize, target: usize) -> bool {
+    let mut seen = vec![false; graph.edges.len()];
+    let mut work = vec![from];
+    while let Some(node) = work.pop() {
+        if node == target {
+            return true;
+        }
+        if std::mem::replace(&mut seen[node], true) {
+            continue;
+        }
+        work.extend(graph.edges[node].iter().map(|edge| edge.target));
+    }
+    false
+}
+
+/// The SCC containing `root`. `reachable_closures(root)` already guarantees root→node;
+/// node→root is therefore the remaining membership test.
+fn root_scc(graph: &MutualGraph, root: usize) -> Vec<bool> {
+    (0..graph.edges.len())
+        .map(|node| can_reach(graph, node, root))
+        .collect()
+}
+
+fn add_drift(total: &Option<Rational>, edge: &Option<Rational>) -> Option<Rational> {
+    Some(total.as_ref()?.clone() + edge.as_ref()?.clone())
+}
+
+struct CycleWalker<'a> {
+    graph: &'a MutualGraph,
+    start: usize,
+    visited: Vec<bool>,
+    path: Vec<usize>,
+    prefixes: Vec<Option<Rational>>,
+    out: Vec<MutualCycle>,
+}
+
+impl CycleWalker<'_> {
+    fn visit(&mut self, current: usize, drift: Option<Rational>) {
+        // Own this finite edge list while recursing so the walk can mutate its path state.
+        for edge in self.graph.edges[current].clone() {
+            let composed = add_drift(&drift, &edge.drift);
+            if edge.target == self.start {
+                self.out.push(MutualCycle {
+                    start: self.start,
+                    nodes: self.path.clone(),
+                    prefixes: self.prefixes.clone(),
+                    drift: composed,
+                });
+            } else if !self.visited[edge.target] {
+                self.visited[edge.target] = true;
+                self.path.push(edge.target);
+                self.prefixes.push(composed.clone());
+                self.visit(edge.target, composed);
+                self.prefixes.pop();
+                self.path.pop();
+                self.visited[edge.target] = false;
+            }
+        }
+    }
+}
+
+fn simple_cycles(graph: &MutualGraph) -> Vec<MutualCycle> {
+    let mut out = Vec::new();
+    for start in 0..graph.edges.len() {
+        let mut walker = CycleWalker {
+            graph,
+            start,
+            visited: vec![false; graph.edges.len()],
+            path: vec![start],
+            prefixes: vec![Some(Rational::from(0))],
+            out: Vec::new(),
+        };
+        walker.visited[start] = true;
+        walker.visit(start, Some(Rational::from(0)));
+        out.extend(walker.out);
+    }
+    out
+}
+
+/// Express one of the cycle's member stops in the start member's coordinate. At a node
+/// reached with prefix drift `p`, `node <= boundary` means `start <= boundary - p`. Any stop
+/// exits the cycle, so the greatest such threshold is the cycle's effective half-line base.
+fn cycle_boundary(cycle: &MutualCycle, graph: &MutualGraph) -> Option<Rational> {
+    cycle
+        .nodes
+        .iter()
+        .zip(&cycle.prefixes)
+        .filter_map(|(node, prefix)| {
+            Some(graph.stops[*node].as_ref()?.clone() - prefix.as_ref()?.clone())
+        })
+        .max()
+}
+
+fn cycle_passes(cycle: &MutualCycle, graph: &MutualGraph) -> bool {
+    cycle
+        .drift
+        .as_ref()
+        .is_some_and(|drift| *drift < Rational::from(0))
+        && cycle_boundary(cycle, graph).is_some()
+}
+
+/// Root-member orbit proposal for a composed mutual cycle. This intentionally covers the
+/// fixed candidate needed by safety settlement: every SCC cycle passes through the requested
+/// member, so each return to it is one enumerated negative integer lap. Stops are transported
+/// backward through each cycle prefix into that member's coordinate, producing its own domain.
+/// Internal cycles would need a larger member-indexed product and are declined.
+fn composed_group_orbit_domain(
+    callee: &ValueRef,
+    group: &[ValueRef],
+    start: &Contract,
+    interner: &mut Interner,
+) -> Option<Contract> {
+    let root = group.iter().position(|member| member == callee)?;
+    let graph = mutual_graph(group)?;
+    let scc = root_scc(&graph, root);
+    if scc.iter().filter(|inside| **inside).count() < 2 {
+        return None;
+    }
+    let cycles: Vec<MutualCycle> = simple_cycles(&graph)
+        .into_iter()
+        .filter(|cycle| scc[cycle.start])
+        .collect();
+    if cycles.is_empty()
+        || cycles.iter().any(|cycle| !cycle_passes(cycle, &graph))
+        || cycles.iter().any(|cycle| !cycle.nodes.contains(&root))
+    {
+        return None;
+    }
+    let root_cycles: Vec<&MutualCycle> =
+        cycles.iter().filter(|cycle| cycle.start == root).collect();
+    if root_cycles.is_empty() {
+        return None;
+    }
+    let boundary = root_cycles
+        .iter()
+        .map(|cycle| cycle_boundary(cycle, &graph))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min()?;
+    let drops: Vec<Rational> = root_cycles
+        .into_iter()
+        .map(|cycle| cycle.drift.clone().map(|drift| -drift))
+        .collect::<Option<_>>()?;
+    if drops.iter().any(|drop| !drop.is_integer()) {
+        return None;
+    }
+    let max_drop = drops.iter().cloned().max()?;
+    let mut gcd = BigInt::from(0);
+    for drop in drops {
+        gcd = gcd_bigint(gcd, drop.as_ratio().numer().clone());
+    }
+    envelope(start, boundary - max_drop, gcd, interner)
 }
 
 /// The comparison with operands swapped (`a < b` ⇔ `b > a`); `==`/`!=` are symmetric.
@@ -2377,14 +3349,21 @@ fn walk(
     }
 }
 
-/// Whether `callee` is a reference that resolves, through `closure`'s captured environment,
+/// Whether `callee` is a reference that resolves through `closure`'s positional captures,
 /// to a member of the target group `targets` (pointer identity — a self- or mutual-capture
 /// is the same allocation).
-fn resolves_to_target(callee: &Expr, closure: &Closure, targets: &[ValueRef]) -> bool {
+fn resolved_target(callee: &Expr, closure: &Closure, targets: &[ValueRef]) -> Option<ValueRef> {
     let Expr::Ref(Ref::Immutable(BindingRef::Name(n))) = callee else {
-        return false;
+        return None;
     };
-    matches!(closure.env.lookup(n), Some(Binding::Value(v)) if targets.contains(&v))
+    match closure.capture_binding(n) {
+        Some(Binding::Value(value)) if targets.contains(&value) => Some(value),
+        _ => None,
+    }
+}
+
+fn resolves_to_target(callee: &Expr, closure: &Closure, targets: &[ValueRef]) -> bool {
+    resolved_target(callee, closure, targets).is_some()
 }
 
 fn is_param(e: &Expr, param: &str) -> bool {
@@ -2427,6 +3406,133 @@ mod tests {
         assert_eq!(
             ground(&cd, &nonneg_ints(&mut i), &ContractEnv::new(), &mut i),
             Verdict::Grounded
+        );
+    }
+
+    #[test]
+    fn exact_tuple_slice_chain_grounds_over_its_selected_path() {
+        let mut i = Interner::new();
+        let chain = f(
+            "f = (l) => l == [] ? 0 : (l[0] == 7 ? f(l) : f(l[1...]))\nf",
+            &mut i,
+        );
+        let three = i.integer(3);
+        let two = i.integer(2);
+        let start = Contract::Equals(i.tuple(vec![three, two]));
+        let dependencies = crate::analyzer::safety::selected_dependencies(
+            &chain,
+            std::slice::from_ref(&start),
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert_eq!(
+            dependencies.len(),
+            1,
+            "selected dependencies: {dependencies:?}"
+        );
+        assert_eq!(dependencies[0].0, chain, "recursive target identity");
+        assert_eq!(dependencies[0].1.len(), 1, "recursive argument arity");
+        assert_eq!(
+            exact_flat_tuple_len(&dependencies[0].1[0]),
+            Some(1),
+            "recursive argument: {:?}",
+            dependencies[0].1[0]
+        );
+        let next = dependencies[0].1[0].clone();
+        let next_dependencies = crate::analyzer::safety::selected_dependencies(
+            &chain,
+            std::slice::from_ref(&next),
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert_eq!(
+            next_dependencies.len(),
+            1,
+            "next dependencies: {next_dependencies:?}"
+        );
+        assert_eq!(
+            exact_flat_tuple_len(&next_dependencies[0].1[0]),
+            Some(0),
+            "final recursive argument: {:?}",
+            next_dependencies[0].1[0]
+        );
+        let leaf = canonical_exact_flat_tuple(&next_dependencies[0].1[0], &mut i)
+            .expect("represented exact leaf");
+        let leaf_dependencies = crate::analyzer::safety::selected_dependencies(
+            &chain,
+            std::slice::from_ref(&leaf),
+            &ContractEnv::new(),
+            &mut i,
+        );
+        assert!(
+            leaf_dependencies.is_empty(),
+            "leaf dependencies: {leaf_dependencies:?}"
+        );
+        assert_eq!(
+            ground(&chain, &start, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
+    }
+
+    #[test]
+    fn exact_tuple_cycle_refutes_while_nesting_and_mutation_decline() {
+        let mut i = Interner::new();
+        let one = i.integer(1);
+        let two = i.integer(2);
+        let start = Contract::Equals(i.tuple(vec![one, two]));
+
+        let same = f("f = (l) => l == [] ? 0 : f(l)\nf", &mut i);
+        let Verdict::Refuted(same_refutation) = ground(&same, &start, &ContractEnv::new(), &mut i)
+        else {
+            panic!("a forced same-state edge is a period-1 closed orbit")
+        };
+        assert_eq!(
+            same_refutation.witness,
+            match &start {
+                Contract::Equals(value) => value.clone(),
+                _ => unreachable!(),
+            }
+        );
+
+        let nested = f("f = (l) => l == [] ? 0 : f([l])\nf", &mut i);
+        assert_eq!(
+            ground(&nested, &start, &ContractEnv::new(), &mut i),
+            Verdict::Unproven,
+            "putting the prior state inside a new container is not flat pooled-leaf state"
+        );
+
+        let mutating = f(
+            "@state n = 0\n@mutate f = (l) => { n := n + 1\n l == [] ? 0 : f(l[1...]) }\nf",
+            &mut i,
+        );
+        assert_eq!(
+            ground(&mutating, &start, &ContractEnv::new(), &mut i),
+            Verdict::Unproven,
+            "pending writes are outside the pure/snapshot-stable chain license"
+        );
+    }
+
+    #[test]
+    fn exact_closed_orbit_carries_the_completing_prefix() {
+        let mut i = Interner::new();
+        let f = f("f = (l) => l == [] ? [] : f(l[1...]) ++ f(l)\nf", &mut i);
+        let seven = i.integer(7);
+        let root_value = i.tuple(vec![seven]);
+        let root = Contract::Equals(root_value.clone());
+        let Verdict::Refuted(refutation) = ground(&f, &root, &ContractEnv::new(), &mut i) else {
+            panic!("the required-dependency cycle must refute")
+        };
+        assert_eq!(refutation.witness, root_value);
+        let RefutationEvidence::ClosedOrbit(evidence) = refutation.evidence else {
+            panic!("the tuple cycle must carry closed-orbit evidence")
+        };
+        assert_eq!(evidence.path.len(), 1, "one [7] → [7] orbit edge");
+        assert_eq!(evidence.path[0].completing_prefixes.len(), 1);
+        assert!(
+            evidence.path[0].completing_prefixes[0]
+                .as_tuple()
+                .is_some_and(|items| items.is_empty()),
+            "f([]) is the strict dependency proven completing before the cycle edge"
         );
     }
 
@@ -2711,6 +3817,52 @@ mod tests {
     }
 
     #[test]
+    fn mutual_oscillator_composes_progress_over_the_whole_cycle() {
+        // Edge drifts are +2 and -3: neither the old every-edge-decreases shortcut nor
+        // either edge alone proves termination. The completed cycle has drift -1, hence
+        // oriented Progress Equals(1), and returns to `a`'s descending half-line stop.
+        let mut i = Interner::new();
+        let src = "a = (n) => n <= 0 ? 0 : b(n + 2)\n\
+                   b = (n) => a(n - 3)\n\
+                   a";
+        let a = f(src, &mut i);
+        assert_eq!(
+            ground(&a, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Grounded
+        );
+        let nine = Contract::Equals(i.integer(9));
+        assert!(
+            derived_orbit_domain(&a, &nine, &ContractEnv::new(), &mut i).is_some(),
+            "the same completed cycle must derive the root-member safety orbit"
+        );
+        let b = reachable_closures(a.clone())
+            .into_iter()
+            .find(|member| member != &a)
+            .expect("the oscillator has a partner");
+        let b_arrivals = Contract::Range(Rational::from(3), Rational::from(11));
+        assert!(
+            derived_orbit_domain(&b, &b_arrivals, &ContractEnv::new(), &mut i).is_some(),
+            "a's stop must transport through b -> a's -3 prefix"
+        );
+    }
+
+    #[test]
+    fn every_parallel_cycle_must_progress() {
+        // Two distinct a→b call sites remain two multigraph edges. With b→a at -1,
+        // the first lap totals -2 but the second totals 0; accepting after seeing only
+        // the good textual edge would violate GR-07's universal cycle rule.
+        let mut i = Interner::new();
+        let src = "a = (n) => n <= 0 ? 0 : b(n - 1) + b(n + 1)\n\
+                   b = (n) => a(n - 1)\n\
+                   a";
+        let a = f(src, &mut i);
+        assert_eq!(
+            ground(&a, &Contract::Top, &ContractEnv::new(), &mut i),
+            Verdict::Unproven
+        );
+    }
+
+    #[test]
     fn mutual_recursion_that_does_not_descend_is_unproven() {
         // The `ping`→`pong`→`ping` cycle carries `n` unchanged — no descent → Unproven.
         let mut i = Interner::new();
@@ -2895,10 +4047,17 @@ mod review_gates {
         let one = Contract::Equals(i.integer(1));
         match ground(&step2, &one, &ContractEnv::new(), &mut i) {
             Verdict::Refuted(r) => {
-                assert_eq!(r.witness, Rational::from(1), "the admitted written start");
-                assert_eq!(r.drift, Rational::from(-2), "the forced constant drift");
+                assert_eq!(r.witness.as_number(), Some(&Rational::from(1)));
+                let RefutationEvidence::DriftAway {
+                    drift,
+                    missed_bases,
+                } = r.evidence
+                else {
+                    panic!("the numeric witness must carry drift-away evidence")
+                };
+                assert_eq!(drift, Rational::from(-2), "the forced constant drift");
                 assert!(
-                    !r.missed_bases.is_empty(),
+                    !missed_bases.is_empty(),
                     "the bases the orbit provably misses"
                 );
             }
@@ -2944,6 +4103,13 @@ pub(crate) fn ground_args(
     let v = ground(callee, &single, cenv, interner);
     if !matches!(v, Verdict::Unproven) {
         return v;
+    }
+    // Closure-converted locals carry their immutable outer environment as ordinary
+    // leading arguments. Those invariant positions are not termination measures; the
+    // one changing numeric position is judged by the same drift-and-landing law as the
+    // single-argument certificate.
+    if args.len() >= 2 && carried_numeric_orbit_domain(callee, args, cenv, interner).is_some() {
+        return Verdict::Grounded;
     }
     if args.len() >= 2 && mod_descent_shape(callee, args.len(), interner).is_some() {
         let nat = nat_contract(interner);

@@ -1,117 +1,111 @@
-//! Algorithm A conformance (μ-Canonicalization Spec §7): MU-01 (vacuous-μ
-//! erasure), MU-03 (minimal-group split), MU-06 (canonical form invariant under
-//! renaming and member permutation).
+//! Recursive construction-window regressions plus the value-identity properties
+//! formerly (and incorrectly) assigned to a serialized group template.
 
-use std::collections::BTreeMap;
-
-use super::canonicalize_group;
+use super::group_windows;
 use crate::ast::{BindTarget, Expr, Item};
 use crate::desugar::Desugarer;
 use crate::interner::Interner;
 use crate::lex::lex;
+use crate::oracle::run_source_in;
 use crate::parse::parse_program;
 
-/// Desugar a program and return its top-level `name = value` bindings.
-fn bindings(src: &str) -> Vec<(String, Expr)> {
+/// Desugar a program and return `(item index, name, initializer)` triples.
+fn bindings(src: &str) -> Vec<(usize, String, Expr)> {
     let mut interner = Interner::new();
     let prog = parse_program(lex(src).unwrap()).unwrap();
     let module = Desugarer::new(&mut interner).program(&prog).unwrap();
     module
         .items
         .iter()
-        .filter_map(|it| match it {
+        .enumerate()
+        .filter_map(|(item, it)| match it {
             Item::Bind(b) => match &b.target {
-                BindTarget::Name(n) => Some((n.clone(), b.value.clone())),
-                _ => None,
+                BindTarget::Name(name) => Some((item, name.clone(), b.value.clone())),
+                BindTarget::Pattern(_) => None,
             },
             _ => None,
         })
         .collect()
 }
 
-fn keys(src: &str) -> BTreeMap<String, String> {
-    canonicalize_group(&bindings(src))
-}
-
-/// The multiset of canonical code values (names dropped) — the rename/permute
-/// invariant.
-fn codes(src: &str) -> Vec<String> {
-    let mut v: Vec<String> = keys(src).into_values().collect();
-    v.sort();
-    v
+#[test]
+fn mu01_non_recursive_binding_has_no_construction_window() {
+    assert!(group_windows(&bindings("a = (n) => n + 1")).is_empty());
 }
 
 #[test]
-fn mu01_non_recursive_binding_has_no_mu() {
-    // A binding that does not reference itself is plain code — no μ introduced.
-    let k = keys("a = (n) => n + 1");
-    assert!(
-        !k["a"].contains("mu["),
-        "no μ for a non-recursive binding: {}",
-        k["a"]
-    );
+fn self_recursion_introduces_a_single_member_window() {
+    let windows = group_windows(&bindings("f = (n) => n == 0 ? 0 : f(n - 1)"));
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].start, 0);
+    assert_eq!(windows[0].end, 0);
+    assert_eq!(windows[0].members, [(0, "f".to_string())]);
 }
 
 #[test]
-fn self_recursion_introduces_a_single_slot_mu() {
-    let k = keys("f = (n) => n == 0 ? 0 : f(n - 1)");
-    assert!(
-        k["f"].contains("mu[1]"),
-        "self-recursion is a 1-slot μ: {}",
-        k["f"]
-    );
-    assert!(k["f"].contains("μ⟨0,0⟩"), "the self-reference is a μ-ref");
-}
-
-#[test]
-fn mu03_minimal_group_splits_out_acyclic_neighbour() {
-    // {a, b} mutually recurse (a 2-slot μ); c references a but a does not
-    // reference c, so c is NOT bound into the μ (law 3 / law 1).
-    let k = keys("a = () => b\nb = () => a\nc = () => a");
-    assert!(
-        k["a"].starts_with("mu[2]"),
-        "a is a 2-slot μ member: {}",
-        k["a"]
-    );
-    assert!(
-        k["b"].starts_with("mu[2]"),
-        "b is a 2-slot μ member: {}",
-        k["b"]
-    );
-    // c is NOT itself a μ-group member — its key is plain code that *references*
-    // the group by canonical key (law 3 / law 1: the acyclic neighbour splits out).
-    assert!(!k["c"].starts_with("mu["), "c is not μ-bound: {}", k["c"]);
-    assert!(
-        k["c"].contains("k[mu["),
-        "c references the group by canonical key: {}",
-        k["c"]
+fn mu03_minimal_window_splits_out_acyclic_neighbour() {
+    let windows = group_windows(&bindings("a = () => b\nb = () => a\nc = () => a"));
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].start, 0);
+    assert_eq!(windows[0].end, 1);
+    assert_eq!(
+        windows[0].members,
+        [(0, "a".to_string()), (1, "b".to_string())]
     );
 }
 
 #[test]
-fn mu06_invariant_under_renaming() {
-    // Renaming the group members must not change the canonical codes.
-    let a = codes(
-        "isEven = (n) => n == 0 ? true : isOdd(n - 1)\nisOdd = (n) => n == 0 ? false : isEven(n - 1)",
-    );
-    let b = codes(
-        "evenP = (n) => n == 0 ? true : oddP(n - 1)\noddP = (n) => n == 0 ? false : evenP(n - 1)",
-    );
-    assert_eq!(a, b, "canonical codes invariant under renaming");
+fn mu06_value_identity_is_invariant_under_renaming() {
+    let mut interner = Interner::new();
+    let is_even = run_source_in(
+        "isEven = (n) => n == 0 ? true : isOdd(n - 1)\n\
+         isOdd = (n) => n == 0 ? false : isEven(n - 1)\n\
+         isEven",
+        &mut interner,
+    )
+    .unwrap()
+    .0;
+    let renamed = run_source_in(
+        "evenP = (k) => k == 0 ? true : oddP(k - 1)\n\
+         oddP = (k) => k == 0 ? false : evenP(k - 1)\n\
+         evenP",
+        &mut interner,
+    )
+    .unwrap()
+    .0;
+    assert!(is_even.ptr_eq(&renamed));
 }
 
 #[test]
-fn mu06_invariant_under_member_permutation() {
-    // Reordering the bindings must not change the canonical codes (law 5).
-    let a = codes("p = (n) => n == 0 ? 1 : q(n - 1)\nq = (n) => n == 0 ? 2 : p(n - 1)");
-    let b = codes("q = (n) => n == 0 ? 2 : p(n - 1)\np = (n) => n == 0 ? 1 : q(n - 1)");
-    assert_eq!(a, b, "canonical codes invariant under member permutation");
+fn mu06_value_identity_is_invariant_under_member_permutation() {
+    let mut interner = Interner::new();
+    let first = run_source_in(
+        "p = (n) => n == 0 ? 1 : q(n - 1)\n\
+         q = (n) => n == 0 ? 2 : p(n - 1)\n\
+         p",
+        &mut interner,
+    )
+    .unwrap()
+    .0;
+    let permuted = run_source_in(
+        "q = (n) => n == 0 ? 2 : p(n - 1)\n\
+         p = (n) => n == 0 ? 1 : q(n - 1)\n\
+         p",
+        &mut interner,
+    )
+    .unwrap()
+    .0;
+    assert!(first.ptr_eq(&permuted));
 }
 
 #[test]
-fn distinct_groups_have_distinct_codes() {
-    // Sanity: a genuinely different body yields a different canonical code.
-    let a = codes("f = (n) => n == 0 ? 0 : f(n - 1)");
-    let b = codes("g = (n) => n == 0 ? 1 : g(n - 1)");
-    assert_ne!(a, b);
+fn distinct_recursive_functions_have_distinct_values() {
+    let mut interner = Interner::new();
+    let zero = run_source_in("f = (n) => n == 0 ? 0 : f(n - 1)\nf", &mut interner)
+        .unwrap()
+        .0;
+    let one = run_source_in("g = (n) => n == 0 ? 1 : g(n - 1)\ng", &mut interner)
+        .unwrap()
+        .0;
+    assert!(!zero.ptr_eq(&one));
 }

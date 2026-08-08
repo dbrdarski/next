@@ -8,8 +8,9 @@
 //!
 //! The rule it enforces is the project's first one: *same value = same pointer; `==` is
 //! pointer comparison, universally*. An [`Interned<T>`] compares and hashes by address, so a
-//! cache key holding one is a word, not a walk over a syntax tree. Structural hashing happens
-//! **once, at interning**; every comparison afterwards is a pointer test.
+//! memo query holding one is a word, not a walk over a syntax tree. Structural hashing happens
+//! **once, at interning**; every comparison afterwards is a pointer test. [`MemoInterner`]
+//! stores the first immutable answer to such a query under the same identity owner.
 //!
 //! **Children first.** As with values, interning is exact only when a term's children are
 //! already canonical — `Interned<T>` inside `T` rather than `Box<T>`. A type that boxes its
@@ -118,6 +119,75 @@ impl EnumInterner {
     }
 }
 
+/// Type-indexed immutable memo tables.
+///
+/// A memo query is already an [`Interned<Q>`], so lookup is by one pointer. The first
+/// answer published for that query receives one `Rc` allocation and remains immutable;
+/// later publication attempts return the established allocation. The index mutates only
+/// monotonically, by learning answers to previously unseen queries.
+#[derive(Default)]
+pub struct MemoInterner {
+    tables: HashMap<(TypeId, TypeId), Box<dyn Any>>,
+}
+
+impl MemoInterner {
+    pub fn new() -> MemoInterner {
+        MemoInterner::default()
+    }
+
+    fn table<Q: Any, A: Any>(&self) -> Option<&HashMap<Interned<Q>, Rc<A>>> {
+        self.tables
+            .get(&(TypeId::of::<Q>(), TypeId::of::<A>()))
+            .and_then(|table| table.downcast_ref::<HashMap<Interned<Q>, Rc<A>>>())
+    }
+
+    fn table_mut<Q: Any, A: Any>(&mut self) -> &mut HashMap<Interned<Q>, Rc<A>> {
+        self.tables
+            .entry((TypeId::of::<Q>(), TypeId::of::<A>()))
+            .or_insert_with(|| Box::new(HashMap::<Interned<Q>, Rc<A>>::new()))
+            .downcast_mut::<HashMap<Interned<Q>, Rc<A>>>()
+            .expect("one memo table per query/answer TypeId pair")
+    }
+
+    /// The immutable answer established for `query`, if one has been published.
+    pub fn get<Q: Any, A: Any>(&self, query: &Interned<Q>) -> Option<Rc<A>> {
+        self.table::<Q, A>()?.get(query).cloned()
+    }
+
+    /// Publish the first answer for `query`, returning its canonical allocation.
+    pub fn publish<Q: Any, A: Any>(&mut self, query: Interned<Q>, answer: A) -> Rc<A> {
+        let table = self.table_mut::<Q, A>();
+        if let Some(established) = table.get(&query) {
+            return established.clone();
+        }
+        let answer = Rc::new(answer);
+        table.insert(query, answer.clone());
+        answer
+    }
+
+    /// A stable snapshot for semantic searches such as fact-domain coverage.
+    pub fn entries<Q: Any, A: Any>(&self) -> Vec<(Interned<Q>, Rc<A>)> {
+        self.table::<Q, A>()
+            .map(|table| {
+                table
+                    .iter()
+                    .map(|(query, answer)| (query.clone(), answer.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Drop one memo family for test isolation or explicit memory reclamation.
+    pub fn clear<Q: Any, A: Any>(&mut self) {
+        self.tables.remove(&(TypeId::of::<Q>(), TypeId::of::<A>()));
+    }
+
+    /// Published answers in one memo family — for tests and diagnostics.
+    pub fn count<Q: Any, A: Any>(&self) -> usize {
+        self.table::<Q, A>().map_or(0, HashMap::len)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +255,53 @@ mod tests {
         let mut i = EnumInterner::new();
         let a = i.intern(Toy::Leaf(42));
         assert!(matches!(*a, Toy::Leaf(42)));
+    }
+
+    #[test]
+    fn a_memo_query_has_one_immutable_answer_allocation() {
+        #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+        struct Query(u8);
+        #[derive(Debug)]
+        struct Answer(u8);
+
+        let mut terms = EnumInterner::new();
+        let query = terms.intern(Query(1));
+        let mut memos = MemoInterner::new();
+        let first = memos.publish(query.clone(), Answer(7));
+        let second = memos.publish(query.clone(), Answer(9));
+
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "the first publication is canonical"
+        );
+        assert_eq!(
+            second.0, 7,
+            "a memo answer is never replaced by cache warmth"
+        );
+        assert!(Rc::ptr_eq(
+            &second,
+            &memos.get::<Query, Answer>(&query).expect("published")
+        ));
+        assert_eq!(memos.count::<Query, Answer>(), 1);
+    }
+
+    #[test]
+    fn memo_families_are_separated_by_query_and_answer_type() {
+        #[derive(Clone, PartialEq, Eq, Hash)]
+        struct Query(u8);
+        struct First;
+        struct Second;
+
+        let mut terms = EnumInterner::new();
+        let query = terms.intern(Query(1));
+        let mut memos = MemoInterner::new();
+        memos.publish(query.clone(), First);
+        memos.publish(query.clone(), Second);
+
+        assert_eq!(memos.count::<Query, First>(), 1);
+        assert_eq!(memos.count::<Query, Second>(), 1);
+        memos.clear::<Query, First>();
+        assert_eq!(memos.count::<Query, First>(), 0);
+        assert_eq!(memos.count::<Query, Second>(), 1);
     }
 }

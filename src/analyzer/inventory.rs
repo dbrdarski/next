@@ -1,23 +1,23 @@
 //! The instance-chain cutoff — §4a of the Application & Induction package (v0.8.1).
 //!
 //! The **admitted-instance inventory** is the projection onto instances of a finite
-//! state closure over `InventoryState = (analysis instance, active shape sequence)`.
+//! state closure over `InventoryState = (analysis instance, active code sequence)`.
 //! It is **constructed, traversal-free** — a closure that depends on the program
 //! alone, never an effort-dependent fixpoint — so its *membership* is
 //! order-independent (the returned `Vec` is discovery-ordered, a set representation,
 //! never a canonical sequence):
 //!
 //! 1. Seed with the instances the program's nonrecursive/root demands reach, each
-//!    with its shape appended to an empty sequence.
+//!    with its canonical code appended to an empty sequence.
 //! 2. From each state, symbolically enumerate its call transitions (`transitions`).
 //!    Every instance the fixed metadata-intersection / narrowing rules can produce
 //!    belongs here — meet-derived instances are admitted through this ordinary path.
-//! 3. Target shape **not** in the active sequence → **admit** the target; continue
-//!    from `(target, sequence ++ target.shape)`.
-//! 4. Target shape **already** in the sequence → **no admission through that path**
+//! 3. Target code **not** in the active sequence → **admit** the target; continue
+//!    from `(target, sequence ++ target.code)`.
+//! 4. Target code **already** in the sequence → **no admission through that path**
 //!    (the cutoff); the induction ladder (§6) applies at analysis time instead.
 //!
-//! Finite: no admitted path repeats a shape, so path depth ≤ the program's shape
+//! Finite: no admitted path repeats canonical code, so path depth ≤ the program's code
 //! count, and the reachable instance universe is advance-bounded (the fixed rule
 //! inventory). This construction *is* the definition of "an instance some non-cutoff
 //! path admits".
@@ -28,7 +28,6 @@
 //! induction (§6) and `analyze_apply` are the wiring that follows.
 
 use crate::analyzer::domain::Instance;
-use crate::ast::Lambda;
 
 /// Construct the admitted-instance inventory (§4a). `roots` are the instances the
 /// program's root demands reach; `transitions` symbolically enumerates an instance's
@@ -43,21 +42,21 @@ pub fn build_inventory(
     roots: Vec<Instance>,
     transitions: impl Fn(&Instance) -> Vec<Instance>,
 ) -> Vec<Instance> {
-    build_inventory_by(roots, |i: &Instance| i.shape.clone(), transitions)
+    build_inventory_by(roots, Instance::code_handle, transitions)
 }
 
-/// The §4a closure over an arbitrary node type `N` keyed by its **shape** — the
-/// cutoff fires when a transition's target shape already appears on the active path.
+/// The §4a closure over an arbitrary node type `N` keyed by its **canonical code** — the
+/// cutoff fires when a transition's target code already appears on the active path.
 /// Used both for abstract [`Instance`]s and, in the induction tail, for closure
 /// values (the μ-aware body-walk call graph).
-pub fn build_inventory_by<N: Clone + PartialEq>(
+pub fn build_inventory_by<N: Clone + PartialEq, K: Clone + PartialEq>(
     roots: Vec<N>,
-    shape_of: impl Fn(&N) -> Lambda,
+    shape_of: impl Fn(&N) -> K,
     transitions: impl Fn(&N) -> Vec<N>,
 ) -> Vec<N> {
     let mut inventory: Vec<N> = Vec::new();
-    let mut visited: Vec<(N, Vec<Lambda>)> = Vec::new();
-    let mut work: Vec<(N, Vec<Lambda>)> = Vec::new();
+    let mut visited: Vec<(N, Vec<K>)> = Vec::new();
+    let mut work: Vec<(N, Vec<K>)> = Vec::new();
 
     for r in roots {
         let seq = vec![shape_of(&r)];
@@ -80,14 +79,14 @@ pub fn build_inventory_by<N: Clone + PartialEq>(
 }
 
 /// Admit `node` (deduplicated) and enqueue its state, unless the exact `(node, active
-/// shape sequence)` was already processed — the visited guard bounds the closure
-/// against the advance-bounded, shape-cutoff state space.
-fn push_node<N: Clone + PartialEq>(
+/// code sequence)` was already processed — the visited guard bounds the closure
+/// against the advance-bounded, code-cutoff state space.
+fn push_node<N: Clone + PartialEq, K: Clone + PartialEq>(
     inventory: &mut Vec<N>,
-    visited: &mut Vec<(N, Vec<Lambda>)>,
-    work: &mut Vec<(N, Vec<Lambda>)>,
+    visited: &mut Vec<(N, Vec<K>)>,
+    work: &mut Vec<(N, Vec<K>)>,
     node: N,
-    active_shapes: Vec<Lambda>,
+    active_shapes: Vec<K>,
 ) {
     let key = (node.clone(), active_shapes.clone());
     if visited.contains(&key) {

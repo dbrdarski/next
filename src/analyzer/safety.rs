@@ -34,8 +34,11 @@
 //! start (`countDown(5)` → `Range(0,5) ∧ Mod(1,0)`), composed from the program's own
 //! drift arithmetic — C§13.3(1)'s "derived grounding contracts". The derivation
 //! **proposes** the fact domain; the same vector induction as every fact must prove it,
-//! and where no certificate applies the honest cutoff stays `Unproven`. Kind-menu
-//! widening and accumulated reaching domains remain the forbidden, imported shapes.
+//! and where no certificate applies the honest cutoff stays `Unproven`. A changed
+//! coefficient-zero numeric payload has one additional fixed GR-19 proposal: `Number`,
+//! only when the arrived value and every written payload edge are proved closed over
+//! `Number` by the operation rulebook. Kind-menu widening and accumulated reaching
+//! domains remain the forbidden, imported shapes.
 
 use std::cell::Cell;
 
@@ -131,7 +134,7 @@ pub(crate) fn prove_claim(
         let (nodes, edges) = discover(callee, args, &claim, cenv, interner);
         return settle(nodes, &edges, claim, cenv, interner).verdict;
     };
-    match factcache::lookup(&key) {
+    match factcache::lookup(&key, interner) {
         Some(factcache::Cached::Settled(v)) => return v,
         Some(factcache::Cached::InProgress) => return assumed(callee, args, &claim, interner),
         None => {}
@@ -151,7 +154,7 @@ pub(crate) fn prove_claim(
     factcache::begin(&key);
     let (nodes, edges) = discover(callee, args, &claim, cenv, interner);
     let settlement = settle(nodes, &edges, claim, cenv, interner);
-    let outer = factcache::finish(&key, &settlement.verdict, tainted);
+    let outer = factcache::finish(&key, &settlement.verdict, tainted, interner);
     if outer {
         // The graph settled dependencies before their dependants. They are ordinary
         // proven facts of their complete semantic keys, not seed-local evidence; keep
@@ -164,7 +167,7 @@ pub(crate) fn prove_claim(
                 cenv,
                 interner,
             ) {
-                factcache::record_settled(key, BodySafety::Proven);
+                factcache::record_settled(key, BodySafety::Proven, interner);
             }
         }
     }
@@ -261,9 +264,13 @@ pub fn completes(
     if callee.as_closure().is_none() {
         return false;
     }
-    // Already settling: resolve through the assumed facts, never nest.
+    // Already settling: resolve through the active assumptions or an independently
+    // settled covering fact, never nest. Discovery applies this same coverage rule
+    // when it omits an established dependency; verification must therefore see that
+    // settled fact too, just as body-safety verification does through `established`.
     if SETTLING.with(Cell::get) {
-        return induction::completes_assumed(callee, args, interner);
+        return induction::completes_assumed(callee, args, interner)
+            || completes_settled(callee, args, cenv, interner);
     }
     SETTLING.with(|f| f.set(true));
     let out = matches!(
@@ -289,7 +296,7 @@ pub(crate) fn completes_settled(
     let Some(key) = factcache::key(callee, args, &Claim::Completes, cenv, interner) else {
         return false;
     };
-    match factcache::lookup(&key) {
+    match factcache::lookup(&key, interner) {
         Some(factcache::Cached::Settled(v)) => v.is_proven(),
         Some(factcache::Cached::InProgress) => false,
         None => matches!(factcache::covering(&key, interner), Some(v) if v.is_proven()),
@@ -312,7 +319,7 @@ fn verify_by_partition(
     cenv: &ContractEnv,
     interner: &mut Interner,
 ) -> SafetyReport {
-    let base = capture_env(callee);
+    let base = capture_env(callee, interner);
     let Some((_, table)) = crate::analyzer::region::instance_table(callee, cenv, interner) else {
         return SafetyReport::default();
     };
@@ -341,11 +348,13 @@ fn verify_by_partition(
                 p,
                 &crate::analyzer::domain::AnalysisContract::of_contract(sel.region.clone()),
                 &mut env,
+                interner,
             ),
             Some((p, false)) => crate::analyzer::bind_pattern_annotated(
                 p,
                 &crate::analyzer::domain::AnalysisContract::of_contract(Contract::Top),
                 &mut env,
+                interner,
             ),
             None => {}
         }
@@ -399,11 +408,13 @@ fn guard_demands(
                 p,
                 &crate::analyzer::domain::AnalysisContract::of_contract(arrivals),
                 &mut env,
+                interner,
             ),
             Some((p, false)) => crate::analyzer::bind_pattern_annotated(
                 p,
                 &crate::analyzer::domain::AnalysisContract::of_contract(Contract::Top),
                 &mut env,
+                interner,
             ),
             None => {}
         }
@@ -546,17 +557,18 @@ fn classify(report: SafetyReport) -> BodySafety {
     })
 }
 
-/// The captured environment as contracts — each free variable bound to `Equals(value)`.
-pub(crate) fn capture_env(callee: &ValueRef) -> TypeEnv {
+/// The positional value captures as contracts — each source free name bound to
+/// `Equals(value)` for source-body analysis.
+pub(crate) fn capture_env(callee: &ValueRef, interner: &mut Interner) -> TypeEnv {
     let mut env = TypeEnv::new();
-    let (Some(f), Some(closure)) = (callee.as_fn(), callee.as_closure()) else {
+    let Some(f) = callee.as_fn() else {
         return env;
     };
     for name in f.free_vars() {
-        if let Some(Binding::Value(v)) = closure.env.lookup(name) {
+        if let Some(Binding::Value(v)) = f.capture_binding(name) {
             env.insert(
                 name.clone(),
-                crate::analyzer::domain::AnalysisContract::of_value(v),
+                crate::analyzer::domain::AnalysisContract::of_value(v, interner),
             );
         }
     }
@@ -785,6 +797,28 @@ fn discover(
             let shape = shape_of(&target);
             let mut cutoff = path.contains(&shape);
             let mut input = targs;
+            if cutoff
+                && crate::analyzer::grounding::strict_exact_tuple_step(
+                    &nodes[i].callee,
+                    &nodes[i].input,
+                    &target,
+                    &input,
+                )
+            {
+                // GR-09/10's represented-exact chain is an explicit native
+                // finiteness license, separate from the ordinary code-shape cutoff.
+                // This first (acyclic) fragment needs no pool enumeration: the
+                // selected exact dependency is another flat exact tuple and its
+                // total length is strictly smaller, so the written root length is
+                // the well-founded carrier. Keep the exact singleton as its own fact
+                // node; do not widen it into a synthesized container contract.
+                let [state] = input.as_mut_slice() else {
+                    unreachable!("the admitted exact tuple step has one argument")
+                };
+                *state = crate::analyzer::grounding::canonical_exact_flat_tuple(state, interner)
+                    .expect("the admitted exact tuple step has a represented singleton");
+                cutoff = false;
+            }
             if cutoff {
                 // [author correction, 2026-08-03] **The drift is what closes.** From an
                 // exact start, the descent certificate derives the orbit envelope the
@@ -806,18 +840,29 @@ fn discover(
                         &target, single, cenv, interner,
                     )
                     .map(|envelope| vec![envelope]),
-                    _ => crate::analyzer::grounding::mod_orbit_domain(&target, &input, interner)
-                        .or_else(|| {
-                            // The lex-shaped multi-parameter envelope (Ackermann's):
-                            // per-position `GE(floor) ∧ Mod(1,0)` from the point
-                            // tests, proposed only when the asked domain sits inside
-                            // it. The induction still proves the fact over it.
-                            let env = crate::analyzer::grounding::lex_envelope(&target, interner)?;
-                            let contained = input.iter().zip(&env).all(|(a, e)| {
-                                matches!(subcontract(a, e, interner), Verdict::Proven)
-                            });
-                            contained.then_some(env)
-                        }),
+                    _ => crate::analyzer::grounding::carried_numeric_orbit_domain(
+                        &target, &input, cenv, interner,
+                    )
+                    .or_else(|| {
+                        crate::analyzer::grounding::numeric_payload_orbit_domain(
+                            &target, &input, cenv, interner,
+                        )
+                    })
+                    .or_else(|| {
+                        crate::analyzer::grounding::mod_orbit_domain(&target, &input, interner)
+                    })
+                    .or_else(|| {
+                        // The lex-shaped multi-parameter envelope (Ackermann's):
+                        // per-position `GE(floor) ∧ Mod(1,0)` from the point
+                        // tests, proposed only when the asked domain sits inside
+                        // it. The induction still proves the fact over it.
+                        let env = crate::analyzer::grounding::lex_envelope(&target, interner)?;
+                        let contained = input
+                            .iter()
+                            .zip(&env)
+                            .all(|(a, e)| matches!(subcontract(a, e, interner), Verdict::Proven));
+                        contained.then_some(env)
+                    }),
                 };
                 if let Some(derived) = derived {
                     if let Some(j) = covering_node(&nodes, &target, &derived, interner) {
@@ -911,13 +956,41 @@ fn calls_of(
     let Some(closure) = node.callee.as_closure() else {
         return Vec::new();
     };
-    let base = capture_env(&node.callee);
+    let base = capture_env(&node.callee, interner);
     let mut out = Vec::new();
     // Discovery may contract-evaluate local bindings, projections, callees, and
     // arguments, but it may not settle a nested safety fact. Keep the existing
     // verification guard active so any nested application contributes a coarse
     // Unproven result and is then discovered structurally by `collect_calls` itself.
     let saved = VERIFYING_SAFETY.with(|active| active.replace(true));
+    // A represented-exact tuple follows its exact selected path through every
+    // nested Match. The numeric-only region table deliberately treats tuple equality
+    // as opaque, so routing this case through it would retain both `l == []` arms and
+    // invent dependencies from a dead branch. Whole-body collection remains symbolic:
+    // the exact parameter contract lets `collect_calls` apply the same proven-guard
+    // rules as live Match analysis.
+    if let ([Contract::Equals(value)], Some(param)) = (
+        node.input.as_slice(),
+        crate::analyzer::single_plain_param(&closure.lambda.params),
+    ) && value.as_tuple().is_some()
+    {
+        let mut env = base.clone();
+        env.insert(
+            param,
+            crate::analyzer::domain::AnalysisContract::of_contract(node.input[0].clone()),
+        );
+        collect_calls(
+            &closure.lambda.body,
+            &closure,
+            &env,
+            cenv,
+            interner,
+            &mut out,
+        );
+        VERIFYING_SAFETY.with(|active| active.set(saved));
+        return out;
+    }
+
     // Per-row walk (single parameter), else one whole-body walk.
     match (
         crate::analyzer::region::instance_table(&node.callee, cenv, interner),
@@ -936,7 +1009,7 @@ fn calls_of(
         _ => {
             let mut env = base.clone();
             let arg_tuple = Contract::tuple(node.input.clone(), interner);
-            bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
+            bind_pattern(&closure.lambda.params, &arg_tuple, &mut env, interner);
             collect_calls(
                 &closure.lambda.body,
                 &closure,
@@ -949,6 +1022,27 @@ fn calls_of(
     }
     VERIFYING_SAFETY.with(|active| active.set(saved));
     out
+}
+
+/// The ordinary region-selected dependency read, exposed to grounding's exact-chain
+/// candidate. It performs the same contract transfer as graph discovery and does not
+/// execute the program. Keeping this as one read path prevents grounding and the three
+/// fact voices from disagreeing about which calls an exact state requires.
+pub(crate) fn selected_dependencies(
+    callee: &ValueRef,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Vec<(ValueRef, Vec<Contract>)> {
+    calls_of(
+        &Node {
+            callee: callee.clone(),
+            input: args.to_vec(),
+            cutoff: false,
+        },
+        cenv,
+        interner,
+    )
 }
 
 /// An existing candidate for the same instance whose domain **covers** the target.
@@ -1004,11 +1098,18 @@ pub(crate) fn verify_completes(
     let Some(closure) = callee.as_closure() else {
         return false;
     };
+    if let (Some(param), [domain]) = (single_param(&closure.lambda.params), args)
+        && let Some(analysis) =
+            exact_tuple_body_analysis(callee, &closure, &param, domain, cenv, interner)
+    {
+        return matches!(analysis.completion, crate::analyzer::Completion::Produces);
+    }
     if let (Some((param, table)), [domain]) = (
         crate::analyzer::region::instance_table(callee, cenv, interner),
         args,
-    ) {
-        let base = capture_env(callee);
+    ) && !table.is_empty()
+    {
+        let base = capture_env(callee, interner);
         for sel in select(&table, domain, interner) {
             let mut env = base.clone();
             env.insert(param.clone(), sel.region.clone());
@@ -1056,7 +1157,7 @@ pub(crate) fn verify_completes(
         && params.len() == args.len()
         && table.iter().any(|row| row.constrained > 0)
     {
-        let base = capture_env(callee);
+        let base = capture_env(callee, interner);
         for sel in crate::analyzer::region::select_multi(&table, args, interner) {
             let mut env = base.clone();
             for (p, region) in params.iter().zip(&sel.regions) {
@@ -1082,9 +1183,9 @@ pub(crate) fn verify_completes(
         });
     }
 
-    let mut env = capture_env(callee);
+    let mut env = capture_env(callee, interner);
     let arg_tuple = Contract::tuple(args.to_vec(), interner);
-    bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
+    bind_pattern(&closure.lambda.params, &arg_tuple, &mut env, interner);
     matches!(
         analyze_in_world(
             &closure.lambda.body,
@@ -1150,7 +1251,14 @@ fn verify_inner(
     };
     match (single_param(&closure.lambda.params), args) {
         (Some(param), [domain]) => {
-            verify_by_partition(callee, &closure, &param, domain, cenv, interner)
+            match exact_tuple_body_analysis(callee, &closure, &param, domain, cenv, interner) {
+                Some(analysis) => {
+                    let mut report = SafetyReport::default();
+                    report.extend_analysis(analysis, true);
+                    report
+                }
+                None => verify_by_partition(callee, &closure, &param, domain, cenv, interner),
+            }
         }
         _ => {
             // §5's argument-tuple projection: a flat multi-parameter tuple with a
@@ -1162,7 +1270,7 @@ fn verify_inner(
                 && params.len() == args.len()
                 && table.iter().any(|row| row.constrained > 0)
             {
-                let base = capture_env(callee);
+                let base = capture_env(callee, interner);
                 let mut out = SafetyReport::default();
                 guard_demands_multi(
                     &table,
@@ -1190,9 +1298,9 @@ fn verify_inner(
                 }
                 return out;
             }
-            let mut env = capture_env(callee);
+            let mut env = capture_env(callee, interner);
             let arg_tuple = Contract::tuple(args.to_vec(), interner);
-            bind_pattern(&closure.lambda.params, &arg_tuple, &mut env);
+            bind_pattern(&closure.lambda.params, &arg_tuple, &mut env, interner);
             let analysis = analyze_in_world(
                 &closure.lambda.body,
                 &env,
@@ -1241,7 +1349,7 @@ pub(crate) fn produced_by_partition(
             if !table.iter().any(|row| row.constrained > 0) {
                 return None; // uninformative — the whole-body path sees more (folds)
             }
-            let base = capture_env(callee);
+            let base = capture_env(callee, interner);
             let mut parts = Vec::new();
             for sel in crate::analyzer::region::select_multi(&table, args, interner) {
                 let mut env = base.clone();
@@ -1266,7 +1374,12 @@ pub(crate) fn produced_by_partition(
             };
         }
     };
-    let base = capture_env(callee);
+    if let Some(analysis) =
+        exact_tuple_body_analysis(callee, &closure, &param, domain, cenv, interner)
+    {
+        return Some(analysis.contract);
+    }
+    let base = capture_env(callee, interner);
     let (_, table) = crate::analyzer::region::instance_table(callee, cenv, interner)?;
     let mut parts = Vec::new();
     for sel in select(&table, domain, interner) {
@@ -1294,6 +1407,37 @@ pub(crate) fn produced_by_partition(
     }
 }
 
+/// Analyze one represented-exact tuple state through the ordinary Match implementation.
+/// Tuple equality is intentionally outside the numeric region table's finite language;
+/// the exact singleton itself nevertheless decides every guard through ordinary
+/// operation transfer and the oracle fold. This shared path keeps discovery, safety,
+/// completion, and return facts on GR-09's same selected evaluation path.
+fn exact_tuple_body_analysis(
+    callee: &ValueRef,
+    closure: &crate::value::Closure,
+    param: &str,
+    domain: &Contract,
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Option<Analysis> {
+    let Contract::Equals(value) = domain else {
+        return None;
+    };
+    value.as_tuple()?;
+    let mut env = capture_env(callee, interner);
+    env.insert(
+        param.to_string(),
+        crate::analyzer::domain::AnalysisContract::of_contract(domain.clone()),
+    );
+    Some(analyze_in_world(
+        &closure.lambda.body,
+        &env,
+        cenv,
+        world_for_act(closure.lambda.act_kind),
+        interner,
+    ))
+}
+
 /// Collect every application in `e` whose joint annotated operand resolves to concrete
 /// functions, paired with the correlated argument domains under `env`. This is the
 /// discovery face of the same AP-29 representation used by live application analysis:
@@ -1313,6 +1457,46 @@ fn collect_calls(
     match e {
         Expr::Const(_) | Expr::Ref(_) | Expr::Lambda(_) => {}
         Expr::Apply { callee, args } => {
+            // The source closure for a local function over open outer arguments is not
+            // formed yet. Discovery must nevertheless record the same analyzer-only
+            // lifted dependency as live application analysis, or the enclosing
+            // function's graph omits its `outer -> local` edge and verification has no
+            // fact through which to resolve the call.
+            if let Expr::Ref(crate::ast::Ref::Immutable(crate::ast::BindingRef::Name(name))) =
+                &**callee
+                && let Some(call) = env.deferred_call(name).cloned()
+                && args.iter().all(|argument| matches!(argument, Arg::Expr(_)))
+            {
+                let mut domains: Vec<Contract> = call
+                    .prefix
+                    .iter()
+                    .map(|argument| argument.erase(interner))
+                    .collect();
+                for argument in args {
+                    let Arg::Expr(expression) = argument else {
+                        unreachable!("spread arguments were excluded above")
+                    };
+                    domains.push(
+                        analyze_in_world(
+                            expression,
+                            env,
+                            cenv,
+                            world_for_act(closure.lambda.act_kind),
+                            interner,
+                        )
+                        .contract,
+                    );
+                }
+                out.push((call.callee, domains));
+                for argument in args {
+                    let Arg::Expr(expression) = argument else {
+                        unreachable!("spread arguments were excluded above")
+                    };
+                    collect_calls(expression, closure, env, cenv, interner, out);
+                }
+                return;
+            }
+
             let callee_analysis = analyze_in_world(
                 callee,
                 env,
@@ -1338,8 +1522,8 @@ fn collect_calls(
                 Arg::Spread(_) => false,
             });
             if clean {
-                let operand =
-                    super::correlated_access_operand(callee, args, env).unwrap_or_else(|| {
+                let operand = super::correlated_access_operand(callee, args, env, interner)
+                    .unwrap_or_else(|| {
                         super::application::operand_from_annotated(
                             &callee_analysis.annotated,
                             &arguments,
@@ -1376,10 +1560,17 @@ fn collect_calls(
                 collect_calls(s, closure, env, cenv, interner, out);
             }
             let mut body_env = env.clone();
+            super::prebind_sibling_lambdas(m, &mut body_env, interner);
             for item in &m.items {
                 match item {
                     MatchItem::Bind(binding) => {
                         collect_calls(&binding.value, closure, &body_env, cenv, interner, out);
+                        if let crate::ast::BindTarget::Name(name) = &binding.target
+                            && matches!(&binding.value, Expr::Lambda(_))
+                            && body_env.deferred_call(name).is_some()
+                        {
+                            continue;
+                        }
                         let analysis = analyze_in_world(
                             &binding.value,
                             &body_env,
@@ -1391,6 +1582,7 @@ fn collect_calls(
                         super::analyze_bind(
                             &binding.target,
                             &analysis.annotated,
+                            analysis.image.clone(),
                             &mut body_env,
                             &mut ignored,
                             cenv,
@@ -1406,8 +1598,36 @@ fn collect_calls(
                         // over `GE(0)` instead of `GE(1)`).
                         let mut arm_env = body_env.clone();
                         let mut consumed: Option<(String, Contract)> = None;
+                        let mut consumes_match =
+                            m.scrutinee.is_none() && arm.pattern.is_none() && arm.guard.is_none();
                         if let Some(g) = &arm.guard {
                             collect_calls(g, closure, &body_env, cenv, interner, out);
+                            // Mirror live Match's dead-arm rule. A represented-exact
+                            // state can make a nested guard exactly false (`[3,2][0]
+                            // == 7`), in which case that arm contributes no required
+                            // dependency. This is GR-09's exact row/path selection;
+                            // the guard is contract-analyzed, never executed.
+                            let guard = analyze_in_world(
+                                g,
+                                &arm_env,
+                                cenv,
+                                world_for_act(closure.lambda.act_kind),
+                                interner,
+                            );
+                            let definitely_false = Contract::Equals(interner.boolean(false));
+                            if matches!(
+                                subcontract(&guard.contract, &definitely_false, interner),
+                                Verdict::Proven
+                            ) {
+                                continue;
+                            }
+                            let definitely_true = Contract::Equals(interner.boolean(true));
+                            consumes_match = m.scrutinee.is_none()
+                                && arm.pattern.is_none()
+                                && matches!(
+                                    subcontract(&guard.contract, &definitely_true, interner),
+                                    Verdict::Proven
+                                );
                             if let Some((var, region, exact)) =
                                 crate::analyzer::single_var_guard_region(g, &arm_env, interner)
                             {
@@ -1427,6 +1647,9 @@ fn collect_calls(
                             }
                         }
                         collect_calls(&arm.result, closure, &arm_env, cenv, interner, out);
+                        if consumes_match {
+                            return;
+                        }
                         if let Some((var, region)) = consumed
                             && let Some(prior) = body_env.get(&var)
                         {
@@ -1517,10 +1740,10 @@ mod graph_tests {
         // f(Number) depends on g(Number). The reverse-topological pass proves g first;
         // that result is an ordinary fact of g's complete key, not private evidence for
         // f. Later outcome dimensions must be able to consult it without re-settling.
-        factcache::clear();
         let mut i = Interner::new();
+        factcache::clear(&mut i);
         let root = f("f = (x) => g(x)\ng = (y) => y + 1\nf", &mut i);
-        let g = match root.as_closure().unwrap().env.lookup("g") {
+        let g = match root.as_fn().unwrap().capture_binding("g") {
             Some(Binding::Value(v)) => v,
             other => panic!("f must capture g, got {other:?}"),
         };
@@ -1531,7 +1754,7 @@ mod graph_tests {
             .expect("captured closure has a fact key");
         assert!(
             matches!(
-                factcache::lookup(&key),
+                factcache::lookup(&key, &i),
                 Some(factcache::Cached::Settled(BodySafety::Proven))
             ),
             "the dependency component must remain memoized"
@@ -1547,8 +1770,8 @@ mod graph_tests {
         // must never be recorded as an unconditional fact. Publishing it could
         // persist a conclusion that leaned on an unverified assumption (a proposal's
         // `Bottom` pin being the sharpest case).
-        factcache::clear();
         let mut i = Interner::new();
+        factcache::clear(&mut i);
         let g = f("g = (y) => y + 1\ng", &mut i);
         let unrelated = f("u = (n) => n\nu", &mut i);
         let args = vec![Contract::Kind(crate::contract::Kind::Number)];
@@ -1563,7 +1786,7 @@ mod graph_tests {
         let key = factcache::key(&g, &args, &Claim::Safety, &ContractEnv::new(), &mut i)
             .expect("a known closure has a fact key");
         assert!(
-            factcache::lookup(&key).is_none(),
+            factcache::lookup(&key, &i).is_none(),
             "a hypothesis-relative settlement must not be recorded as a fact"
         );
 
@@ -1571,7 +1794,7 @@ mod graph_tests {
         assert!(prove(&g, &args, &ContractEnv::new(), &mut i).is_proven());
         assert!(
             matches!(
-                factcache::lookup(&key),
+                factcache::lookup(&key, &i),
                 Some(factcache::Cached::Settled(BodySafety::Proven))
             ),
             "the clean settlement publishes normally"
@@ -1648,6 +1871,55 @@ mod graph_tests {
         assert!(
             !matches!(v, BodySafety::Refuted(_)),
             "no refutation without a represented witness: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_numeric_payload_closes_only_through_an_operation_verified_domain() {
+        // GR-19's safety half. `n` is the descending coordinate; `acc` is not a
+        // termination measure, but every recursive edge maps Number × Number back to
+        // Number through the ordinary Add rule. The graph proposes that one fixed fact
+        // domain and proves it by induction instead of walking 5 → 4 → … concretely.
+        let mut i = Interner::new();
+        let sum = f(
+            "f = (n, acc) => n <= 0 ? acc : f(n - 1, acc + n)\nf",
+            &mut i,
+        );
+        let five = Contract::Equals(i.integer(5));
+        let zero = Contract::Equals(i.integer(0));
+        assert!(
+            prove(&sum, &[five, zero], &ContractEnv::new(), &mut i).is_proven(),
+            "the numeric payload invariant must close the safety graph"
+        );
+    }
+
+    #[test]
+    fn a_numeric_payload_proposal_never_hides_a_bad_edge() {
+        // The proposal is not `Equals(number) → Number` widening. Every changed payload
+        // expression must itself be a safe numeric transfer. This edge fails that check,
+        // and the ordinary body proof retains the concrete Add refutation.
+        let mut i = Interner::new();
+        let bad = f(
+            "f = (n, acc) => n <= 0 ? acc : f(n - 1, acc + \"x\")\nf",
+            &mut i,
+        );
+        let five = Contract::Equals(i.integer(5));
+        let zero = Contract::Equals(i.integer(0));
+        let args = [five, zero];
+        assert!(
+            crate::analyzer::grounding::numeric_payload_orbit_domain(
+                &bad,
+                &args,
+                &ContractEnv::new(),
+                &mut i,
+            )
+            .is_none(),
+            "the fixed proposal must decline before fact settlement"
+        );
+        let verdict = prove(&bad, &args, &ContractEnv::new(), &mut i);
+        assert!(
+            !verdict.is_proven(),
+            "an unsafe payload edge must not be generalized away: {verdict:?}"
         );
     }
 }

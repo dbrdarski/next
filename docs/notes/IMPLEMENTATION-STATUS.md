@@ -8,6 +8,13 @@ is built, what is trusted, or what to do next*, **this file wins**.
 design. It does not rewrite history: contradictory documents keep their text and are *labelled*
 below. Design authority remains entirely with the manifest-verified normative specifications (§1).
 
+**Author amendment recorded 2026-08-08.** The later ruling on recursive function identity
+supersedes the `GroupTemplate` / group-level code-identity portions of the manifest-protected μ
+v0.5, application v0.8, and compendium text: recursive groups are construction windows only.
+Identity is each function's canonical positional code applied to its immutable positional capture
+graph. The protected files remain unchanged pending a controlled normative revision; the ruling,
+implementation, and tests are recorded in `DECISIONS.md` and below.
+
 **Doc status vocabulary used here:** `CURRENT` · `HISTORICAL` (true when written; not guidance) ·
 `SUPERSEDED` (contains guidance that must not be followed) · `KNOWN UNSOUND` (code that can return
 a wrong verdict).
@@ -331,11 +338,15 @@ declared domains. Named residues: exported slots (no check-mode scope binding �
 runtime-verified) and whole-module contract access in contract seats. Detail in
 `DECISIONS.md` (2026-08-04).
 
-**RT-09 landed (2026-08-04): the annotated instance cache.** `region::instance_table` — one
-derivation and one allocation per `(shape, capture tuple, named contracts)` instance,
-consolidating the seven call sites that rebuilt the instantiated table by hand. α-variants
-share through canonical shape identity; different captures are different instances. Multi-param
-joins when its capture substitution lands. Detail in `DECISIONS.md` (2026-08-04).
+**RT-09 landed (2026-08-04; immutable-query corrections 2026-08-08): the instance memo.**
+`region::instance_table` performs one derivation and returns one answer allocation per complete
+query `(canonical applied function ValueRef, named contracts)`, consolidating the seven call sites
+that rebuilt the instantiated table by hand. The function value determines its canonical code,
+capture graph, parameter form, and one retained source representative while cached `Row`s remain
+source-spelled. α-variants that universal interning resolves to one function therefore share that
+representative and rows; distinct canonical values cannot exchange them.
+Single- and multi-parameter tables use the same immutable memo family. Detail in `DECISIONS.md`
+(2026-08-04 and 2026-08-08).
 
 **Multi-parameter capture substitution landed (2026-08-04):** the positional regionalizer
 reads captures through the same case inventory (singleton exact per position; bounded
@@ -343,12 +354,14 @@ may-region; sibling params stay case (c)); `instance_table_multi` joins the RT-0
 three multi consumers share one derivation per instance. Detail in `DECISIONS.md`
 (2026-08-04).
 
-**The C§13.4 layer-2 join landed (2026-08-04):** fact and instance keys carry `ShapeKey` —
-SCC members key by their canonical member key within the serialized group template
-(`canonical_group_keys`, the μ package's Algorithm A artifact, now analyzer-consumable);
-spelling- and interner-independent, pinned by α-variant groups in separate interners; sibling
-captures excluded; ambiguous naming falls back soundly to the per-lambda shape. Law 2/4 and
-symbolic-instance keys stay deferred. Detail in `DECISIONS.md` (2026-08-04).
+**The imported layer-2 group identity was removed (2026-08-08) [user ruling].** Fact and RT-09
+instance queries key directly by the canonical applied function `ValueRef`. Recursive sibling
+edges are ordinary positional capture-graph edges already represented by that value; no analyzer
+pass reconstructs source groups, serializes μ-refs, assigns group slots, or excludes sibling
+captures to manufacture a second identity. Symbolic instances now use interned canonical code
+applied to an interned positional capture-contract tuple; symbolic fact queries add arrived
+arguments and named contracts under the same interner owner. The original 2026-08-04 join remains
+in `DECISIONS.md` as superseded provenance.
 
 **The guards' own path demands landed (2026-08-04) — a measured false accept closed.** The
 partition verify paths analyzed only row results; a guard that traps (mixed `+`) or tests a
@@ -434,37 +447,54 @@ discovery accepted a covering published fact and dropped the node, verification 
 only graph-derived hypotheses — so a `where` could change a *call site's* verdict, against
 E11's "no new caller obligations". Both now call one read-only `safety::established`
 (hypotheses, then published facts by coverage). Pinned as conformance `where_isolation`:
-across five declared domains, adding a call adds no error. B4 (symbolic instances) is
-untouched and still open. Detail in `DECISIONS.md` (2026-08-06).
+across five declared domains, adding a call adds no error. At that checkpoint B4 remained
+open; the contract-level and canonical-identity landings below close its acyclic source path.
+Detail in `DECISIONS.md` (2026-08-06).
 
-**Contract-level analysis instances landed (2026-08-06) — C§13.2's "plumbing".** A lambda
-with a non-singleton capture now carries `Known([Instance{shape, capture contracts}])`
-beside `Kind(Function)`; both safety branches pass the **annotated** produced contract so
-the metadata survives; a seat with a single Pure instance resolves through it (body walked
-with capture contracts + argument tuple, `ACTIVE_INSTANCE_SHAPES`-guarded). A factory
-product built from a declared domain is callable at last — the former "B4", which was
-specified rather than open. Owed: instance unions, non-Pure kinds, symbolic fact keys
-(`OwedItems` §1a). Pinned as conformance `contract_level_instances`. Detail in
-`DECISIONS.md` (2026-08-06).
+**Contract-level analysis instances landed (2026-08-06; canonicalized 2026-08-08) —
+C§13.2's "plumbing".** A lambda with a non-singleton capture carries
+`Known([Apply(canonical code, positional capture contracts)])` beside `Kind(Function)`;
+both safety branches pass the **annotated** produced contract so the metadata survives.
+Application now walks every live member of `Known(S)`, admits every act kind through the
+ordinary seat-world rule, and settles bodies through interner-owned symbolic facts keyed by
+the full instance plus arrived arguments and named contracts. A repeated code node closes
+only when the active full instance/domain covers it; another capture tuple or uncovered
+domain is safety-unproven, never silently accepted. Pinned by `contract_level_instances`,
+the symbolic-instance identity/coverage unit rows, and the instance-union traversal row.
+
+**Recursive local calls over outer arguments landed (2026-08-08; eagerness correction):**
+analysis does not materialize a cyclic `AnalysisContract` closure graph. The source closure
+forms only when the outer function executes. A direct local call is instead closure-converted
+for the judgment: arrived outer bindings become leading arguments of an analyzer-only closed
+fact identity (`f(limit, n)`), enclosing-function discovery records the dependency, and the
+ordinary safety/return/completion/grounding graph stops at `f(limit, n - 1)` to judge drift.
+Invariant environment positions are carried, not treated as termination measures. Pinned live by
+`cli_recursive_local_call_carries_outer_arguments_lazily`.
+
+**GR-19 numeric payload safety and GR-26 local Fibonacci released (2026-08-08).** The
+late local-call correction made GR-26's already-grounded `go` fact close; its stale ignore is
+removed. GR-19 exposed the adjacent, distinct case: `sumUntil(n, acc)` descends in `n` while
+`acc` changes through `acc + n`. Discovery still does not unfold the concrete chain. At the
+repeated edge it proposes one advance-bounded fact domain: the existing descent certificate
+supplies `n`'s orbit envelope, while a changed non-measure position may become `Number` only
+when the arrived argument is proven Number and every written recursive expression for that
+position is a safe primitive transfer whose output remains within Number. The ordinary joint
+fact pass must then prove the whole body over that domain. This is the fixed GR-19 extraction
+rule, not kind-menu widening, accumulated reaching domains, execution, or a termination
+measure for `acc`. A nonnumeric-edge twin proves the proposal declines before settlement.
 
 **Union remainders empty out (2026-08-07):** `Contract::difference` now distributes over
 union arms (`(X∪Y)∖Z = (X∖Z)∪(Y∖Z)`), `Equals(v)∖Z` reduces to `Bottom` by membership when
 `Z` contains `v`, and `union` drops `Bottom` arms. Before this, an ordered walk's remainder
 became an opaque stack of `Difference` nodes and **three** exact point arms exactly covering
 a three-member union were not proven exhaustive (two were). Pinned as conformance
-`union_remainders`. The author's worked example's inner matches now prove; its exit match
-still needs the operation-image work (A6/Thread D). Detail in `DECISIONS.md` (2026-08-07).
+`union_remainders`. This was the prerequisite for A6's routing-forced operation images.
+Detail in `DECISIONS.md` (2026-08-07).
 
-**Exact operation images, routing-forced (2026-08-07) — A6's first slice [author scope].**
-Completion is judged coarsely first; **only** if that fails does the same judgment re-run
-with the rulebook distributing over finite point operands (capped at 256 combinations;
-beyond it the coarse verdict stands). The mode is part of the memo key, so a cached coarse
-`Unproven` cannot short-circuit the retry. Soundness is one-directional: the exact image is
-a subset of the hull, so the retry only ever turns unproven into proven — the missing-arm
-variant is still refused. The author's six-arm `subtotal = rate * seats` example and the A6
-flagship both pass now. Pinned as conformance `exact_images`. Chaining, provenance sharing
-and the general lazy-image representation are deliberately not built. Detail in
-`DECISIONS.md` (2026-08-07).
+**Exact operation images, routing-forced (2026-08-07) — A6's first slice [superseded
+mechanism].** The initial whole-body coarse-then-exact retry proved the ruling's examples,
+then was deleted when the held-image mechanism landed. The historical measurement remains:
+the author's six-arm product and A6 flagship accept; a genuinely missing arm is refused.
 
 **A7 landed (2026-08-07):** a `where` now attaches to a binding proven to hold an exact
 function value — `c = makeCounter(5)`, `c where (Number) => Number`. `collect` resolves the
@@ -474,15 +504,20 @@ analysing every non-lambda binding in the declaration pre-pass regressed the non
 mutual pair. Pinned as conformance `where_on_products`. Detail in `DECISIONS.md`
 (2026-08-07).
 
-**Held images, and chaining (2026-08-07) — A6's mechanism.** `domain::HeldImage` rides on
-`AnalysisContract::Leaf` beside the coarse contract; `analyze_primop` holds it when the
-operands resolve to finite point sets, `analyze_match` forces it at the scrutinee. An
-operand that itself holds an image is carried as `ImageOperand::Nested`, so chains stay
-exact (`p{1,2,5} → a{2,4,10} → b{20,40,100}`); forcing resolves depth-first and budgets on a
-bound computed without forcing. The earlier whole-judgment retry, its mode flag and its
-memo-key field are **deleted** — one mechanism, and the draft's §11 items 2 and 3 are
-closed. Pinned as conformance `exact_images` (6 rows). Detail in `DECISIONS.md`
-(2026-08-07).
+**Held images, correlated branch cells, and narrowing by arrival (completed 2026-08-08) —
+A6's mechanism.** The cheap rulebook result remains the hull. `analyze_primop` carries an
+unforced `HeldImage` in the expression environment; a routing match alone forces it.
+`BranchSet` cells carry nominal source assignments, and operation composition is a natural
+join: a source reused through a derived node stays diagonal, while equal-contract independent
+parameters still cross. Match outputs retain the arriving assignments, so routing a derived
+value narrows every source and derived local simultaneously (BR-09). Nested images preserve
+chains. The former 256-combination cutoff is gone: finite represented cells are the work,
+with no fuel or global precision mode. Images are deliberately absent from
+`AnalysisContract`, so calls, returns, structures and recursive/fact boundaries collapse to
+ordinary contracts (BR-15) and no memo key depends on source allocation. The original retry,
+mode flag and mode-key field remain deleted. Pinned by `exact_images`, including shared,
+independent, shadowed, BR-09, missing-arm and 289-cell rows; `exact_image_reach` pins rebuilding
+fresh local cells after a call-boundary collapse. Detail in `DECISIONS.md` (2026-08-08).
 
 **Normalization wired (2026-08-07).** The kernel-AST §5 phase existed with its rules,
 corpus and harness — and was never called. `desugar::lower_program` (desugar ∘ normalize) is
@@ -494,16 +529,98 @@ rewrites (`x + x → 2*x`, today applied only to function-shape identity) should
 the phase, which μ §8 makes a semantics-version question. Detail in `DECISIONS.md`
 (2026-08-07).
 
-**A memo's key must determine its value (2026-08-07) — a correctness fix.** Analyzing one
+**The first RT-09 query repair (2026-08-07) was necessary but incomplete.** Analyzing one
 program changed the verdict of the next: a program that compiles **alone** and **on a fresh
 thread** was **rejected** when another ran first. Cause, measured: RT-09's `InstanceKey` is
 built from the **α-renamed** shape, so `(n) => … n …` and `(k) => … k …` key identically —
 while a cached row's `result` is an expression in the *original* spelling, and the lookup hands
 back this closure's parameter beside those cached rows. The analyzer binds `k`, the rows ask for
-`n`, nothing resolves. Fixed by completing the key with the parameter names; **no cache clearing
-anywhere** — an earlier clear-at-entry fix was expiry rather than memoization and was reverted
-[user]. The fact cache was ruled out by instrumentation (zero cross-compilation hits). Pinned as
-conformance `analysis_is_isolated_per_program`. Detail in `DECISIONS.md` (2026-08-07).
+`n`, nothing resolves. Adding the parameter names fixed that witness, with **no cache clearing**;
+an earlier clear-at-entry workaround was expiry rather than memoization and was reverted [user].
+The 2026-08-08 audit then found the same class through recursive sibling spelling (`cd` versus
+`loop`): the process-thread table exchanged rows between separate identity owners. The complete
+correction is owner-local knowledge plus the retained-representative query component above. Pinned as conformance `analysis_is_isolated_per_program`
+(AI-01…04). Detail in `DECISIONS.md` (2026-08-07 and 2026-08-08).
+
+**Persistent analyzer memos migrated to the interning authority (2026-08-08) [user direction].**
+`MemoInterner` is a generic, type-indexed immutable query→answer store owned by `Interner`; the
+first answer publication wins and subsequent hits reuse that allocation. The existing persistent
+families — proven facts, RT-09 single/multi rows, and local group construction — no longer live in
+process thread-locals. Fact and RT-09 queries use the canonical function value and an interned
+named-contract environment; facts additionally intern their input and claim. Only active-settlement recursion markers remain
+thread-local because they are dynamic control state, not knowledge. No project/generation identity
+is present in a query: sharing one `Interner` deliberately shares identities and facts today, and
+a future process-global owner needs no query migration. The default check convenience API still
+creates a fresh owner; making the runtime owner global is separately blocked by the current
+`Rc`/location/retention model. Runtime calls remain never memoized. This is the substrate and the
+migration of every persistent analyzer memo that currently exists, not completion of the still
+absent C§13.4 template/evaluation/subcontract families.
+
+**Canonical Pure closure conversion ruled and landed (2026-08-08) [user].**
+Free lexical scope is represented as an explicit positional capture parameter space in canonical
+IR, separate from the function's user-visible parameters. Thus `@mutable x = 1; f = () => x` has
+the conceptual closure-converted form `(capture x) => (() => x)`: formation supplies the current
+**value** of `x` once, and calls still supply only `f`'s declared empty parameter list. A later
+write to the slot does not alter this pure closure's captured value. Self-reference is the same
+mechanism over an open graph: `loop = x => loop(x)` has conceptual form
+`(capture loop) => (x => loop(x))`; the construction window supplies the self edge and closes the
+rational graph before interning. This is canonical IR, not new surface syntax and not a runtime
+extra call.
+
+The final function value is therefore canonical code plus a positional capture-value vector (or
+the corresponding closed recursive-group graph), not the current raw source `Lambda + Rc<Scope>`
+payload. Source may survive as non-identity diagnostic metadata. This also removes a pure read's
+slot location from function identity: equal current values produce equal pure closures regardless
+of which slot supplied them; different current values remain different capture pointers.
+
+**Landed 2026-08-08.** `FnValue` now carries canonical code plus an ordered capture vector;
+invocation executes that canonical code in a fresh frame populated as `@cap0`, `@cap1`, … and no
+longer executes a retained source `Lambda + Env`. The source lambda remains analyzer/diagnostic
+metadata only. Runtime construction of a Pure closure resolves a slot capture immediately through
+read-your-writes and stores the current interned value. Consequently equal snapshots from distinct
+stores/slots intern together, different snapshots do not, and a later write is invisible to the
+already-formed Pure closure. The prior shared-interner `SlotId(0)` alias is pinned as a cross-store
+regression.
+
+Construction-window-only `Deferred` operands may temporarily retain the construction scope. Joint
+close rewrites them to ordinary value captures or positional `RecursiveGroup` edges, canonicalizes
+the complete graph, updates every root through verified redirects, and locks the group target
+vector. No exposed Pure closure retains a `Deferred` operand or `Location`. Function publication
+now requires the **entire reachable capture graph** both to resolve and to be materially finalized:
+no raw `Deferred` operand may remain anywhere in it. Checking only the immediate vector admitted
+the second member of a mutual pair prematurely and broke completion induction; treating a
+dynamically resolvable `Deferred` edge as publishable also let an acyclic wrapper retain a
+pre-close recursive intermediary instead of the canonical root. Both paths are pinned.
+Redirects also carry a weak source-identity guard, because address-only redirects became stale once
+provisional closures could be reclaimed and their addresses reused. The current Rust backing for a
+locked recursive group is a vector of canonical root handles; replacing that backing with the
+specification's one-allocation/interior-offset layout remains a representation/reclamation
+refinement, not a semantic or identity-path gap.
+
+**No Mutator ruling is implied or needed here:** Mutators are their own class. Their `Write` nodes
+resolve the target binding's compiler-provided setter/update channel; in NEXT that setter stages
+into π and the existing outermost-completion rule publishes. It is not a hidden location capture in
+an ordinary Pure function. This scope correction follows the ODDO precursor audit at commit
+`9966261`: ODDO lowers state to getter/setter pairs, passes dependencies as generated parameters,
+and makes the mutator finalizer invoke the setters. ODDO's current `@mutable` implementation still
+uses a JavaScript `let` directly, so NEXT takes the architecture, not a one-to-one lowering: both
+`@state` and `@mutable` writes use their binding's setter internally, with only state adding its
+reactive publication behavior.
+
+**Mutator transient representation is directed but deferred (2026-08-08) [author ruling;
+non-blocking].** The relevant ODDO runtime mechanism is its recursive copy-on-write proxy, not just
+the generated setter call: a mutator opens current state behind a transient proxy; the first write
+clones the touched aggregate, nested child writes propagate replacement toward the root, and the
+finalizer materializes the resulting root for the setter. NEXT will use that architecture with its
+own value law: committed inputs remain immutable and interned; a Mutator may open non-interned
+mutable drafts, copy only the path it writes, and share/join those drafts across nested Mutators.
+Outermost successful commit then locks/freezes and interns the changed structure bottom-up before
+staging/publication applies the canonical-pointer equality guard. A draft is not a language value,
+must not enter the interner, and must not escape its transaction. The current oracle has no such
+draft layer: it eagerly constructs and stages complete interned replacement `ValueRef`s in π. That
+already realizes the specified transaction observations; replacing its internal representation
+with transient COW is a later Mutator implementation slice and does not block canonical Pure
+closure conversion or the interner/memo migration.
 
 **Local functions resolve (2026-08-07) [author ruling].** A block's named lambda bindings are
 built as closure values *before* any initializer is analyzed, sharing one scope — the
@@ -513,39 +630,86 @@ closure value could be made, and every call resolved as "not a known function": 
 was invisible to the whole analysis and its termination was never adjudicated. Now `fib`'s
 local `go` is **Grounded on both edges** and a diverging local is **Refuted** with the arriving
 argument. Pinned as conformance `local_functions_resolve`. GR-26 moved from a resolution gap to
-the same body-safety gap as GR-19. Detail in `DECISIONS.md` (2026-08-07).
+the same body-safety gap as GR-19 at that checkpoint; both were released by the 2026-08-08
+fact-domain corrections recorded above. Detail in `DECISIONS.md` (2026-08-07/08).
 
-**Principle 9's coverage hole closed (2026-08-07) [author ruling] — a soundness fix.**
+**Principle 9's recursion-discovery coverage hole closed (2026-08-07; wording corrected
+2026-08-08) [author ruling] — a soundness fix.**
 `ground_demand` opened with `if !is_recursive(callee) { return; }`, so a seat whose callee
-merely *reached* a diverging function was never checked and the program compiled. Measured:
+merely *reached* recursion was never checked and the program compiled. Measured:
 `wrap = (k) => [spin(k)]`, the block form, and all three act worlds all **compiled**. Only a
 body that was exactly a call was caught; act bodies are blocks, so every act was in the hole.
-Fixed by late resolution — when the seat callee is not itself on a cycle, walk its body under
-the arriving domain and adjudicate what it actually calls, with the arguments those calls
-receive. Carrying arguments down is what keeps `run = (n) => [countDown(n)]` at `run(5)`
-accepted. No new machinery: `analyze_instance_body` already guards repeated shapes. Pinned as
-conformance `termination_reaches_through_a_caller`. Closed Phase GR rows GR-13 and GR-16;
-GR-30 moved from unchecked to an honest coverage gap. Detail in `DECISIONS.md` (2026-08-07).
+Fixed by late resolution: when the seat callee is not itself on a cycle, walk its body under
+the arriving domain to discover the calls it actually makes, with the arguments those calls
+receive. When a call closes the active call cycle, expansion stops and grounding adjudicates
+that cycle from the recorded edge transformations and drift. The walk discovers recursion; it
+does not recursively solve termination. Carrying arguments down is what keeps
+`run = (n) => [countDown(n)]` at `run(5)` accepted. No new machinery:
+`analyze_instance_body` already guards repeated shapes. Pinned as conformance
+`termination_reaches_through_a_caller`. Closed Phase GR rows GR-13 and GR-16; GR-30 moved
+from unchecked to an honest coverage gap. That final gap closed on 2026-08-08: positive
+progress/landing certificates now see through a block containing exactly one statement, whose
+completion behaviour is identical to that statement's. The projection is a separately memoized
+immutable view in the shared `Interner`; general block sequencing and the stability-sensitive
+refutation view remain untouched. GR-30 now proves ordinary completion and mints no
+`WorldDecided` label. Detail in `DECISIONS.md` (2026-08-07/08).
 
 **`++` joins Tuples too (2026-08-07) [author ruling].** Two sequences of the same kind —
 Strings or Tuples, never mixed, never numeric. Tuple results route through
 `Contract::concat`, the same smart constructor `[...a, ...b]` uses, so segment structure
 survives. Pinned as conformance `concat_over_tuples`. It unblocked `GR-29`, which now passes —
-the row asserting no false cycle refutation is minted from an unestablished path. `GR-22B` and `GR-03A` remain blocked on an
-**unimplemented refutation route**: GR-11's closed orbit was never built, so `drift_away` — the
-numeric drift-away certificate — is the only refutation producer. Detail in `DECISIONS.md` (2026-08-07).
+the row asserting no false cycle refutation is minted from an unestablished path. At that
+measurement `GR-22B` and `GR-03A` exposed the missing GR-11 closed-orbit producer; the
+2026-08-08 increment below closes that route. Detail in `DECISIONS.md` (2026-08-07/08).
 
-**Phase GR started (2026-08-07) — 23 specimen rows, 15 green, 8 measured gaps.** Conformance
+**Phase GR initial measurement (2026-08-07) — 23 specimen rows, 15 green, 8 measured gaps.** Conformance
 `grounding_specimens`, one test per Grounding Specification §15 specimen, with the P-1 flip
 applied (every "unproven" row asserts rejection *and* that no refutation was minted). It was
-proposed to test grounding; **only one of the four gaps it found is in grounding.** GR-08
+proposed to test grounding; **only one of the first four gaps it found was in grounding.** GR-08
 oscillator is a grounding gap (cycle composition does not fire); GR-19 is a *safety* gap
 (grounding proves it, body safety rejects it); GR-26 is a *resolution* gap (a recursive
 function inside a block never reaches the prover); GR-13/16 revealed that **act-world
 recursion raises no termination demand and compiles** — `@mutate spin = () => { spin() }` is
 accepted. Principle 9 is enforced in the pure world, partially in the effect world, and not at
 all in the mutation world. The battery also caught a vacuous assertion in its own `gr_30`
-(`all()` over an empty vector). Detail in `DECISIONS.md` (2026-08-07).
+(`all()` over an empty vector). This paragraph is the arrival measurement: GR-13/16, GR-19 and
+GR-26 are now live and green. GR-08 subsequently went live on 2026-08-08 through constant-drift
+edge-labelled cycle composition; variable/multi-parameter ProgressRange composition remains owed.
+Detail in `DECISIONS.md` (2026-08-07/08).
+
+**GR-03B exact tuple chain released (2026-08-08).** A written exact flat tuple now follows
+GR-09's selected dependency path through nested guards: `[3, 2] → [2] → []`. Slice transfer
+already preserved the singleton structurally as `Tuple([Equals(2)])`; it is now reified to the
+same interned `Equals([2])` value used by the fact key. The ordinary global dependency graph then
+settles safety, completion, and return facts over the three exact nodes before the grounding
+verdict licenses the call. No runtime call is evaluated or memoized.
+
+The termination candidate is deliberately the acyclic fragment: one direct-self Pure function,
+one flat exact tuple argument, and strict top-level length decrease on every selected recursive
+edge. Same-length recursion, `f([l])` structural nesting, Mutators, mutual control locations, and
+the pooled zero-drift/closed-orbit cases decline. Exact aggregate operands now use their existing
+annotated singleton value in the oracle-backed primitive fold, so `[] == []` and `[3,2][0] == 7`
+select exact Match paths instead of falling back to `Boolean`. The same canonical singleton
+normalization is used by fact-domain coverage, integrating the chain with the shared interner
+rather than creating a chain-local identity table. GR-03B is live. The following GR-11 increment
+reuses this graph for the cyclic ending; GR-20 remains the separate derived-segment gap. Detail in
+`DECISIONS.md` (2026-08-08).
+
+**GR-11 exact closed-orbit refutation released (2026-08-08).** The direct-self exact tuple graph
+now keeps GR-09's ordered strict dependencies. A reached back edge refutes only when every earlier
+dependency on every chosen edge has an acyclic exact closure and independently proves
+`Completes`; an unproven prefix makes the candidate contribute nothing, preserving GR-29. The
+certificate records the canonical root witness, cycle entry, edge path, and completing prefixes.
+`Refutation.witness` is consequently a canonical interned `ValueRef`, not a numeric-only
+`Rational`; numeric drift-away diagnostics retain their exact number through that value.
+
+GR-03A now refutes from the written root `[3, 7, 2]` after reaching `[7, 2]`, whose selected path
+self-loops. GR-22B records `f([])` as the completing prefix before the `[7] → [7]` edge and refutes
+with written witness `[7]`. This is finite symbolic graph discovery over pooled root leaves, not
+runtime execution or a recursive termination solver. The landed scope remains one direct-self
+Pure function over one flat exact tuple; mutual control factor Q, body-constant insertion, and
+the wider GR-10 exact-chain license remain conservative `Unproven`. GR-20 is now the only ignored
+measured Phase-GR coverage target. Detail in `DECISIONS.md` (2026-08-08).
 
 **Consequence suppression (2026-08-07) [author ruling].** An operation whose operand already
 produced an Error now records nothing of its own and yields `Bottom` — it cannot run, so it has
@@ -668,11 +832,11 @@ noted so no one implements a phantom; correcting them is an author/design action
 |---|---|---|
 | `analyzer::bodycheck` and its reaching core | **DELETED 2026-08-01** | The known-unsound forward reaching-domain checker is no longer compiled or present. `machinery_gate` bans the file, module identifier, and `check_recursive_body` / `reachable_rows` / `grow` identifiers from `src/` |
 | Safety-unproven policy | **RESOLVED 2026-08-01 — RULED [user]: it blocks** | `BodySafety::Unproven` and `OpSafety::Unproven` remain typed through `Analysis` and program records. Their fact-layer diagnostics are advisory; executable/declared consumers add the unsuppressible Error after retaining the typed verdict. Completion (`MayFallThrough`) remains a different judgment class (application §1.6) |
-| `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **WIRED AT PROGRAM SEATS 2026-08-03** under the stamped Principle 9 [user: gray is dead — unproven grounding is an error, never a warning]. Every distinct (recursive callee, argument domain) at an executable seat, and every `where` over its declared domain, adjudicates a typed `GroundingDemand`; `Refuted` errors with its witness, `Unproven` errors honestly | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Its *coverage* gaps (GR-18 point-base, peel-k, oscillator, closed-orbit, §8 WorldDecided, multi-param mutual) remain owed — incompleteness (→ `Unproven`), which under the stamp **rejects**; broadening coverage is now precision work with a live consumer |
-| `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT AND WIRED 2026-08-01** | Ordinary known-closure application consumes `BodySafe(instance, I)`. Discovery closure → SCC collapse → reverse-topological → one joint vector pass; dependencies proved by the outer pass are memoized under their own complete keys. `countDown` over a covering declared domain and a divergent self-loop prove; an uncovered repeated-shape chain remains **Unproven**, never a manufactured refutation. Mutual and multi-parameter changed-domain executable calls now reject at the seat because safety is unproven; finer classification remains separately owed |
-| `oracle::mu` — construction windows + **Algorithm A group templates** | **RUNTIME WINDOWS WIRED; SERIALIZED TEMPLATE PARTIAL/UNWIRED** | The reference-SCC walk supplies the runtime construction windows used by module/block evaluation. The separate serialized layer-2 artifact has positional μ-refs, genuine-SCC grouping, and canonical slot order, but is still test-only; law 2 (nested-binder merge) and law 4 (partition-refinement slot merging) remain deferred. Runtime MU-14/15/16 identity no longer depends on that artifact: value-graph close plus Algorithm B realizes those rows at construction. |
+| `analyzer::grounding` — `ground()` / `drift_away` / `Verdict` | **WIRED AT PROGRAM SEATS 2026-08-03** under the stamped Principle 9 [user: gray is dead — unproven grounding is an error, never a warning]. Every distinct (recursive callee, argument domain) at an executable seat, and every `where` over its declared domain, adjudicates a typed `GroundingDemand`; `Refuted` errors with its canonical root witness, `Unproven` errors honestly | The §6 slice is complete: forced-path selection, witness-bearing `Refuted(Refutation)`, superseded header claim removed. Constant single-parameter mutual SCCs check every edge-labelled simple cycle and close member-specific safety orbits (GR-08). The direct-self exact tuple graph proves strict descent and carries GR-11 required-dependency closed-orbit evidence. Remaining *coverage* gaps include peel-k/restrict-len, variable and multi-parameter ProgressRange composition, mutual/body-constant exact-chain extensions, and GR-20's derived segment facts — incompleteness (→ `Unproven`), which under the stamp **rejects**; broadening coverage is precision work with a live consumer |
+| `analyzer::safety` — the **candidate graph** (§6 / C§13.2a) | **BUILT AND WIRED 2026-08-01; CARRIED/NUMERIC-PAYLOAD DOMAINS 2026-08-08** | Ordinary known-closure application consumes `BodySafe(instance, I)`. Discovery closure → SCC collapse → reverse-topological → one joint vector pass; dependencies proved by the outer pass are memoized under their own complete keys. `countDown`, invariant multi-argument descent, GR-19's operation-verified numeric payload, and a divergent self-loop prove. An unsupported uncovered repeated-shape chain remains **Unproven**, never a manufactured refutation; general call-edge-derived domains remain separately owed. |
+| `oracle::mu` — recursive construction windows | **WIRED; IDENTITY-FREE [user, 2026-08-08]** | The reference-SCC walk only schedules allocation and joint closure during module/block evaluation. The serialized group artifact, μ-ref serializer, and slot-permutation search are deleted. Canonical code plus the closed positional value graph owns identity; Algorithm-B exact verification remains inside recursive value interning. |
 | `oracle::canon` — per-lambda shape | **BUILT, wired** | α-renaming (`$0`), capture slots (`@cap0`), polynomial NF. This is what `make_closure` (`eval.rs:239`) actually calls |
-| **Layer-2 template → analyzer-key join** | **LANDED 2026-08-04** | `factcache::ShapeKey`: SCC members key by their canonical member key within `mu`'s serialized group template (spelling- and interner-independent; siblings excluded from capture tuples); lone functions stay per-lambda. Ambiguous member naming falls back to `Solo` (sound, misses only). Law 2/4 refinements and symbolic-instance keys remain deferred. |
+| Recursive analyzer instance identity | **CANONICAL APPLIED IDENTITY + LATE LOCAL CALLS 2026-08-08 [user]** | Concrete `FactKey` and RT-09 consume the canonical function `ValueRef`; flowing function products may carry canonical code + an interned positional capture-contract tuple as metadata, and symbolic facts add arrived/named contracts. Direct local recursion over outer arguments uses analyzer-only closure conversion with those bindings as ordinary arguments; it constructs no cyclic symbolic source value. No `ShapeKey::Group`, source sibling reconstruction, or member key remains. |
 | `analyzer::induction` pipeline — candidate discovery, domain derivation (`obligation::accepted_domain`, a **dissolved** concept), `summarize_instance` consumption, same-arity domain propagation (marked interim), candidate-to-candidate-only edges | **NON-AUTHORITATIVE** | Not a ready foundation. **Its independently valid SCC utilities (e.g. `scc_reverse_topo`, the reverse-topological order) may be reused.** There is **no** authorized broad replace-and-rebuild project |
 
 **Not quarantined** (trusted): the lexer, parser, desugar, oracle interpreter, normalization harness,
@@ -696,9 +860,11 @@ Resolved by the 2026-08-01 wiring:
   discovery reaches the changed-domain dependency, §4a cuts off the repeated shape, and
   safety-unproven blocks at the application seat. The graph verdict is honestly **Unproven**, not
   permanently Refuted: no admitted realized witness has been attached.
-- **2a multi-parameter domain change:** likewise no longer a false acceptance. Until §5
-  argument-tuple projection exists, the changed-domain repeated-shape fact remains Unproven and the
-  seat rejects. The missing projection is now a precision/classification gap, not a soundness hole.
+- **2a multi-parameter domain change:** likewise no longer a false acceptance. The §5
+  positional partition is live; invariant non-measure positions and GR-19's operation-verified
+  numeric payload now close without unfolding. Other changed-domain repeated shapes remain
+  Unproven and reject. General call-edge-derived domains are still a precision/classification
+  gap, not a soundness hole.
 - The broad-domain factorial safety and recursive-return tests are live again. Their `Number` fact
   covers `n - 1`; safety now consults the completion cross-claim and return induction instead of
   treating the recursive operand as a false possible fall-through.
@@ -708,8 +874,9 @@ Resolved by the 2026-08-01 wiring:
 - Direct tests of the deleted checker were removed with it. They tested implementation internals,
   not stable language IDs; their live application/graph counterparts remain.
 
-Conformance holds 11 `#[ignore]`s (6 broad Phase A · 4 module/linking · M-04). A split A-VER
-union-boundary/Indeterminate row and MU-18 are live and green.
+Conformance holds 4 `#[ignore]`s: 1 measured Phase-GR coverage gap and 3 author-gated
+adoption/world-runner rows. GR-19, GR-26, the split A-VER union-boundary/Indeterminate row,
+module/linking rows, M-04, MU-18, GR-30, GR-08, GR-03A, GR-03B and GR-22B are live and green.
 
 ---
 
@@ -792,8 +959,10 @@ realized exact witness is attached. This is the required honest voice; late-reso
 blocks the executable call. The same mechanism closes the multi-parameter false acceptance while
 leaving §5 tuple projection as an owed precision feature.
 
-**Still separate:** blocker 1b needs grounding's exact-singleton chains; blocker 3 needs structured
-completion evidence through the consumer. Neither is a reason to restore forward reaching domains.
+**Still separate (historical wording corrected 2026-08-08):** blocker 1b is the explicitly
+deferred finite-product/numeric exact-chain extension; GR-03B's v1 flat-tuple acyclic fragment is
+live. Blocker 3 needs structured completion evidence through the consumer. Neither is a reason to
+restore forward reaching domains.
 
 ---
 ## 6. Historical prerequisite slice — ✅ COMPLETE 2026-07-31
@@ -819,19 +988,20 @@ forbidden machinery introduced; existing suites unchanged. — **All satisfied.*
 
 ---
 
-## 7. Test baseline (measured 2026-08-04, not inherited)
+## 7. Test baseline (measured 2026-08-08, not inherited)
 
 | Suite | Result |
 |---|---|
-| `cargo test --lib` | **473 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
-| `cargo test --test conformance` | **244 passed, 0 failed, 11 ignored** (all feature families live; ignores = the 2 Part-D adoption gates + the world-decided gray runner stub) |
-| `cargo test --test machinery_gate` | **10 passed, 0 failed** |
+| `cargo test --lib` | **490 passed, 0 failed, 1 ignored** (the deferred-extension acceptance twin, §4) |
+| `cargo test --test conformance` | **261 passed, 0 failed, 4 ignored** in default and serial order (1 measured Phase-GR gap + 3 adoption/world-runner gates) |
+| `cargo test --test machinery_gate` | **13 passed, 0 failed** |
 | `cargo clippy --all-targets -- -D warnings` | **0 warnings** |
 | `cargo fmt --all -- --check` | **PASS** |
 | `shasum -c MANIFEST.sha256.txt` | **19/19 OK** |
 
 Earlier counts appearing in other documents (323 / 371 / 377 / 380 / 383 / 384 / 396 / 409 / 413 /
-417 / 421 / 424 / 426 / 438 / 439 / 447 / 452 / 455) are
+417 / 421 / 424 / 426 / 438 / 439 / 447 / 452 / 455 / 244 / 250 / 473) are
 **HISTORICAL**; this table is current.
-**Green ≠ complete:** the deferred finite-product extension's acceptance twin remains ignored (§4),
-and the staged work recorded elsewhere in this file remains open.
+**Green ≠ complete:** the deferred finite-product extension's acceptance twin, one Phase-GR
+coverage target, three author-gated conformance rows, and the staged work recorded elsewhere in
+this file remain open.

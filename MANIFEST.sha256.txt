@@ -1,14 +1,14 @@
-# NEXT canonical library manifest — 2026-07-30 (grounding landing; compendium 1.0.18)
+# NEXT canonical library manifest — 2026-08-08 (late local-call correction)
 # Verify repo copies against these before trusting them (the stale-upload guard).
 
-73d11be6a3470ca90a19997869e0acc96e703a8647e7ca001b573447c37a8af1  docs/normative/next-design-compendium-v1-0.md
+b8ad80f6b861d2f35709b040f09365f91d5f86a5703142011f8fe90aa0640b13  docs/normative/next-design-compendium-v1-0.md
 8df0d90721b9ff0ad661fc77c42acf115e0a1337f5de3731bb279b0326837d7e  docs/normative/next-grammar-specification-v0-1.md
 9f8f07618e592e24f94b8c1177512a0163a155e838f2de6e773fc01c7a1afe55  docs/normative/next-kernel-ast-specification-v0-1.md
-75c2fe3377ec7d49129a6c3c268d3726a9731143318552a0e4986f3d1675f003  docs/normative/next-semantics-companion-v0-1.md
+14fb8a879b044c9ac3dc3b5c897f10a9af2ca166b0d1eed4e30c9a24d166cc7a  docs/normative/next-semantics-companion-v0-1.md
 414055a97643c53c3f4709298e90f1a882ab638ad907f50322d04c185bcf4f96  docs/normative/next-test-suite-specification-v0-1.md
-26209d332f7651c07c38cdc03e92d2a1354477888555ff16ddbc1d3b662408b1  docs/normative/next-mu-canonicalization-specification-v0-5.md
+33c9752c4b1cd646f258ed4111fad8f30cf58f83adf0823255761c91bbdd0304  docs/normative/next-mu-canonicalization-specification-v0-6.md
 159a52a3f7ce6708700af7ce9b5ac5cd12bfe2ce76bd7703ebe9b7b2c2dbcda3  docs/normative/next-recursive-contracts-specification-v0-2.md
-34d1082865e137de5dcfb277f8a9f316b4482575ec0a059cbf320a103624bda5  docs/normative/next-application-induction-specification-v0-8.md
+d8ed236c1890ded874d69c6eef4fdddca9fd3d7bdcfb56545ec89fe9a713ef1d  docs/normative/next-application-induction-specification-v0-8.md
 3ec302b22ba4f67f35194b40d8ee936089961361e2e66375b3225b383c7fb0b4  docs/normative/next-tuple-length-family-specification-v0-3.md
 4df090491b1eebe90c638ec4e616efdfab25ae8cb33f26e337a79dd358bb5d68  docs/normative/next-region-table-specification-v0-3.md
 7a6bef542ce5c9947a028e5a50ccb17e391b04e3cc6e81bd337fa6dbbe472233  docs/normative/next-phase-a-worked-examples-recovered.md

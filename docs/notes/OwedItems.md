@@ -4,6 +4,16 @@
 > the later framing, while §0.1-history and any "the swap is DONE / LANDED" passages are
 > **HISTORICAL**. Historical content is deliberately left unedited.
 
+> **2026-08-08 cache reconciliation:** the generic interner-owned immutable memo substrate,
+> RT-09 single/multi instance memo, proven-fact memo, and local group-construction memo are built.
+> Historical passages below that list the instance cache as wholly owed are stale. The later
+> author ruling deletes GroupTemplate identity: concrete facts and rows key by canonical function
+> `ValueRef`; symbolic instances and facts now key by canonical code applied to interned positional
+> capture contracts plus their arrived/named inputs. The cyclic-local source item is closed by late
+> call resolution: outer bindings become ordinary fact arguments and no symbolic closure is formed.
+> Canonical source-independent row answers and final namespace/versioning policy remain owed. Calls
+> remain explicitly unmemoized.
+
 # OwedItems.md — open gaps, reconciled to the specs
 
 **Maintainer file (not spec).** This is Claude Code's development registry. The
@@ -241,19 +251,21 @@ built in code, §16 proofs owed**.
   (constant-drift refutation generalized): `drift_away` refutes any constant drift —
   descending (GR-23a), ascending, and the **period-1 self-loop** `f(n)` (GR-11 degenerate
   closed orbit); one forced linear path, witness-gated. **G-8 BUILT** (mutual recursion,
-  GR-07): the reachable closure group is the SCC; if every cross-call decreases a shared
-  single-param measure and every recursive member has a descending half-line base, every
-  cycle composes to a decrease → grounded (`isEven`/`isOdd` on `n <= 0`); the enumeration-free
-  per-edge sufficient case. Generalized the self-call walker to a group (`resolves_to_target`).
+  GR-07): the completed reachable call multigraph preserves every textual call site and checks
+  every edge-labelled simple cycle in the callee's SCC. Exact constant drifts compose across the
+  whole cycle; every cycle must have positive oriented progress and a descending half-line stop.
+  This grounds both `isEven`/`isOdd` and the mixed-sign `+2/-3` oscillator. Safety derives a
+  member-specific orbit by transporting each stop backward through the cycle's prefix drift.
   `ground` is three-voiced. Candidate-locality (GR-04). **Owed:** point-base / **Ackermann**
   (GR-18 grid + domain — `==0` stops give no lower bound), **peel-k grid** (base must cover
   lengths `0..k-1`), `restrict_len` structural facts (GR-08), nonlinear measures,
-  **oscillator** cycle composition (mixed-sign, GR-07), general **closed-orbit cycle**
-  refutation (GR-11; specimen 22b), §4 exact-singleton chains, §8 WorldDecided; multi-param
-  mutual;
-  the **wiring** into the body check (the swap gate, task #50); §13/§16 discharge (exact-chain
-  bound theorem; lex joint-settlement; multigraph decomposition lemma; per-rule soundness;
-  GR-27 preservation check). This is A-NEG's second domain source.
+  variable/multi-parameter ProgressRange cycle composition, the remaining §4 mutual-control and
+  body-constant exact-chain extensions (the strict-decreasing direct-self fragment and its GR-11
+  required-dependency closed orbit are live as GR-03A/B and GR-22B), GR-20's derived segment
+  facts, §8 WorldDecided; multi-param mutual;
+  §13/§16 discharge (exact-chain bound theorem; lex joint-settlement; multigraph decomposition
+  lemma; per-rule soundness; GR-27 preservation check). Grounding is wired at executable and
+  declared-domain seats; remaining items are coverage/discharge, not a missing consumer.
 - **Application & induction v0.8 (+0.8.2)** — design-closed (*"the design condition
   dissolved when the tuple family closed"*, C§13.2). Implementation + C§16 discharge
   owed. The 0.8.2 GR-26 effect-world seat row (consumes, never establishes).
@@ -274,11 +286,12 @@ built in code, §16 proofs owed**.
   `analyze_operation` still returns the pre-upgrade `OpResult { safety, output }`. The
   reshape lands with the region-table/demand-core rebuild.
 - **Universal interning (μ v0.5 §6) — DISCHARGED 2026-08-01.** Resolved closures
-  use the shallow `(canonical-code pointer, capture pointers/location atoms)` key;
+  use canonical code applied to immutable positional capture pointers;
   recursive SCCs stay unobservable through their construction window and close by
   fingerprint-bucket probe plus exact Algorithm-B verification. Runtime `==` is a
-  pointer test. MU-18 is live and green. The broader layer-2 GroupTemplate work in
-  §1 remains separately owed; this item no longer belongs to implementation drift.
+  pointer test. MU-18 is live and green. **Author ruling 2026-08-08:** SCCs are
+  construction windows only; the separate group-template identity described by μ v0.5
+  is superseded and has been deleted, not left as owed implementation.
 - **`Record(fields, Exact | Open)`** — openness is a Record-contract parameter
   (`HasField(k) ≡ Record({k: Top}, Open)`). I model exact `Record` + separate
   `HasField`; membership coincides, but open-record patterns lose per-field contracts.
@@ -332,40 +345,35 @@ sound.)
   diagnostic (error / goes-nowhere warning / silent) is **not explicitly ruled** — I
   found no spec statement. E10's goes-nowhere lint tier is the natural home. Narrow;
   off the recovery's critical path. **[ask-author]**
-- **F0 draft Q1 — the union rule in operation images** — hull (implemented) vs
-  distribution vs held-image. Registered here because the framing changed under
-  measurement: this is **not** a precision/cost tradeoff at the margin — the hull
-  manufactures values the program cannot produce and then rejects correct programs for
-  not handling them. Full record and decision space in **Thread D** (§5).
+- **F0 draft Q1 / A6 — CLOSED 2026-08-08.** The rulebook hull remains the cheap
+  positive-proof accelerator; routing forces a held correlated image. Branch cells,
+  chaining, arrival narrowing, collapse and no-fuel finite routing are implemented.
+  Full record in **Thread D** (§5) and `DECISIONS.md` 2026-08-08.
 - **Literal parameter patterns `(0) => …`** — E3: *"[deferred; likely excluded]"*. (Some
   analyzer tests use const params; they'd need re-basing if excluded.)
 
-### 1a. Analysis-instance metadata for factory products [added 2026-08-06]
+### 1a. Analysis-instance metadata for factory products [CLOSED 2026-08-08; late local-call correction landed]
 
-**C§13.2, specified and unimplemented.** *"A call site resolves its callee to an analysis
-instance (shape + environment contracts — exact for const closures, **contract-level for
-factory products like `makeAdder(someInput)`**)"*; function-valued results *"retain their
-possible analysis instances … as analyzer metadata riding alongside their coarse
-`Kind(Function)` contract, so callables … arrive at call sites with instances recoverable
-(**plumbing, not a contract constructor**)."*
+C§13.2's ordinary factory path is implemented. A lambda with non-singleton captures carries
+`Known(S)` metadata whose members are canonical per-function code applied to interned positional
+capture-contract tuples. Calls traverse every live member; body answers use interner-owned facts
+keyed by the full symbolic instance, arrived arguments, and named contracts. Coverage closes only
+the same full instance under a containing active domain. The factory, bad-capture, alpha-identity,
+capture-distinction, fact-coverage, and instance-union rows are live.
 
-Today a lambda whose captures are not all singletons analyzes to a bare `Kind(Function)`
-with no metadata, so nothing is recoverable at the call site. Consequence: a `where` over
-any domain that is not enumerable as points, on a function that builds a helper from its
-own argument and calls it, is rejected with "callee not resolved to a known function".
-The consumer half exists (region tables already take an environment of contracts and
-handle contract-described captures — case (b)); the producing/carrying half does not.
-**Previously mis-filed as an author deferral ("symbolic instance fact keys"); it is
-neither deferred nor a question.** The fact-key identity question is downstream and
-dissolves with it.
+**Corrected local-recursion rule [user, 2026-08-08]:** a local lambda over a non-singleton outer
+argument is not a closure value during analysis and needs no cyclic symbolic capture graph. Direct
+calls are resolved late by closure-converting the arrived outer bindings into ordinary leading
+fact arguments. Return/completion/grounding then use the existing closed recursive identity and
+stop at the reached back-edge. Implemented and pinned by
+`cli_recursive_local_call_carries_outer_arguments_lazily`; no split item remains here.
 
-### 1b. μ laws 2 and 4 [added 2026-08-07, audit]
+### 1b. μ laws 2 and 4 [SUPERSEDED 2026-08-08]
 
-Design-closed with the μ package (compendium: *v0.5; design-closed, rounds 1–4 +
-confirmatory*); laws 1–5 are all part of it. Implemented as **not merging** — conservative,
-so the cost is duplicate cache entries for genuinely identical recursive groups, never a
-wrong answer. Note in `src/oracle/mu.rs`. **Previously mis-filed as an author deferral; the
-only deferral note is that code comment.**
+The author replaced v0.5's binder/group-template identity with v0.6's per-function canonical code
+applied to an immutable capture graph. Adjacent group-binder merging and template-slot merging are
+therefore not owed implementation tasks. Construction windows remain; rooted value-graph
+bisimulation and universal interning establish the collapses formerly assigned to those laws.
 
 ### 1c. Exact string-length seam arithmetic [added 2026-08-07, audit]
 
@@ -384,20 +392,16 @@ asks nothing and is stale. **Previously mis-filed as an author deferral.**
   (`1/0 ≠ 2/0`). `HANDOVER-indeterminate-canonical-number-dag-2026-07-24.md`. Tests
   that move if ruled: `(1/0) == (2/0)` (`oracle/tests.rs`), PR-04's render, MU-10 in
   `poly.rs`.
-- **Thread D** — the **operation rulebook's union rule** (F0 Q1 / A6): interval hull
-  (implemented) vs distribution vs a **held-and-forced image**. Not a precision dial —
-  measured 2026-08-05: the hull rejects a *correct, total* program over its own declared
-  domain, because exact rationals make an interval dense and no finite set of point rows
-  can consume one; the same file accepts under distribution. Carries two sub-threads: the
-  emptiness check's bounded-arithmetic-progression gap (`Range ∧ Mod` denotes a finite
-  set the algebra cannot enumerate — independently useful for user-written bounded
-  integer contracts), and a third candidate rule modelled on region-table §8's parked
-  held-relation suspension (hold the image, let the consuming seat force it; the coarse
-  form answers `Proven`, anything else forces and re-asks — RT-14's discipline).
-  `HANDOVER-hull-vs-distribution-2026-08-05.md`, superseded for the design by
-  `DRAFT-demand-stopping-and-branch-routing-v0-1.md` (author's demand-stopping spec, with
-  the branch-routing draft folded in as §12–15). **First slice landed 2026-08-07** — the
-  routing-forced exact operation image; conformance `exact_images` pins it.
+- **Thread D — CLOSED 2026-08-08.** The operation rulebook keeps its interval hull as a
+  positive-proof accelerator; local analyzer metadata holds the finite correlated image and
+  routing forces it. Nominal source cells, natural-join correlation, chaining, BR-09 arrival
+  narrowing, BR-15 collapse and no-fuel finite routing are built and pinned by `exact_images`;
+  `exact_image_reach` pins fresh local reconstruction after a call-boundary collapse. The
+  historical experiment is `HANDOVER-hull-vs-distribution-2026-08-05.md`; the implemented
+  design is `DRAFT-demand-stopping-and-branch-routing-v0-1.md` §§12–15. Literal-key routing is
+  an optional BR-10 optimization because the iterative route is already normative. The
+  independently useful bounded-arithmetic-progression emptiness improvement (`Range ∩ Mod`)
+  remains ordinary analyzer breadth, not residue of the hull/distribution decision.
 
 ## 6. Author-flagged opens (implemented per stated law)
 

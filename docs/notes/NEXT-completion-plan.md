@@ -204,25 +204,50 @@ honestly pinned at T1.4; T2.2 has since released 3.
 
 ## TIER 3 — Complete the specified-but-partial features
 
-- **T3.1 Region table:** cases (b)/(c) over captures; **§5 multi-parameter projection** (attempted
-  and reverted 2026-07-30 — resolution recorded: fold a position into its row region only when it
-  grows); the guards' own path demands; the **annotated-tuple instance cache** (C§13.4, RT-09);
-  RT-01…RT-14 as conformance rows.
+- **T3.1 Region table:** cases (b)/(c) over captures, the §5 flat multi-parameter positional
+  partition, guard path demands, and the annotated RT-09 instance cache are live. Invariant
+  non-measure recursion and GR-19's operation-verified numeric payload now close through fixed
+  fact-domain proposals. General call-edge-derived domains and remaining RT breadth stay owed.
 - **T3.2 Grounding completion:** point-base/Ackermann (GR-18), peel-k grid, `restrict_len` facts
-  (GR-08), nonlinear measures, oscillator composition, closed-orbit refutation (GR-11), §4
-  exact-singleton chains, **§8 WorldDecided classifier**, multi-param mutual; **Phase GR
-  GR-01…GR-30 tests (currently zero exist)**.
-- **T3.3 μ §5/§6 runtime canonicalizer — COMPLETE 2026-08-01:** universal interning at
-  construction + group construction windows. MU-18 is live; FE-03/04/05/06 and H-05 are green.
-  The separate serialized layer-2 GroupTemplate needed by C§13.4 analyzer keys remains under T3.7.
+  (GR-08), nonlinear measures, variable/multi-parameter ProgressRange composition,
+  the remaining §4 mutual/body-constant exact-chain extensions (GR-03B's strict acyclic
+  direct-self fragment and GR-11's corresponding required-dependency closed orbit are live),
+  **§8 WorldDecided classifier**, multi-param mutual. The constant single-parameter oscillator
+  composition is live. The Phase-GR specimen battery is live; GR-08, GR-19, GR-26, GR-30,
+  GR-03A/B and GR-22B were released on 2026-08-08, leaving GR-20 as its one measured ignored
+  coverage target.
+- **T3.3 μ §5/§6 runtime canonicalizer — identity + Pure closure conversion LANDED
+  2026-08-08:** universal construction interning and group windows are live; MU-18,
+  FE-03/04/05/06 and H-05 are green. Invocation now executes canonical code over a positional
+  capture vector, not source `Lambda + Env`. Pure mutable reads snapshot their current interned
+  value at closure formation; recursive operands close to positional graph edges. Snapshot/later-
+  write, cross-store equal/different identity, no-deferred/no-location closed-payload, canonical-
+  root capture through an acyclic wrapper, and canonical-invocation machinery pins are live.
+  Mutators remain outside this task. Representation tail only:
+  replace the locked Rust vector of canonical recursive-group roots with the specification's final
+  one-allocation/interior-offset backing when the reclamation/layout slice lands; identity and
+  execution do not wait for it. By the 2026-08-08 author ruling, SCC groups are construction
+  windows only: the serialized layer-2 artifact is deleted, and fact/RT-09 queries consume the
+  canonical applied function value directly.
 - **T3.4 Module system (E12):** linking, module-file top-level world, store modules, duplicate-module
   error. MOD-01 is already live; completion un-ignores the remaining **4** rows
   (P-27b, MOD-03/04/05).
 - **T3.5 Program-level fuel harness:** bounded `run_module` → **M-04** `DIVERGES`.
 - **T3.6 Lint tier:** goes-nowhere, discarded effect result, identity slice, redundant `?.`/`~`,
   `||`-non-Boolean, leading-minus continuation, self-prefix (A-LNT).
-- **T3.7 C§13.4 caches:** template / instance / evaluation (`EvaluationCore`) / subcontract /
-  proven-return-fact, under the semantics+kernel namespace.
+- **T3.7 C§13.4 caches:** the generic interner-owned immutable memo substrate is built, and every
+  persistent analyzer memo that currently exists has migrated: RT-09 single/multi instance rows,
+  proven facts, and local group construction. Still owed: the absent symbolic-summary template /
+  evaluation (`EvaluationCore`) / subcontract families, canonical row answers that can
+  drop RT-09's retained-source-representative query component, and the final semantics+kernel
+  namespace/versioning policy. Runtime calls are never memoized.
+- **T3.8 Mutator transient COW representation — DEFERRED [user, 2026-08-08], non-blocking:** retain
+  the current π/read-your-writes/nested-join/outermost-publication semantics. A later implementation
+  may open committed immutable values as transaction-local mutable drafts, copy only touched paths,
+  and freeze/intern bottom-up at successful commit before the canonical-pointer equality guard.
+  Drafts never enter the interner or escape. The current eager construction of complete interned
+  replacement values remains valid until that slice; T3.3 Pure closure conversion does not wait for
+  it.
 
 ---
 
@@ -256,7 +281,8 @@ is bound*); **A-SND** as the executable soundness harness.
 - **R8's ruling — SETTLED 2026-08-01:** `Numeric = Number ∪ Indeterminate`, with specific
   `DivZero(a)` / `ModZero(a)` forms, is recorded in manifest-governed Part XII and implemented.
 - **Uncalled proven-unsafe body** — definition-site diagnostic: error / lint / silent. Unruled.
-- **F0 draft Q1** — `Union` distribution vs interval hull (hull implemented).
+- **F0 draft Q1 — SETTLED 2026-08-08:** retain the hull as a positive-proof
+  accelerator; hold the correlated finite image and force it only for routing/completion.
 - Literal parameter patterns; mutator returns; module dot-nesting; modules in value seats;
   shadowing policy; `String.units` element representation.
 

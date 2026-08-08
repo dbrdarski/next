@@ -1,8 +1,11 @@
 # Handover — hull vs distribution in the operation rulebook (A6 / F0 draft Q1)
 
-**Status: OPEN. No ruling exists. Nothing in the implementation was changed by this
-investigation** — the two experiments described under "How to reproduce" were temporary,
-env-gated, and reverted; suites green at 467 lib / 176 conformance / 10 machinery.
+**Status: SUPERSEDED.** This is the historical measurement that exposed the problem.
+The author subsequently ruled for the laziness arc; the implemented design is
+`DRAFT-demand-stopping-and-branch-routing-v0-1.md` §§12–15, completed 2026-08-08 with
+correlated branch cells, BR-09 narrowing, BR-15 collapse, and no finite-cell fuel cutoff.
+See `DECISIONS.md` 2026-08-08. Statements below that the question is open describe the
+state on 2026-08-05 and are retained as experiment provenance, not current status.
 
 **Provenance discipline used below.** Every claim is tagged **[observed]** (produced by
 running the implementation) or **[derived]** (arithmetic or reasoning by the author of this

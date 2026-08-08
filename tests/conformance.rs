@@ -220,6 +220,22 @@ mod phase0 {
     }
 
     #[test]
+    fn pure_closure_conversion_snapshots_values_and_erases_slot_provenance() {
+        let result =
+            eval("@mutable x = 1\nf = () => x\n@mutate set = () => { x := 2 }\nset()\n[f(), x]");
+        let values = result.as_tuple().expect("[captured, current]");
+        num_eq(&values[0], 1);
+        num_eq(&values[1], 2);
+
+        let mut interner = Interner::new();
+        let one_x = eval_in(&mut interner, "@mutable x = 1\n() => x");
+        let one_y = eval_in(&mut interner, "@mutable y = 1\n() => y");
+        let two = eval_in(&mut interner, "@mutable z = 2\n() => z");
+        assert!(one_x.ptr_eq(&one_y));
+        assert!(!one_x.ptr_eq(&two));
+    }
+
+    #[test]
     fn mu19_same_group_construction_reference_is_legal() {
         // A reference to another group member *within construction* is an internal
         // μ edge, never a read — the mutual group constructs without trapping.
@@ -1894,6 +1910,55 @@ mod contract_level_instances {
             "6"
         );
     }
+
+    /// A local closure over an outer argument forms only when `outer` executes. For
+    /// analysis, the direct call is delayed and closure-converted to `f(limit, n)`;
+    /// recursion is discovered at `f(limit, n - 1)`, where drift is judged. No
+    /// symbolic closure value or declaration-group identity is manufactured.
+    #[test]
+    fn cli_recursive_local_call_carries_outer_arguments_lazily() {
+        let src = "outer where (Number) => Number\n\
+                   outer = (limit) => {\n\
+                     f = (n) => n == 0 ? limit : f(n - 1)\n\
+                     => f(3)\n\
+                   }\n\
+                   x = outer(7)\nx\n";
+        let checked = check_source(src).expect("parses and checks").0;
+        assert!(checked.accepted(), "{:#?}", checked.findings);
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "7"
+        );
+    }
+
+    /// Carrying an outer argument does not license ignoring it when it controls the
+    /// finishing case. With `stop = false`, the apparent `n == 0` base never fires;
+    /// the delayed-call grounding candidate must decline rather than prove a false
+    /// termination fact.
+    #[test]
+    fn cli_recursive_local_call_keeps_outer_dependent_bases() {
+        let src = "outer where (Boolean, Number) => Number\n\
+                   outer = (stop, limit) => {\n\
+                     f = (n) => n == 0 && stop ? limit : f(n - 1)\n\
+                     => f(3)\n\
+                   }\n\
+                   x = outer(false, 7)\nx\n";
+        let checked = check_source(src).expect("parses and checks").0;
+        assert!(!checked.accepted(), "{:#?}", checked.findings);
+        assert!(
+            checked
+                .findings
+                .iter()
+                .any(|finding| finding.message.contains("not proven to finish")),
+            "the outer-dependent base must block grounding: {:#?}",
+            checked.findings
+        );
+    }
 }
 
 // **Union remainders empty out** (2026-08-07). An ordered walk subtracts each exact
@@ -1994,7 +2059,7 @@ mod exact_images {
     }
 
     /// The sound converse: drop one arm and the product is genuinely uncovered, so the
-    /// exact retry must *also* fail. The retry improves precision, never soundness.
+    /// exact routing must *also* fail. Forcing improves precision, never soundness.
     #[test]
     fn ei_a_missing_arm_is_still_refused() {
         let src = format!(
@@ -2055,6 +2120,147 @@ mod exact_images {
         );
     }
 
+    /// **Shared-source correlation** (BR-03/BR-04). `p` and `b = p * 2` are not
+    /// independent choices: they are read in the same source cell. The true image of
+    /// `p + b` is therefore `{0,15,60}`, never the Cartesian cross-product containing
+    /// `{5,10,20,30,40,45}`. Routing must preserve those cells through the held chain.
+    #[test]
+    fn ei_a_derived_operand_keeps_its_source_cell() {
+        let src = "Plan = Union(Equals(0), Union(Equals(5), Equals(20)))\n\
+                   f where (Plan) => Number\n\
+                   f = (p) => {\n  b = p * 2\n  total = p + b\n\
+                     => total :: { 0 => 0\n    15 => 1\n    60 => 2 }\n}\n\
+                   x = f(5)\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "1"
+        );
+    }
+
+    /// The same correlation after the source value is produced by a match. `rate` is
+    /// one immutable value per arriving plan branch, so `rate + (rate * 2)` has three
+    /// cells, not nine independently paired alternatives.
+    #[test]
+    fn ei_a_match_product_and_its_derivative_share_cells() {
+        let src = "Plan = Union(Equals(\"free\"), Union(Equals(\"pro\"), Equals(\"team\")))\n\
+                   f where (Plan) => Number\n\
+                   f = (p) => {\n  rate = p :: { \"free\" => 0\n    \"pro\" => 5\n    \"team\" => 20 }\n\
+                     doubled = rate * 2\n  total = rate + doubled\n\
+                     => total :: { 0 => 0\n    15 => 1\n    60 => 2 }\n}\n\
+                   x = f(\"team\")\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "2"
+        );
+    }
+
+    /// BR-09 narrowing by arrival: routing the derived `doubled` value narrows both
+    /// its source match product (`rate`) and the original source (`p`) in the selected
+    /// arm. Each nested one-arm match is exhaustive only under that simultaneous
+    /// narrowing.
+    #[test]
+    fn ei_routing_narrows_the_original_source_in_each_arm() {
+        let src = "Plan = Union(Equals(\"free\"), Union(Equals(\"pro\"), Equals(\"team\")))\n\
+                   f where (Plan) => Number\n\
+                   f = (p) => {\n  rate = p :: { \"free\" => 0\n    \"pro\" => 5\n    \"team\" => 20 }\n\
+                     doubled = rate * 2\n\
+                     => doubled :: {\n    0 => p :: { \"free\" => 0 }\n\
+                       10 => p :: { \"pro\" => 1 }\n\
+                       40 => p :: { \"team\" => 2 }\n  }\n}\n\
+                   x = f(\"pro\")\nx\n";
+        let v = check_source(src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "1"
+        );
+    }
+
+    /// Equal domains are not equal sources. Two parameters vary independently, so
+    /// `{0,1} + {0,1}` includes `1`; correlating by spelling or contract shape would
+    /// falsely accept the version with that arm missing.
+    #[test]
+    fn ei_equal_independent_sources_still_cross() {
+        let src = "Bit = Union(Equals(0), Equals(1))\n\
+                   f where (Bit, Bit) => Number\n\
+                   f = (a, b) => {\n  total = a + b\n\
+                     => total :: { 0 => 0\n    2 => 2 }\n}\n\
+                   x = f(0, 1)\nx\n";
+        assert!(
+            !check_source(src).expect("parses and checks").0.accepted(),
+            "the independently reachable sum 1 is uncovered"
+        );
+    }
+
+    /// Nominal source identity survives shadowing. The inner `a` and the captured
+    /// outer-derived `d` have equal-sized finite domains but are independent at the
+    /// call boundary; a spelling-keyed scheme would falsely correlate them and accept
+    /// only the diagonal sums `{0,3}`.
+    #[test]
+    fn ei_shadowed_names_do_not_correlate_across_a_call() {
+        let src = "Bit = Union(Equals(0), Equals(1))\n\
+                   outer where (Bit) => Number\n\
+                   outer = (a) => {\n  d = a * 2\n\
+                     inner = (a) => {\n    total = a + d\n\
+                       => total :: { 0 => 0\n      3 => 3 }\n  }\n\
+                     => inner(a)\n}\n\
+                   x = outer(1)\nx\n";
+        assert!(
+            !check_source(src).expect("parses and checks").0.accepted(),
+            "the independent cross sums 1 and 2 are uncovered"
+        );
+    }
+
+    /// Routing has no fuel threshold. Seventeen independent choices on each side
+    /// form 289 cells—past the former unratified 256-combination cutoff—and the 33
+    /// possible sums are still routed exactly.
+    #[test]
+    fn ei_finite_routing_has_no_256_cell_cutoff() {
+        let mut domain = "Equals(16)".to_string();
+        for value in (0..16).rev() {
+            domain = format!("Union(Equals({value}), {domain})");
+        }
+        let arms = (0..=32)
+            .map(|value| format!("    {value} => {value}\n"))
+            .collect::<String>();
+        let src = format!(
+            "N = {domain}\n\
+             f where (N, N) => Number\n\
+             f = (a, b) => {{\n  total = a + b\n  => total :: {{\n{arms}  }}\n}}\n\
+             x = f(8, 9)\nx\n"
+        );
+        let v = check_source(&src).expect("parses and checks").0;
+        assert!(v.accepted(), "{:#?}", v.findings);
+        assert_eq!(
+            next::oracle::run_source(&src)
+                .unwrap()
+                .0
+                .as_number()
+                .unwrap()
+                .to_string(),
+            "17"
+        );
+    }
+
     /// The sound converse through a chain: drop an arm and it is still refused.
     #[test]
     fn ei_a_chain_with_a_missing_arm_is_refused() {
@@ -2080,19 +2286,18 @@ mod exact_images {
     }
 }
 
-// **The exact-image retry reaches nested seats** (A6 residue, settled 2026-08-07). The
-// retry is wired at the `where`'s completion judgment only. It needs no wiring at the
-// application path's own `safety::completes` callers, because the retry re-runs the *whole*
-// body analysis in exact mode, so every nested seat inherits it — and outside a `where` no
-// branch set exists at all (arguments are points), so there is nothing for them to retry.
+// **A collapsed image is rebuilt from the arrived contract inside a callee.** BR-15 keeps
+// branch conditions local: they do not cross the call. The helper nevertheless gets the
+// finite union that arrived, establishes fresh local source cells, holds its operation, and
+// forces that image when its own match routes it.
 mod exact_image_reach {
     use super::*;
 
     /// A union argument crossing a **call boundary**, where the hull is genuinely
     /// insufficient: `rate ∈ {1,2,5}` has mixed parity, so the hull of `rate * 2` is
     /// `{2,4,6,8,10}` while the truth is `{2,4,10}`. The three arms cover the truth and
-    /// not the hull, so this passes only if the callee's completion is judged under the
-    /// exact image — which it is, inherited from the `where`-level retry.
+    /// not the hull, so this passes only if the callee rebuilds and routes the exact
+    /// local image after the caller's branch provenance collapses at the call boundary.
     #[test]
     fn eir_a_union_argument_across_a_call_is_covered() {
         let src = "Plan = Union(Equals(\"basic\"), Union(Equals(\"pro\"), Equals(\"enterprise\")))\n\
@@ -3632,7 +3837,7 @@ mod grounding_specimens {
     }
 
     /// §15 "refuted": a witness-bearing divergence proof, with the witness as stated.
-    fn assert_refuted_with(src: &str, witness: i64) {
+    fn refutation_witnesses(src: &str) -> Vec<next::value::ValueRef> {
         let vs = verdicts(src);
         let found: Vec<_> = vs
             .iter()
@@ -3641,13 +3846,33 @@ mod grounding_specimens {
                 _ => None,
             })
             .collect();
+        assert!(!accepted(src), "a refuted program must not compile:\n{src}");
+        found
+    }
+
+    fn assert_refuted_number(src: &str, witness: i64) {
+        let found = refutation_witnesses(src);
         assert!(
             found
                 .iter()
-                .any(|w| *w == next::rational::Rational::from(witness)),
-            "expected Refuted with witness {witness}, got {vs:?} for:\n{src}"
+                .any(|w| w.as_number() == Some(&next::rational::Rational::from(witness))),
+            "expected Refuted with numeric witness {witness}, got {found:?} for:\n{src}"
         );
-        assert!(!accepted(src), "a refuted program must not compile:\n{src}");
+    }
+
+    fn assert_refuted_tuple(src: &str, witness: &[i64]) {
+        let found = refutation_witnesses(src);
+        assert!(
+            found.iter().any(|value| {
+                value.as_tuple().is_some_and(|items| {
+                    items.len() == witness.len()
+                        && items.iter().zip(witness).all(|(item, expected)| {
+                            item.as_number() == Some(&next::rational::Rational::from(*expected))
+                        })
+                })
+            }),
+            "expected Refuted with tuple witness {witness:?}, got {found:?} for:\n{src}"
+        );
     }
 
     // ── The specimens ────────────────────────────────────────────────────────
@@ -3693,10 +3918,6 @@ mod grounding_specimens {
     /// **GR-08 — oscillator.** [spec text, §3 GR-07] One cycle, +2 then −3; the composed
     /// progress is `Equals(1)`, so the round trip nets a fixed positive gain.
     #[test]
-    #[ignore = "GAP (grounding, measured 2026-08-07): §15 #8 expects proven by cycle \
-composition; the implementation returns Unproven. GR-07's per-cycle composed ProgressRange \
-over the completed graph does not fire for this two-function +2/-3 cycle. Under stamped P-1 \
-this is a FALSE REJECTION — a terminating program that will not compile."]
     fn gr_08_oscillator_proves_by_cycle_composition() {
         assert_proven("a = (n) => n <= 0 ? 0 : b(n + 2)\nb = (n) => a(n - 3)\nr = a(10)\n");
     }
@@ -3730,17 +3951,14 @@ this is a FALSE REJECTION — a terminating program that will not compile."]
     /// the witness is the argument as written.
     #[test]
     fn gr_12_stepping_over_the_base_is_refuted() {
-        assert_refuted_with("f = (n) => n == 0 ? 0 : f(n - 2)\nr = f(1)\n", 1);
+        assert_refuted_number("f = (n) => n == 0 ? 0 : f(n - 2)\nr = f(1)\n", 1);
     }
 
     /// **GR-19 — sumUntil, variable drift.** GR-01's twin: the step varies, but a floor
-    /// of 1 *is* derivable from the call, so δ = 1 and the certificate closes.
+    /// of 1 *is* derivable from the call, so δ = 1 and the certificate closes. Safety
+    /// closes separately over the descending `n` envelope and the operation-verified
+    /// numeric accumulator domain; no concrete recursive chain is unfolded.
     #[test]
-    #[ignore = "GAP (safety, not grounding — measured 2026-08-07): grounding returns \
-Grounded, exactly as §15 #19 expects. The program is still rejected, by \
-`callee body safety cannot be proven at this executable seat`. This is the documented \
-multi-parameter/mutual body-safety gap, surfaced here by a grounding specimen. FALSE \
-REJECTION."]
     fn gr_19_a_derived_floor_proves_a_variable_drift() {
         assert_proven(
             "sumUntil = (n, acc) => n <= 0 ? acc : sumUntil(n - 1, acc + n)\nr = sumUntil(5, 0)\n",
@@ -3771,13 +3989,9 @@ REJECTION."]
     /// **GR-26 — Fibonacci through a nested function.** [spec text, §15 #26] The path
     /// closes on `go` alone — `fib` is outside the cycle — and both call edges (drifts −1
     /// and −2) check against the half-line base `k <= 1`, which lands structurally with no
-    /// grid needed.
+    /// grid needed. The late local-call correction also lets the safety graph close on
+    /// that same local recursive identity, so this is a live conformance row.
     #[test]
-    #[ignore = "GAP (safety — re-measured 2026-08-07 after local-callee resolution): grounding \
-now adjudicates `go` and returns **Grounded on both call edges**, exactly as §15 #26 expects. \
-The program is still rejected, by `callee body safety cannot be proven at this executable \
-seat` — the same multi-parameter/mutual body-safety gap as GR-19, in a different subsystem. \
-The resolution half is fixed and pinned by conformance `local_functions_resolve`."]
     fn gr_26_a_nested_recursive_function_is_proven() {
         assert_proven(
             "fib = (n) => { go = (k) => k <= 1 ? k : go(k - 1) + go(k - 2)\n go(n) }\nr = fib(6)\n",
@@ -3797,8 +4011,6 @@ The resolution half is fixed and pinned by conformance `local_functions_resolve`
     /// **GR-03B — literal without 7.** A list peeled one element per step; §15 expects
     /// proven, folding *after* grounding, in that order.
     #[test]
-    #[ignore = "GAP (measured 2026-08-07): returns Unproven. The exact-chain license \
-(§4 GR-09/10) does not fire for a written tuple argument peeled by slice. FALSE REJECTION."]
     fn gr_03b_a_literal_without_the_merge_value_is_proven() {
         assert_proven("f = (l) => l == [] ? 0 : (l[0] == 7 ? f(l) : f(l[1...]))\nr = f([3, 2])\n");
     }
@@ -3808,15 +4020,10 @@ The resolution half is fixed and pinned by conformance `local_functions_resolve`
     /// Required dependencies are `f([])`, which grounds and completes, then `f([7])` —
     /// the cycle. §15 expects **refuted**, witness `[7]`.
     #[test]
-    #[ignore = "GAP (grounding, measured 2026-08-07): returns Unproven; §15 #22b expects \
-Refuted with witness `[7]`. **GR-11's closed-orbit refutation route is not implemented.** \
-The only refutation producer is `drift_away`, the numeric drift-away certificate, reached \
-only when the domain is an exact number. The second certificate — a required-dependency \
-cycle with its proven completing prefix — was never built."]
     fn gr_22b_a_required_dependency_cycle_is_refuted() {
-        assert_refuted_with(
+        assert_refuted_tuple(
             "f = (l) => l == [] ? [] : f(l[1...]) ++ f(l)\nr = f([7])\n",
-            7,
+            &[7],
         );
     }
 
@@ -3836,13 +4043,10 @@ cycle with its proven completing prefix — was never built."]
     /// **GR-03A — the 7-literal, with the merge value present.** §15 expects refuted, the
     /// written argument being the witness.
     #[test]
-    #[ignore = "GAP (grounding, measured 2026-08-07): returns Unproven; §15 #3a expects \
-Refuted with witness `[3,7,2]`. Same cause as GR-22B — GR-11's closed-orbit refutation \
-route is unimplemented; the numeric drift-away certificate is the only one there is."]
     fn gr_03a_the_seven_literal_is_refuted() {
-        assert_refuted_with(
+        assert_refuted_tuple(
             "f = (l) => l == [] ? 0 : (l[0] == 7 ? f(l) : f(l[1...]))\nr = f([3, 7, 2])\n",
-            7,
+            &[3, 7, 2],
         );
     }
 
@@ -3907,10 +4111,6 @@ does not fire here. FALSE REJECTION."]
     /// **GR-30 — effect-world countDown.** [spec text, §15 #30] Ordinary proven
     /// completion; `WorldDecided` is **not** minted, so downstream stays unconditioned.
     #[test]
-    #[ignore = "GAP (grounding, re-measured 2026-08-07 after the lazy grounding walk): the \
-recursion is now adjudicated — before the walk `grounding_demands` was EMPTY and the row was \
-invisible. It returns `Unproven` where §15 #30 expects ordinary proven completion, so this is \
-now an honest coverage gap on an effect-world countDown rather than an unchecked program."]
     fn gr_30_an_effect_countdown_proves_without_a_world_label() {
         let src = "@effect countDown = (n) => { n == 0 ? 0 : countDown(n - 1) }\n\
                    @effect main = () => { countDown(5) }\n\
@@ -4067,7 +4267,7 @@ mod termination_reaches_through_a_caller {
             v.grounding_demands.iter().any(|g| matches!(
                 &g.verdict,
                 next::analyzer::grounding::Verdict::Refuted(r)
-                    if r.witness == next::rational::Rational::from(7)
+                    if r.witness.as_number() == Some(&next::rational::Rational::from(7))
             )),
             "expected a refutation witnessed by 7: {:?}",
             v.grounding_demands
@@ -4120,7 +4320,8 @@ mod local_functions_resolve {
         let src = "wrap = (k) => { g = (n) => g(n)\n g(k) }\nr = wrap(1)\n";
         assert!(
             verdicts(src).iter().any(|v| matches!(
-                v, Verdict::Refuted(r) if r.witness == next::rational::Rational::from(1)
+                v, Verdict::Refuted(r)
+                    if r.witness.as_number() == Some(&next::rational::Rational::from(1))
             )),
             "expected a refutation witnessed by 1: {:?}",
             verdicts(src)
@@ -4149,13 +4350,15 @@ mod local_functions_resolve {
     }
 }
 
-/// **One compilation, one memo table [measured 2026-08-07].** The analyzer's memos key on
-/// interned handles, and every whole-program analysis brings its own interner — so an entry
-/// left by a previous compilation can be *hit* by a key that means something else. Before the
-/// clear, analyzing one program changed the verdict of the next: the second program below
-/// compiled alone and on a fresh thread, and was **rejected** when the first ran first on the
-/// same thread. The code asserted the opposite in a comment — "correctness does not depend on
-/// clearing" — which is why this row exists.
+/// **An immutable memo query determines its answer [measured 2026-08-07/08].** The first
+/// defect was a source-spelled region table keyed only by α-shape: `(n)` rows could answer a
+/// `(k)` query. The parameter patch closed that witness but not the invariant — changing only
+/// a recursive sibling name still returned rows referring to the previous program's name.
+/// Memos now live under the interner that minted their identities, and RT-09's interned query
+/// includes the source representative retained by its canonical callee while its answer remains
+/// source-spelled. Separate owners can no longer exchange representatives; within a shared owner,
+/// universal value interning keeps one representative, environment, and row memo together. Both
+/// ordinary fresh-owner checks and deliberate shared-owner reuse must therefore be order-neutral.
 mod analysis_is_isolated_per_program {
     fn accepted(src: &str) -> bool {
         next::oracle::check_source(src)
@@ -4168,6 +4371,7 @@ mod analysis_is_isolated_per_program {
     /// so the two share a canonical shape and collide in a shape-derived key.
     const FIRST: &str = "cd = (n) => n == 0 ? 0 : cd(n - 1)\nr = cd(5)\n";
     const SECOND: &str = "cd = (k) => k == 0 ? 0 : cd(k - 1)\nrun = (n) => { cd(n) }\nr = run(5)\n";
+    const RENAMED: &str = "loop = (n) => n == 0 ? 0 : loop(n - 1)\nr = loop(5)\n";
 
     #[test]
     fn ai_01_a_verdict_does_not_depend_on_what_ran_before() {
@@ -4198,5 +4402,42 @@ mod analysis_is_isolated_per_program {
             "a good program must still compile after a rejected one"
         );
         assert!(!accepted(diverging), "and the rejection must still hold");
+    }
+
+    /// The residual witness the parameter-only repair missed: two independent identity owners
+    /// minted distinct source representatives for one canonical recursive group, while the old
+    /// thread-local RT-09 table let either representative's rows answer the other. This failed in
+    /// both directions with an unbound reference to whichever name ran first.
+    #[test]
+    fn ai_04_recursive_binding_spelling_is_not_memo_identity() {
+        assert!(accepted(FIRST));
+        assert!(
+            accepted(RENAMED),
+            "a cold/fresh owner accepts the renamed twin"
+        );
+
+        let mut shared = next::interner::Interner::new();
+        assert!(
+            next::oracle::check_source_in(FIRST, &mut shared)
+                .expect("checks")
+                .accepted()
+        );
+        let renamed = next::oracle::check_source_in(RENAMED, &mut shared).expect("checks");
+        assert!(
+            renamed.accepted(),
+            "shared immutable knowledge must not leak source name `cd`: {renamed:#?}"
+        );
+
+        let mut reverse = next::interner::Interner::new();
+        assert!(
+            next::oracle::check_source_in(RENAMED, &mut reverse)
+                .expect("checks")
+                .accepted()
+        );
+        let first = next::oracle::check_source_in(FIRST, &mut reverse).expect("checks");
+        assert!(
+            first.accepted(),
+            "reverse order must not leak source name `loop`: {first:#?}"
+        );
     }
 }

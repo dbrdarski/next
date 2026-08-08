@@ -1,11 +1,10 @@
 //! Runtime environments (semantics companion §1: `ρ` — name → binding).
 //!
 //! A [`Scope`] is a frame in a lexical chain; bindings are added as they are
-//! established. Because a closure captures the `Rc<Scope>` it was built in and
-//! bindings are inserted into the shared frame, **late binding** (B4) and mutual
-//! recursion work for free: a lambda body can reference a name bound after the
-//! lambda was constructed, because the lookup happens when the reference is
-//! evaluated, against the same (now-populated) frame.
+//! established. During a construction window, only unresolved capture operands
+//! retain this shared frame, so late-bound siblings can arrive. Window close
+//! rewrites them to positional value/group captures. A closed closure retains no
+//! `Env`, and invocation runs canonical code over those explicit captures.
 //!
 //! This is the oracle's evaluation environment. It carries surface *names*
 //! (de-Bruijn/§5 canonicalization is deferred — see DECISIONS.md).

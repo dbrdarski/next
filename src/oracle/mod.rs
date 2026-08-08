@@ -23,7 +23,7 @@ use crate::ast::*;
 use crate::env::{Binding, Env, Scope, SlotId};
 use crate::interner::Interner;
 use crate::rational::Rational;
-use crate::value::{Closure, FnValue, ValueData, ValueRef};
+use crate::value::{Closure, ClosureCapture, FnValue, ValueData, ValueRef};
 
 mod canon;
 pub(crate) mod equal;
@@ -37,23 +37,12 @@ mod tests;
 pub use equal::values_equal;
 /// The normalization harness compares outcomes **across interners** (see
 /// `normalize::tests`), so it needs the value renderer rather than pointers.
-#[cfg(test)]
 pub(crate) use eval::render_value;
 pub use eval::{
     BoundedOutcome, BoundedRun, eval_expr, eval_expr_bounded, eval_prim, run_program_bounded,
     run_program_commits, run_program_value,
 };
-pub(crate) use eval::{lambda_free_vars, make_closure_in};
-
-/// The μ package's serialized group canonicalization (Algorithm A's layer-2
-/// artifact): each binding name → its canonical member key, with intra-group
-/// cycles μ-bound positionally under the canonical slot order. Pure over the
-/// source expressions — interner-free, so keys are stable across interners.
-pub(crate) fn canonical_group_keys(
-    bindings: &[(String, crate::ast::Expr)],
-) -> std::collections::BTreeMap<String, String> {
-    mu::canonicalize_group(bindings)
-}
+pub(crate) use eval::{canonical_function, lambda_free_vars, make_closure_in};
 pub use harness::{HostIo, RunError, run_source, run_source_in, run_with_io};
 pub use harness::{check_source, check_source_in};
 

@@ -68,7 +68,7 @@ pub(crate) fn without_inference<R>(body: impl FnOnce() -> R) -> R {
 }
 
 /// An active return-induction hypothesis (§6 / C§13.2), keyed by the **concrete
-/// instance** (`callee` — a closure value, which carries its captured environment) and
+/// instance** (`callee` — a closure value, which carries its positional captures) and
 /// the **input domain** (`input`) it is assumed over. Shape alone never suffices: two
 /// closures of one shape with different captures (`make(1)` vs `make("s")`) hold
 /// distinct facts, and a fact proved over one domain must not be reused on a wider one.
@@ -159,8 +159,24 @@ pub(crate) fn safety_assumed(
 /// Whether a call's argument domain `args` is contained in a fact's `domain` — the
 /// per-tuple subcontract `Tuple(args) ⊑ Tuple(domain)`.
 fn args_within(args: &[Contract], domain: &[Contract], interner: &mut Interner) -> bool {
-    let call = Contract::tuple(args.to_vec(), interner);
-    let dom = Contract::tuple(domain.to_vec(), interner);
+    // Exact tuple transfer is often spelled structurally (`Tuple([Equals(2)])`),
+    // while the exact-chain fact node is keyed by the canonical singleton value
+    // (`Equals([2])`). They denote the same argument. Reify that unique structural
+    // tuple before the ordinary subcontract lookup so safety/completion/return all
+    // resolve through the same interned fact instead of missing on representation.
+    let normalize = |contracts: &[Contract], interner: &mut Interner| {
+        contracts
+            .iter()
+            .map(|contract| {
+                crate::analyzer::grounding::canonical_exact_flat_tuple(contract, interner)
+                    .unwrap_or_else(|| contract.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let call_args = normalize(args, interner);
+    let domain_args = normalize(domain, interner);
+    let call = Contract::tuple(call_args, interner);
+    let dom = Contract::tuple(domain_args, interner);
     matches!(subcontract(&call, &dom, interner), Verdict::Proven)
 }
 

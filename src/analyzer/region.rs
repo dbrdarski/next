@@ -92,91 +92,42 @@ pub fn region_table(body: &Expr, param: &str, cenv: &ContractEnv, i: &mut Intern
     region_table_in(body, param, &TypeEnv::new(), cenv, i)
 }
 
-thread_local! {
-    /// RT-09 / C§13.4's **instance cache**: `(shape, annotated captured-environment
-    /// contract tuple, named-contract environment) → instantiated region table`.
-    /// The key is annotated, not coarse — two closures of one shape whose captures
-    /// differ (`makeCounter(5)` vs `makeCounter(9)`) are different instances with
-    /// different tables. Entries are deterministic facts of their complete key, so
-    /// the table persists like the proven-fact cache. (The per-row grounding
-    /// certificates C§13.4 lists alongside remain in their own caches.)
-    static INSTANCE_TABLES: std::cell::RefCell<
-        std::collections::HashMap<InstanceKey, std::rc::Rc<Vec<Row>>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct InstanceKey {
-    shape: crate::analyzer::factcache::ShapeKey,
-    /// **The parameter names, spelled.** The `shape` is α-renamed, so `f = (n) => … n …`
-    /// and `f = (k) => … k …` share it — but a cached `Row`'s `result` is an expression
-    /// in the *original* spelling, and the lookup hands back this closure's parameter
-    /// beside those rows. Without this field the two collide: the analyzer binds `k`
-    /// while the cached rows reference `n`, nothing resolves, and a provable body reads
-    /// as unproven. Measured 2026-08-07 — one program's table answered another's query.
-    ///
-    /// A memo's key must determine its value; α-canonicalizing the rows themselves would
-    /// be the other way to close it, and is the better long-term shape.
-    params: Vec<String>,
-    captures: Vec<crate::intern::Interned<Contract>>,
-    named: Vec<(String, crate::intern::Interned<Contract>)>,
+    /// The canonical applied function value determines code, positional captures,
+    /// recursive topology, and the one retained source representative used by the
+    /// source-spelled row answer.
+    instance: crate::value::ValueRef,
+    named: crate::intern::Interned<crate::analyzer::factcache::NamedContractEnvironment>,
 }
 
 /// The **instantiated region table of a closure instance** (C§12.3 layer 3), through
 /// the RT-09 cache. Derives the single parameter, reads the capture environment, and
-/// keys on `(shape, capture contracts in canonical slot order, named contracts)`;
-/// a repeated query returns the same allocation. `None` when the closure does not
-/// have a single plain parameter (the multi-parameter table has its own path and
-/// joins the cache when its capture substitution lands).
+/// keys on `(canonical applied function value, named contracts)`. The function value owns
+/// the one retained source representative while answers remain source-spelled; a repeated
+/// complete query returns the same immutable allocation. `None` when the closure does not
+/// have a single plain parameter (the multi-parameter table has its own path and uses the
+/// same memo family).
 pub(crate) fn instance_table(
     callee: &crate::value::ValueRef,
     cenv: &ContractEnv,
     i: &mut Interner,
 ) -> Option<(String, std::rc::Rc<Vec<Row>>)> {
     let closure = callee.as_closure()?;
-    let function = callee.as_fn()?;
+    callee.as_fn()?;
     let param = crate::analyzer::single_plain_param(&closure.lambda.params)?;
-    let layer2 = crate::analyzer::factcache::layer2(callee)?;
-    let caps = crate::analyzer::safety::capture_env(callee);
-    let captures: Vec<crate::intern::Interned<Contract>> = function
-        .free_vars()
-        .iter()
-        .filter(|name| !layer2.siblings.contains(*name))
-        .map(|name| {
-            let c = caps.get(name).map(|a| a.erase(i)).unwrap_or(Contract::Top);
-            i.contract(c)
-        })
-        .collect();
-    let mut named: Vec<(String, crate::intern::Interned<Contract>)> = cenv
-        .iter()
-        .map(|(name, c)| (name.clone(), i.contract(c.clone())))
-        .collect();
-    named.sort_by(|a, b| a.0.cmp(&b.0));
-    let key = InstanceKey {
-        shape: layer2.shape,
-        params: vec![param.clone()],
-        captures,
+    let caps = crate::analyzer::safety::capture_env(callee, i);
+    let named = crate::analyzer::factcache::named_environment(cenv, i);
+    let key = i.memo_query(InstanceKey {
+        instance: callee.clone(),
         named,
-    };
-    if let Some(hit) = INSTANCE_TABLES.with(|t| t.borrow().get(&key).cloned()) {
+    });
+    if let Some(hit) = i.memo_get::<InstanceKey, Vec<Row>>(&key) {
         return Some((param, hit));
     }
-    let table = std::rc::Rc::new(region_table_in(
-        &closure.lambda.body,
-        &param,
-        &caps,
-        cenv,
-        i,
-    ));
-    INSTANCE_TABLES.with(|t| t.borrow_mut().insert(key, table.clone()));
+    let table = region_table_in(&closure.lambda.body, &param, &caps, cenv, i);
+    let table = i.memo_publish(key, table);
     Some((param, table))
-}
-
-thread_local! {
-    /// RT-09's multi-parameter twin — same key discipline, its own value type.
-    static INSTANCE_TABLES_MULTI: std::cell::RefCell<
-        std::collections::HashMap<InstanceKey, std::rc::Rc<Vec<RowN>>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// The instantiated **multi-parameter** table of a closure instance, through the
@@ -187,43 +138,22 @@ pub(crate) fn instance_table_multi(
     i: &mut Interner,
 ) -> Option<(Vec<String>, std::rc::Rc<Vec<RowN>>)> {
     let closure = callee.as_closure()?;
-    let function = callee.as_fn()?;
+    callee.as_fn()?;
     let params = flat_params(&closure.lambda.params)?;
     if params.len() < 2 {
         return None;
     }
-    let layer2 = crate::analyzer::factcache::layer2(callee)?;
-    let caps = crate::analyzer::safety::capture_env(callee);
-    let captures: Vec<crate::intern::Interned<Contract>> = function
-        .free_vars()
-        .iter()
-        .filter(|name| !layer2.siblings.contains(*name))
-        .map(|name| {
-            let c = caps.get(name).map(|a| a.erase(i)).unwrap_or(Contract::Top);
-            i.contract(c)
-        })
-        .collect();
-    let mut named: Vec<(String, crate::intern::Interned<Contract>)> = cenv
-        .iter()
-        .map(|(name, c)| (name.clone(), i.contract(c.clone())))
-        .collect();
-    named.sort_by(|a, b| a.0.cmp(&b.0));
-    let key = InstanceKey {
-        shape: layer2.shape,
-        params: params.clone(),
-        captures,
+    let caps = crate::analyzer::safety::capture_env(callee, i);
+    let named = crate::analyzer::factcache::named_environment(cenv, i);
+    let key = i.memo_query(InstanceKey {
+        instance: callee.clone(),
         named,
-    };
-    if let Some(hit) = INSTANCE_TABLES_MULTI.with(|t| t.borrow().get(&key).cloned()) {
+    });
+    if let Some(hit) = i.memo_get::<InstanceKey, Vec<RowN>>(&key) {
         return Some((params, hit));
     }
-    let table = std::rc::Rc::new(region_table_multi_in(
-        &closure.lambda.body,
-        &params,
-        &caps,
-        i,
-    )?);
-    INSTANCE_TABLES_MULTI.with(|t| t.borrow_mut().insert(key, table.clone()));
+    let table = region_table_multi_in(&closure.lambda.body, &params, &caps, i)?;
+    let table = i.memo_publish(key, table);
     Some((params, table))
 }
 

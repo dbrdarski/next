@@ -162,7 +162,7 @@ pub fn admit_callee(meta: &InstanceMetadata, world_admits: impl Fn(ActKind) -> b
             let all_admitted = s
                 .iter()
                 .filter(|i| !i.is_empty())
-                .all(|i| world_admits(i.shape.act_kind));
+                .all(|i| world_admits(i.act_kind()));
             if all_admitted {
                 Verdict::Proven
             } else {

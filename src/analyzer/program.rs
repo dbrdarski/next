@@ -174,7 +174,7 @@ pub(crate) fn analyze_program_project(
     let mut tenv = TypeEnv::new();
     for (name, binding) in scope.visible_bindings() {
         if let Binding::Value(value) = binding {
-            tenv.insert(name, AnalysisContract::of_value(value));
+            tenv.insert(name, AnalysisContract::of_value(value, interner));
         }
     }
     let (values, cenv, contract_names, collect_findings) =
@@ -265,10 +265,11 @@ pub(crate) fn analyze_program_project(
                         .get(name)
                         .cloned()
                         .map(|value| {
-                            let annotated = AnalysisContract::of_value(value);
+                            let annotated = AnalysisContract::of_value(value, interner);
                             Analysis {
                                 contract: annotated.erase(interner),
                                 annotated,
+                                image: None,
                                 findings: Vec::new(),
                                 safety_demands: Vec::new(),
                                 completion: Completion::Produces,
@@ -300,6 +301,7 @@ pub(crate) fn analyze_program_project(
                 analyze_bind(
                     &b.target,
                     &annotated,
+                    None,
                     &mut tenv,
                     &mut findings,
                     &cenv,
@@ -333,7 +335,10 @@ pub(crate) fn analyze_program_project(
             }
             Item::ActBind(ab) => {
                 if let Some(value) = values.get(&ab.name) {
-                    tenv.insert(ab.name.clone(), AnalysisContract::of_value(value.clone()));
+                    tenv.insert(
+                        ab.name.clone(),
+                        AnalysisContract::of_value(value.clone(), interner),
+                    );
                 }
             }
             Item::Stmt(expr) => {
@@ -561,7 +566,9 @@ fn safety_policy_findings(demands: &[SafetyDemand]) -> Vec<Finding> {
 /// contract precede its use — but `eval_contract` resolves a reference to an *already
 /// evaluated* definition, so contracts stay single-pass and in order (recursive source
 /// contracts are a separate increment, plan T2.4). Values get the two passes, since a
-/// closure captures `scope` by reference and is order-independent.
+/// unresolved construction captures consult `scope` until the joint close, so
+/// sibling construction is order-independent; closed functions retain only
+/// positional captures.
 fn collect(
     module: &Module,
     scope: &Env,
@@ -700,7 +707,7 @@ fn collect(
         }
         let mut tenv = crate::analyzer::TypeEnv::new();
         for (n, v) in &values {
-            tenv.insert(n.clone(), AnalysisContract::of_value(v.clone()));
+            tenv.insert(n.clone(), AnalysisContract::of_value(v.clone(), interner));
         }
         let analysis = crate::analyzer::analyze(value, &tenv, &cenv, interner);
         if let Contract::Equals(v) = analysis.contract
@@ -711,17 +718,22 @@ fn collect(
         }
     }
 
-    // Every sibling is now present in the shared late-binding scope. Close the
-    // captured graphs in a stable order so analyzer-created function values obey
+    // Every sibling is now present in the shared construction scope. Close the
+    // captured graphs jointly so analyzer-created function values obey
     // the same universal interning invariant as oracle-created values.
-    let mut names: Vec<String> = values.keys().cloned().collect();
-    names.sort();
-    for name in names {
-        let raw = values[&name].clone();
-        if interner.value_is_closed(&raw) {
-            let canonical = interner.close_value_graph(raw);
-            scope.define(&name, Binding::Value(canonical.clone()));
-            values.insert(name, canonical);
+    let mut roots: Vec<(String, ValueRef)> = values
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    roots.sort_by(|a, b| a.0.cmp(&b.0));
+    if roots
+        .iter()
+        .all(|(_, value)| interner.value_is_closed(value))
+    {
+        let canonical = interner.close_recursive_group(&roots, scope);
+        for ((name, _), value) in roots.into_iter().zip(canonical) {
+            scope.define(&name, Binding::Value(value.clone()));
+            values.insert(name, value);
         }
     }
     (values, cenv, contract_names, findings)
@@ -1124,9 +1136,9 @@ fn ground_demand_within(
     // *accepted* — `countDown` is grounded at 5, not over every Number, where it could
     // not be proven and a working program would start being rejected.
     //
-    // The descent needs no cycle detection of its own: `analyze_instance_body` already
-    // stops on a repeated shape, and anything on a cycle is adjudicated here rather than
-    // descended through.
+    // The descent needs no separate termination solver: `analyze_instance_body` stops
+    // when a reached function edge repeats canonical code. That edge records recursion;
+    // grounding then judges its arrived-argument transformation instead of unfolding it.
     if !induction::is_recursive(callee) {
         if depth >= GROUND_WALK_DEPTH {
             return;
@@ -1167,15 +1179,25 @@ fn ground_demand_within(
         matches!(verdict, grounding::Verdict::Unproven) && grounding::world_decided(callee);
     match &verdict {
         grounding::Verdict::Grounded => {}
-        grounding::Verdict::Refuted(refutation) => findings.push(Finding {
-            class: TrapClass::ArgumentObligation,
-            severity: Severity::Error,
-            message: format!(
-                "this recursion never finishes: starting from {}, every step stays away \
-                 from a finishing case (Principle 9: divergence is an error)",
-                refutation.witness
-            ),
-        }),
+        grounding::Verdict::Refuted(refutation) => {
+            let witness = crate::oracle::render_value(&refutation.witness, false);
+            let message = match &refutation.evidence {
+                grounding::RefutationEvidence::DriftAway { .. } => format!(
+                    "this recursion never finishes: starting from {witness}, every step stays \
+                     away from a finishing case (Principle 9: divergence is an error)"
+                ),
+                grounding::RefutationEvidence::ClosedOrbit(evidence) => format!(
+                    "this recursion never finishes: starting from {witness}, the forced path \
+                     returns to {} (Principle 9: divergence is an error)",
+                    crate::oracle::render_value(&evidence.cycle_entry, false)
+                ),
+            };
+            findings.push(Finding {
+                class: TrapClass::ArgumentObligation,
+                severity: Severity::Error,
+                message,
+            });
+        }
         grounding::Verdict::Unproven if world_decided => {}
         grounding::Verdict::Unproven => findings.push(Finding {
             class: TrapClass::ArgumentObligation,
@@ -1835,8 +1857,8 @@ mod tests {
              _ => 1\n\
             }\n";
 
-        super::super::factcache::clear();
         let mut interner = Interner::new();
+        super::super::factcache::clear(&mut interner);
         let safe = crate::oracle::harness::check_source_in(SAFE, &mut interner)
             .expect("safe variant parses and checks");
         assert!(
@@ -1852,8 +1874,8 @@ mod tests {
         );
 
         // The reverse order catches the symmetric stale-refutation failure mode too.
-        super::super::factcache::clear();
         let mut interner = Interner::new();
+        super::super::factcache::clear(&mut interner);
         let unsafe_variant = crate::oracle::harness::check_source_in(UNSAFE, &mut interner)
             .expect("unsafe variant parses and checks");
         assert!(
@@ -1866,7 +1888,7 @@ mod tests {
             safe.accepted(),
             "a refutation for N=Number must not be reused when N=String: {safe:?}"
         );
-        super::super::factcache::clear();
+        super::super::factcache::clear(&mut interner);
     }
 
     /// The declared **return** contract is now checked (demand core, C§13.1). This test

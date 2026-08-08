@@ -1,7 +1,7 @@
 //! The proven-fact cache — C§13.4.
 //!
 //! > **Proven-return-fact cache** ((analysis instance, row-set I, demanded C) → verdict;
-//! > unproven entries per-compilation). Every key interned pointers; every entry a fact or
+//! > unproven entries per-compilation). Every query is interned; every entry a fact or
 //! > an appropriately-scoped shrug.
 //!
 //! **Why this is part of the T1.4 boundary.** Moving `analyze_apply` onto the settled facts
@@ -15,45 +15,38 @@
 //! node is a recursive reference and resolves through its hypothesis (correct vector
 //! induction, C§13.2a); a query on a *different* node is genuinely settled.
 //!
-//! **The instance half of the key is the canonical shape** — `FnValue::shape()`, produced by
-//! `oracle::canon` — paired with the de-Bruijn-ordered capture contracts. Runtime closures are
-//! universally interned, but a fact depends on the *abstract contracts* of its captures rather
-//! than only their concrete value pointers; spelling variants must therefore meet at canonical
-//! code plus those contract arguments.
+//! **The instance half of the key is the canonical applied function value.** Closure
+//! conversion has already reduced lexical scope to positional immutable captures, recursive
+//! construction has already tied those positions into a closed rational graph, and universal
+//! interning has already assigned that graph one [`ValueRef`]. Reconstructing source sibling
+//! names or serializing a second group identity here would reverse that canonicalization.
 //!
-//! The shape is **interned** (`Interner::intern_code`) and the key compares it by pointer,
-//! per "every key interned pointers". Structural hashing happens once per distinct shape at
-//! closure construction, never per lookup. Value-capture, named-contract-environment, input,
-//! and demanded-return contracts are interned too, so every semantic component compares by
-//! pointer.
+//! The complete [`FactKey`] is itself **interned**; its function value and contract components
+//! are canonical pointers too. Structural hashing therefore happens once when the query is
+//! formed; every memo lookup after that is one pointer comparison.
 //!
-//! **The layer-2 join (2026-08-04):** the shape half of the key is [`ShapeKey`] — a lone
-//! acyclic function keys by its canonical per-lambda shape, and a member of a recursive
-//! reference SCC keys by its **canonical member key within the serialized group template**
-//! (`oracle::mu`'s Algorithm A — positional μ-refs, canonical slot order), which is
-//! spelling- and interner-independent; sibling references route inside the serialization
-//! and are excluded from the capture tuple. Where the member names cannot be derived
-//! unambiguously from the sibling environments, the key falls back to the per-lambda
-//! `Solo` shape — sound, at worst a missed shared hit. Still deferred: the μ package's
-//! law 2 (nested-binder merge) and law 4 (partition-refinement slot merging), and fact
-//! keys for **symbolic** (non-concrete) instances, which are not yet constructed at all.
+//! This concrete key deliberately makes no claim about future symbolic instances. If those
+//! arrive, their identity is canonical code applied to positional capture contracts; no
+//! source-level group template is reintroduced.
 //!
-//! **Pure memoization.** A settled entry is a deterministic fact of the complete semantic key.
-//! Reusing the table across compilations is therefore sound. In particular, the complete
+//! **Pure memoization.** A settled entry is a deterministic fact of the complete semantic key
+//! and is owned by the same [`Interner`] that owns every identity in it. Sharing that owner
+//! shares the memo; dropping it reclaims both together. In particular, the complete
 //! named-contract environment is an explicit key argument: the same shape under `N = String`
 //! and `N = Number` is not the same fact. A compilation-bound clear would only hide an omitted
 //! dependency; it cannot make an incomplete key correct.
 //!
 //! **Only top-level settlements are cached.** A settlement running inside another one sees
 //! ambient hypotheses, so its verdict is hypothesis-relative and must not be recorded as a
-//! fact. `begin`/`finish` are no-ops in that case, which costs hits and never soundness.
+//! fact. `begin`/`finish` still maintain dynamic recursion state in that case, but do not
+//! publish the nested answer; this costs hits and never soundness.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 
 use crate::analyzer::induction::Claim;
 use crate::analyzer::safety::BodySafety;
-use crate::ast::Lambda;
+use crate::analyzer::{Analysis, domain::Instance};
 use crate::contract::{Contract, ContractEnv};
 use crate::intern::Interned;
 use crate::interner::Interner;
@@ -61,132 +54,38 @@ use crate::value::ValueRef;
 
 /// A fact node: (analysis instance, row-set `I`, demanded `C`).
 ///
-/// The instance is `(layer-2 shape, value-capture contracts)`. The complete named-contract
-/// environment is a further analyzer input until named contracts become ordinary annotated
-/// captures. The claim carries the demanded contract for a return fact and is the discriminator
-/// for safety/completion facts.
+/// The instance is the canonical applied function value. The complete named-contract
+/// environment is a further analyzer input until named contracts become ordinary captures.
+/// The claim carries the demanded contract for a return fact and discriminates
+/// safety/completion facts.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct FactKey {
-    shape: ShapeKey,
-    captures: Vec<Interned<Contract>>,
+    instance: ValueRef,
     named_contracts: Interned<NamedContractEnvironment>,
     input: Vec<Interned<Contract>>,
     claim: MemoClaim,
 }
 
-/// The **layer-2 shape** (C§12.3 layer 2 / C§13.4): a lone acyclic function keys by
-/// its canonical per-lambda shape; a member of a recursive reference SCC keys by its
-/// **canonical member key within the serialized group template** (Algorithm A —
-/// positional μ-refs, canonical slot order), which is spelling- and
-/// interner-independent. Sibling references live inside the group serialization, so
-/// they are excluded from the instance's capture tuple.
+/// The domain-indexed query for a symbolic function application. Its identity is
+/// the canonical code/capture-contract application, never the source lambda or a
+/// recursive declaration group. The answer is the immutable body analysis for
+/// these arrived arguments and named-contract meanings.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum ShapeKey {
-    Solo(Interned<Lambda>),
-    Group(String),
-}
-
-/// A closure's layer-2 identity plus the free-variable names that resolve to its
-/// own SCC siblings (excluded from capture tuples — the template routes them).
-#[derive(Clone)]
-pub(crate) struct Layer2 {
-    pub(crate) shape: ShapeKey,
-    pub(crate) siblings: std::collections::HashSet<String>,
+pub(crate) struct SymbolicFactKey {
+    instance: Instance,
+    named_contracts: Interned<NamedContractEnvironment>,
+    input: Vec<Interned<Contract>>,
 }
 
 thread_local! {
-    /// Memo: closure value → its layer-2 identity. The group canonicalization
-    /// enumerates slot permutations, so it runs once per closure, never per key.
-    static LAYER2: RefCell<HashMap<ValueRef, Layer2>> = RefCell::new(HashMap::new());
-}
-
-/// The layer-2 identity of a closure (memoized). Falls back to the per-lambda
-/// `Solo` shape — always sound, only ever costing a shared hit — when the group's
-/// member names cannot be derived unambiguously from the sibling environments.
-pub(crate) fn layer2(callee: &ValueRef) -> Option<Layer2> {
-    callee.as_fn()?;
-    if let Some(hit) = LAYER2.with(|m| m.borrow().get(callee).cloned()) {
-        return Some(hit);
-    }
-    let computed = compute_layer2(callee)?;
-    LAYER2.with(|m| m.borrow_mut().insert(callee.clone(), computed.clone()));
-    Some(computed)
-}
-
-fn compute_layer2(callee: &ValueRef) -> Option<Layer2> {
-    use crate::analyzer::bodywalk::{callee_targets, reachable_closures};
-    let function = callee.as_fn()?;
-    let solo = |f: &crate::value::FnValue| Layer2 {
-        shape: ShapeKey::Solo(f.shape_rc()),
-        siblings: std::collections::HashSet::new(),
-    };
-
-    let group = reachable_closures(callee.clone());
-    let adj: Vec<Vec<usize>> = group
-        .iter()
-        .map(|g| {
-            let targets = callee_targets(g);
-            (0..group.len())
-                .filter(|&j| targets.contains(&group[j]))
-                .collect()
-        })
-        .collect();
-    let me = group.iter().position(|g| g == callee)?;
-    let components = crate::analyzer::induction::scc_reverse_topo(&adj);
-    let component = components.iter().find(|c| c.contains(&me))?;
-    let cyclic = component.len() > 1 || adj[me].contains(&me);
-    if !cyclic {
-        return Some(solo(function));
-    }
-
-    // Derive each member's binding name: the free-variable name under which any
-    // member's environment (its own included — late-bound self-reference) resolves
-    // to it. Ambiguity or a nameless member falls back to the per-lambda shape.
-    let members: Vec<&ValueRef> = component.iter().map(|&i| &group[i]).collect();
-    let mut names: Vec<Option<String>> = vec![None; members.len()];
-    for holder in &members {
-        let (Some(hf), Some(hc)) = (holder.as_fn(), holder.as_closure()) else {
-            continue;
-        };
-        for free in hf.free_vars() {
-            if let Some(crate::env::Binding::Value(v)) = hc.env.lookup(free)
-                && let Some(k) = members.iter().position(|m| **m == v)
-            {
-                match &names[k] {
-                    None => names[k] = Some(free.clone()),
-                    Some(existing) if existing == free => {}
-                    Some(_) => return Some(solo(function)), // two names, one member
-                }
-            }
-        }
-    }
-    let names: Option<Vec<String>> = names.into_iter().collect();
-    let Some(names) = names else {
-        return Some(solo(function));
-    };
-    if names.iter().collect::<std::collections::HashSet<_>>().len() != names.len() {
-        return Some(solo(function)); // one name, two members
-    }
-
-    let bindings: Vec<(String, crate::ast::Expr)> = members
-        .iter()
-        .zip(&names)
-        .map(|(m, n)| {
-            let lambda = m
-                .as_closure()
-                .expect("a member is a closure")
-                .lambda
-                .clone();
-            (n.clone(), crate::ast::Expr::Lambda(lambda))
-        })
-        .collect();
-    let keys = crate::oracle::canonical_group_keys(&bindings);
-    let mine = component.iter().position(|&i| i == me)?;
-    let my_key = keys.get(&names[mine])?.clone();
-    Some(Layer2 {
-        shape: ShapeKey::Group(my_key),
-        siblings: names.into_iter().collect(),
-    })
+    /// Dynamic settlement state, not memoized knowledge. A recursive query sees its
+    /// active hypothesis; only a completed outer settlement publishes an immutable answer.
+    static ACTIVE: RefCell<HashSet<Interned<FactKey>>> = RefCell::new(HashSet::new());
+    static DEPTH: Cell<usize> = const { Cell::new(0) };
+    /// Dynamic symbolic settlement state. The complete key, rather than a raw
+    /// code-shape flag, decides whether a recursive edge is an admitted hypothesis.
+    static ACTIVE_SYMBOLIC: RefCell<Vec<Interned<SymbolicFactKey>>> = const { RefCell::new(Vec::new()) };
+    static SYMBOLIC_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 /// A canonical snapshot of `ContractEnv`. Sorting removes `HashMap` iteration order; interning
@@ -194,7 +93,22 @@ fn compute_layer2(callee: &ValueRef) -> Option<Layer2> {
 /// conservative dependency key: an unrelated binding may cost a hit, but can never reuse a fact
 /// under a different meaning of a referenced contract such as `N`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-struct NamedContractEnvironment(Vec<(String, Interned<Contract>)>);
+pub(crate) struct NamedContractEnvironment(Vec<(String, Interned<Contract>)>);
+
+pub(crate) fn named_environment(
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Interned<NamedContractEnvironment> {
+    let mut named: Vec<(&String, &Contract)> = cenv.iter().collect();
+    named.sort_by_key(|(name, _)| *name);
+    let environment = NamedContractEnvironment(
+        named
+            .into_iter()
+            .map(|(name, contract)| (name.clone(), interner.contract(contract.clone())))
+            .collect(),
+    );
+    interner.intern_enum(environment)
+}
 
 /// The claim component of a memo key. A demanded return contract is interned just like
 /// every other contract in the key; safety and completion are nullary discriminators.
@@ -210,15 +124,8 @@ pub(crate) enum Cached {
     /// Currently being settled — a query for it is a **recursive reference**, which never
     /// unfolds (C§13.2) and must resolve through the node's hypothesis instead.
     InProgress,
-    /// Settled this compilation.
+    /// Immutable answer published in this identity universe.
     Settled(BodySafety),
-}
-
-thread_local! {
-    static CACHE: RefCell<HashMap<FactKey, Option<BodySafety>>> = RefCell::new(HashMap::new());
-    /// Depth of active settlements — non-zero means ambient hypotheses are in scope, so
-    /// nothing settled right now is a fact.
-    static DEPTH: RefCell<usize> = const { RefCell::new(0) };
 }
 
 /// The node for a call, or `None` when the callee is not a resolvable function instance
@@ -229,59 +136,123 @@ pub(crate) fn key(
     claim: &Claim,
     cenv: &ContractEnv,
     interner: &mut Interner,
-) -> Option<FactKey> {
-    let f = callee.as_fn()?;
-    let closure = callee.as_closure()?;
-    let layer2 = layer2(callee)?;
-    // De-Bruijn order: `free_vars` is the ordered capture-slot list `shape`'s `@cap`i
-    // refer to, so iterating it gives a positional tuple independent of name spelling.
-    // Sibling references of a recursive group are routed inside the group
-    // serialization and excluded here (the layer-2 discipline).
-    let capture_terms: Vec<Contract> = f
-        .free_vars()
-        .iter()
-        .filter(|n| !layer2.siblings.contains(*n))
-        .map(|n| match closure.env.lookup(n) {
-            Some(crate::env::Binding::Value(v)) => Contract::Equals(v),
-            _ => Contract::Top,
-        })
-        .collect();
-    let captures = capture_terms
-        .into_iter()
-        .map(|c| interner.contract(c))
-        .collect();
-    let mut named_contracts: Vec<(&String, &Contract)> = cenv.iter().collect();
-    named_contracts.sort_by_key(|(name, _)| *name);
-    let named_contracts = NamedContractEnvironment(
-        named_contracts
-            .into_iter()
-            .map(|(name, contract)| (name.clone(), interner.contract(contract.clone())))
-            .collect(),
-    );
-    let named_contracts = interner.intern_enum(named_contracts);
+) -> Option<Interned<FactKey>> {
+    callee.as_fn()?;
+    callee.as_closure()?;
+    let named_contracts = named_environment(cenv, interner);
     let input = args.iter().map(|c| interner.contract(c.clone())).collect();
     let claim = match claim {
         Claim::Safety => MemoClaim::Safety,
         Claim::Return(c) => MemoClaim::Return(interner.contract(c.clone())),
         Claim::Completes => MemoClaim::Completes,
     };
-    Some(FactKey {
-        shape: layer2.shape,
-        captures,
+    Some(interner.memo_query(FactKey {
+        instance: callee.clone(),
         named_contracts,
         input,
         claim,
+    }))
+}
+
+pub(crate) fn symbolic_key(
+    instance: &Instance,
+    args: &[Contract],
+    cenv: &ContractEnv,
+    interner: &mut Interner,
+) -> Interned<SymbolicFactKey> {
+    let named_contracts = named_environment(cenv, interner);
+    let input = args.iter().map(|c| interner.contract(c.clone())).collect();
+    interner.memo_query(SymbolicFactKey {
+        instance: instance.clone(),
+        named_contracts,
+        input,
     })
 }
 
+pub(crate) enum SymbolicCached {
+    /// The active fact's input covers this recursive arrival, so induction—not
+    /// re-entry—answers the safety edge.
+    Hypothesis,
+    /// One complete, hypothesis-independent immutable body answer.
+    Settled(std::rc::Rc<Analysis>),
+    /// The same code shape repeated through a different instance or uncovered
+    /// input. Shape repetition bounds discovery but proves nothing.
+    UncoveredRepeat,
+    Missing,
+}
+
+pub(crate) fn symbolic_lookup(
+    key: &Interned<SymbolicFactKey>,
+    interner: &mut Interner,
+) -> SymbolicCached {
+    let active = ACTIVE_SYMBOLIC.with(|held| held.borrow().clone());
+    for candidate in &active {
+        if candidate.instance == key.instance
+            && candidate.named_contracts == key.named_contracts
+            && candidate.input.len() == key.input.len()
+        {
+            let covered = key
+                .input
+                .iter()
+                .zip(&candidate.input)
+                .all(|(asked, assumed)| {
+                    matches!(
+                        crate::contract::subcontract(asked, assumed, interner),
+                        crate::contract::Verdict::Proven
+                    )
+                });
+            if covered {
+                return SymbolicCached::Hypothesis;
+            }
+        }
+    }
+    if active
+        .iter()
+        .any(|candidate| candidate.instance.code_handle() == key.instance.code_handle())
+    {
+        return SymbolicCached::UncoveredRepeat;
+    }
+    if let Some(answer) = interner.memo_get::<SymbolicFactKey, Analysis>(key) {
+        return SymbolicCached::Settled(answer);
+    }
+    SymbolicCached::Missing
+}
+
+pub(crate) fn symbolic_begin(key: &Interned<SymbolicFactKey>) {
+    ACTIVE_SYMBOLIC.with(|active| active.borrow_mut().push(key.clone()));
+    SYMBOLIC_DEPTH.with(|depth| depth.set(depth.get() + 1));
+}
+
+pub(crate) fn symbolic_finish(
+    key: &Interned<SymbolicFactKey>,
+    answer: &Analysis,
+    tainted: bool,
+    interner: &mut Interner,
+) {
+    let removed = ACTIVE_SYMBOLIC.with(|active| {
+        let mut active = active.borrow_mut();
+        let held = active.pop();
+        held.is_some_and(|held| held == *key)
+    });
+    debug_assert!(removed, "symbolic finish pairs with the latest begin");
+    let outer = SYMBOLIC_DEPTH.with(|depth| {
+        let next = depth.get() - 1;
+        depth.set(next);
+        next == 0
+    }) && !tainted;
+    if outer {
+        interner.memo_publish(key.clone(), answer.clone());
+    }
+}
+
 /// What is known about `key`, if anything.
-pub(crate) fn lookup(key: &FactKey) -> Option<Cached> {
-    CACHE.with(|c| {
-        c.borrow().get(key).map(|e| match e {
-            None => Cached::InProgress,
-            Some(v) => Cached::Settled(v.clone()),
-        })
-    })
+pub(crate) fn lookup(key: &Interned<FactKey>, interner: &Interner) -> Option<Cached> {
+    if ACTIVE.with(|active| active.borrow().contains(key)) {
+        return Some(Cached::InProgress);
+    }
+    interner
+        .memo_get::<FactKey, BodySafety>(key)
+        .map(|answer| Cached::Settled((*answer).clone()))
 }
 
 /// Resolution by **coverage** [author, 2026-08-03]: a demanded fact is answered by any
@@ -290,21 +261,19 @@ pub(crate) fn lookup(key: &FactKey) -> Option<Cached> {
 /// resolution, in the same step; the exact-pointer hit is merely its trivial case.
 /// Only `Proven` transfers down: a refutation's witness may lie outside the narrower
 /// domain, and unproven says nothing about it.
-pub(crate) fn covering(key: &FactKey, interner: &mut Interner) -> Option<BodySafety> {
-    let candidates: Vec<Vec<Interned<Contract>>> = CACHE.with(|c| {
-        c.borrow()
-            .iter()
-            .filter(|(k, v)| {
-                k.shape == key.shape
-                    && k.captures == key.captures
-                    && k.named_contracts == key.named_contracts
-                    && k.claim == key.claim
-                    && k.input.len() == key.input.len()
-                    && matches!(v, Some(BodySafety::Proven))
-            })
-            .map(|(k, _)| k.input.clone())
-            .collect()
-    });
+pub(crate) fn covering(key: &Interned<FactKey>, interner: &mut Interner) -> Option<BodySafety> {
+    let candidates: Vec<Vec<Interned<Contract>>> = interner
+        .memo_entries::<FactKey, BodySafety>()
+        .into_iter()
+        .filter(|(k, v)| {
+            k.instance == key.instance
+                && k.named_contracts == key.named_contracts
+                && k.claim == key.claim
+                && k.input.len() == key.input.len()
+                && matches!(&**v, BodySafety::Proven)
+        })
+        .map(|(k, _)| k.input.clone())
+        .collect();
     for domain in candidates {
         let contains = key.input.iter().zip(&domain).all(|(asked, held)| {
             matches!(
@@ -320,9 +289,10 @@ pub(crate) fn covering(key: &FactKey, interner: &mut Interner) -> Option<BodySaf
 }
 
 /// Mark a node as being settled, and enter a settlement. Always paired with [`finish`].
-pub(crate) fn begin(key: &FactKey) {
-    CACHE.with(|c| c.borrow_mut().insert(key.clone(), None));
-    DEPTH.with(|d| *d.borrow_mut() += 1);
+pub(crate) fn begin(key: &Interned<FactKey>) {
+    let inserted = ACTIVE.with(|active| active.borrow_mut().insert(key.clone()));
+    debug_assert!(inserted, "a settled query begins only once");
+    DEPTH.with(|depth| depth.set(depth.get() + 1));
 }
 
 /// Record a settled verdict and leave the settlement.
@@ -335,20 +305,22 @@ pub(crate) fn begin(key: &FactKey) {
 /// depth 0 yet may still have consulted those ambient assumptions. The caller
 /// samples `induction::any_hypotheses_active()` **at `begin` time** and passes it
 /// here; a tainted settlement is discarded exactly like a nested one.
-pub(crate) fn finish(key: &FactKey, verdict: &BodySafety, tainted: bool) -> bool {
-    let outer = DEPTH.with(|d| {
-        let mut d = d.borrow_mut();
-        *d -= 1;
-        *d == 0
+pub(crate) fn finish(
+    key: &Interned<FactKey>,
+    verdict: &BodySafety,
+    tainted: bool,
+    interner: &mut Interner,
+) -> bool {
+    let removed = ACTIVE.with(|active| active.borrow_mut().remove(key));
+    debug_assert!(removed, "finish pairs with begin");
+    let outer = DEPTH.with(|depth| {
+        let next = depth.get() - 1;
+        depth.set(next);
+        next == 0
     }) && !tainted;
-    CACHE.with(|c| {
-        let mut c = c.borrow_mut();
-        if outer {
-            c.insert(key.clone(), Some(verdict.clone()));
-        } else {
-            c.remove(key);
-        }
-    });
+    if outer {
+        interner.memo_publish(key.clone(), verdict.clone());
+    }
     outer
 }
 
@@ -356,23 +328,25 @@ pub(crate) fn finish(key: &FactKey, verdict: &BodySafety, tainted: bool) -> bool
 /// components are facts too: retaining only the seed would force later completion/
 /// return analysis to settle the graph again. The caller may use this only after
 /// [`finish`] reports that no ambient hypotheses remain.
-pub(crate) fn record_settled(key: FactKey, verdict: BodySafety) {
-    CACHE.with(|c| c.borrow_mut().insert(key, Some(verdict)));
+pub(crate) fn record_settled(key: Interned<FactKey>, verdict: BodySafety, interner: &mut Interner) {
+    interner.memo_publish(key, verdict);
 }
 
-/// TEMPORARY probe: (settled entries, in-progress markers, depth).
-/// Drop everything memoized, for test isolation or memory reclamation.
+/// Drop the fact memo family, for test isolation or explicit memory reclamation.
 ///
 /// Correctness does not depend on this: a `FactKey` determines its verdict. That claim
-/// used to be made here *and* be false one module over — `region`'s instance-table key
-/// erased parameter spelling while its cached rows kept it, so one program's table
-/// answered another's query. Keeping this note honest means the same discipline has to
-/// hold for every memo: **if clearing can change an answer, the key is incomplete.**
+/// used to be made here *and* be false one module over — `region`'s instance-table query
+/// erased source spelling while its cached rows kept it, so one program's table answered
+/// another's query. Keeping this note honest means the same discipline has to hold for every
+/// memo: **if clearing can change an answer, the query is incomplete.**
 #[allow(dead_code)]
-pub(crate) fn clear() {
-    CACHE.with(|c| c.borrow_mut().clear());
-    DEPTH.with(|d| *d.borrow_mut() = 0);
-    LAYER2.with(|m| m.borrow_mut().clear());
+pub(crate) fn clear(interner: &mut Interner) {
+    interner.memo_clear::<FactKey, BodySafety>();
+    interner.memo_clear::<SymbolicFactKey, Analysis>();
+    ACTIVE.with(|active| active.borrow_mut().clear());
+    DEPTH.with(|depth| depth.set(0));
+    ACTIVE_SYMBOLIC.with(|active| active.borrow_mut().clear());
+    SYMBOLIC_DEPTH.with(|depth| depth.set(0));
 }
 
 #[cfg(test)]
@@ -385,9 +359,8 @@ mod tests {
         run_source_in(src, i).unwrap().0
     }
 
-    /// The property the key rests on: identical canonical code is **one allocation**, so
-    /// shape identity is a pointer comparison. Without this the key would silently fall back
-    /// to walking a syntax tree on every lookup, which is what it did before 2026-08-01.
+    /// The code half of function identity is itself interned. The complete fact key uses
+    /// the already-canonical function value, so no lookup walks or reconstructs source code.
     #[test]
     fn identical_functions_share_one_interned_code_pointer() {
         let mut i = Interner::new();
@@ -435,8 +408,7 @@ mod tests {
     }
 
     /// Two closures over the same code but different captures are the same *shape* and
-    /// different *instances* — which is exactly why the key carries capture contracts
-    /// alongside the code pointer.
+    /// different canonical function values, hence different fact instances.
     #[test]
     fn same_shape_different_captures_are_distinct_fact_nodes() {
         let mut i = Interner::new();
@@ -454,6 +426,26 @@ mod tests {
         let ka = key(&a, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
         let kb = key(&b, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
         assert_ne!(ka, kb, "different captures are different fact nodes");
+    }
+
+    #[test]
+    fn repeated_fact_query_is_one_shared_identity() {
+        let mut i = Interner::new();
+        let closure = f("limit = 5\ng = (n) => n <= limit ? n : 0\ng", &mut i);
+        let args = [Contract::Top];
+        let cenv = ContractEnv::new();
+        let first = key(&closure, &args, &Claim::Safety, &cenv, &mut i).expect("fact key");
+        let second = key(&closure, &args, &Claim::Safety, &cenv, &mut i).expect("fact key");
+
+        assert!(
+            first.ptr_eq(&second),
+            "one immutable fact query must reuse one allocation"
+        );
+        assert_eq!(
+            i.interned_count::<FactKey>(),
+            1,
+            "the complete fact identity is stored once"
+        );
     }
 }
 
@@ -645,62 +637,118 @@ mod interning_tests {
 }
 
 #[cfg(test)]
-mod layer2_tests {
+mod recursive_instance_tests {
     use super::*;
     use crate::oracle::run_source_in;
 
-    /// The join's whole content: a mutual group's member keys come from the
-    /// serialized group canonicalization, so they are **spelling- and
-    /// interner-independent** — two α-variant spellings built in *separate*
-    /// interners (where value-pointer collapse cannot apply) produce the same
-    /// `ShapeKey::Group`; the two members of one group stay distinct; a lone
-    /// function stays `Solo`.
+    /// Recursive fact identity is exactly the canonical applied function value:
+    /// spelling variants in one identity universe share it, genuinely different
+    /// members do not, and a symmetric cycle collapsed by value interning shares it.
     #[test]
-    fn group_member_keys_are_spelling_and_interner_independent() {
-        let mut a = Interner::new();
+    fn recursive_fact_keys_follow_canonical_function_values() {
+        let mut i = Interner::new();
         let even_a = run_source_in(
             "isEven = (n) => n == 0 ? true : isOdd(n - 1)\n\
              isOdd = (n) => n == 0 ? false : isEven(n - 1)\n\
              isEven",
-            &mut a,
+            &mut i,
         )
         .unwrap()
         .0;
 
-        let mut b = Interner::new();
         let even_b = run_source_in(
             "even = (k) => k == 0 ? true : odd(k - 1)\n\
              odd = (k) => k == 0 ? false : even(k - 1)\n\
              even",
-            &mut b,
+            &mut i,
         )
         .unwrap()
         .0;
+        assert!(even_a.ptr_eq(&even_b), "spelling variants are one value");
 
-        let la = layer2(&even_a).expect("a closure");
-        let lb = layer2(&even_b).expect("a closure");
-        assert!(matches!(la.shape, ShapeKey::Group(_)), "a mutual member");
-        assert_eq!(
-            la.shape, lb.shape,
-            "the group serialization sees through spelling and interner"
-        );
+        let args = [Contract::Top];
+        let cenv = ContractEnv::new();
+        let ka = key(&even_a, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
+        let kb = key(&even_b, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
+        assert!(ka.ptr_eq(&kb), "one function value is one fact instance");
 
         // The sibling is a *different* member of the same group.
         let odd_a = {
-            let closure = even_a.as_closure().unwrap();
-            match closure.env.lookup("isOdd") {
+            let function = even_a.as_fn().unwrap();
+            match function.capture_binding("isOdd") {
                 Some(crate::env::Binding::Value(v)) => v,
                 other => panic!("isOdd must be captured: {other:?}"),
             }
         };
-        let lodd = layer2(&odd_a).expect("a closure");
-        assert!(matches!(lodd.shape, ShapeKey::Group(_)));
-        assert_ne!(la.shape, lodd.shape, "two members, two keys");
+        assert!(!even_a.ptr_eq(&odd_a));
+        let ko = key(&odd_a, &args, &Claim::Safety, &cenv, &mut i).expect("keyed");
+        assert_ne!(ka, ko, "different function values are different facts");
 
-        // A lone acyclic function keys by its per-lambda shape.
-        let mut c = Interner::new();
-        let solo = run_source_in("f = (n) => n + 1\nf", &mut c).unwrap().0;
-        let ls = layer2(&solo).expect("a closure");
-        assert!(matches!(ls.shape, ShapeKey::Solo(_)));
+        let pair = run_source_in("a = () => b()\nb = () => a()\n[a, b]", &mut i)
+            .unwrap()
+            .0;
+        let pair = pair.as_tuple().expect("symmetric pair");
+        assert!(pair[0].ptr_eq(&pair[1]), "the value graph collapses first");
+        let left = key(&pair[0], &[], &Claim::Safety, &cenv, &mut i).expect("keyed");
+        let right = key(&pair[1], &[], &Claim::Safety, &cenv, &mut i).expect("keyed");
+        assert!(
+            left.ptr_eq(&right),
+            "facts consume the collapsed value identity"
+        );
+    }
+}
+
+#[cfg(test)]
+mod symbolic_instance_tests {
+    use super::*;
+    use crate::analyzer::domain::{AnalysisContract, Instance};
+    use crate::contract::Kind;
+    use crate::oracle::run_source_in;
+
+    fn captured_code(interner: &mut Interner) -> crate::intern::Interned<crate::ast::Lambda> {
+        run_source_in("k = 0\nf = (n) => n + k\nf", interner)
+            .unwrap()
+            .0
+            .as_fn()
+            .expect("function")
+            .shape_rc()
+    }
+
+    #[test]
+    fn symbolic_facts_use_full_instance_and_domain_coverage() {
+        let mut i = Interner::new();
+        let code = captured_code(&mut i);
+        let numeric = Instance::new(
+            code.clone(),
+            vec![AnalysisContract::of_contract(Contract::Kind(Kind::Number))],
+            &mut i,
+        );
+        let textual = Instance::new(
+            code,
+            vec![AnalysisContract::of_contract(Contract::Kind(Kind::String))],
+            &mut i,
+        );
+        let cenv = ContractEnv::new();
+        let assumed = symbolic_key(&numeric, &[Contract::Kind(Kind::Number)], &cenv, &mut i);
+        let one = i.integer(1);
+        let covered = symbolic_key(&numeric, &[Contract::Equals(one)], &cenv, &mut i);
+        let other_instance = symbolic_key(&textual, &[Contract::Kind(Kind::Number)], &cenv, &mut i);
+
+        symbolic_begin(&assumed);
+        assert!(matches!(
+            symbolic_lookup(&covered, &mut i),
+            SymbolicCached::Hypothesis
+        ));
+        assert!(matches!(
+            symbolic_lookup(&other_instance, &mut i),
+            SymbolicCached::UncoveredRepeat
+        ));
+
+        let answer = Analysis::produced(Contract::Kind(Kind::Number), Vec::new());
+        symbolic_finish(&assumed, &answer, false, &mut i);
+        assert!(matches!(
+            symbolic_lookup(&assumed, &mut i),
+            SymbolicCached::Settled(_)
+        ));
     }
 }

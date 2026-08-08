@@ -346,7 +346,8 @@ It should be treated as incomplete semantics rather than as a final implementati
 
 # 8. μ-aware body walk: valid now, likely integration debt later
 
-The current body walk resolves recursive/captured callees through the present closure representation:
+Historical note: the body walk at the time of this review resolved recursive/captured callees through
+the then-current closure representation:
 
 ```text
 @capᵢ
@@ -355,7 +356,8 @@ The current body walk resolves recursive/captured callees through the present cl
 → captured closure
 ```
 
-This is reasonable against the current runtime model.
+That path was superseded on 2026-08-08 by positional value/recursive-group captures; closed Pure
+closures no longer retain `closure.env`.
 
 However, the final μ architecture intends same-group references to live in the μ/GroupTemplate structure rather than as ordinary external captures.
 

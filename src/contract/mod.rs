@@ -33,8 +33,8 @@ pub use expr::{
     ContractEnv, build_contract_env, eval_contract, eval_recursive_contract_bindings, mentions_ref,
 };
 pub use length::{Len, Stamp, intersection_empty_by_length, len, restrict_len};
-pub(crate) use operation::{EXACT_IMAGE_LIMIT, exact_image_over, point_set};
 pub use operation::{OpResult, OpSafety, analyze_operation};
+pub(crate) use operation::{exact_image_over, point_set};
 pub use recursive::{DefError, Emptiness, RecGroup, admissible};
 pub use subcontract::{RecGroupGuard, Verdict, rec_group_guard, subcontract};
 
